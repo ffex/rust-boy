@@ -1,0 +1,79 @@
+   0.006839500s  INFO prepare_target{force=false package_id=unbricked v0.1.0 (/Users/federicobassini/proj/gb/rust-boy/examples/unbricked) target="unbricked"}: cargo::core::compiler::fingerprint: fingerprint error for unbricked v0.1.0 (/Users/federicobassini/proj/gb/rust-boy/examples/unbricked)/Check { test: false }/TargetInner { name: "unbricked", doc: true, ..: with_path("/Users/federicobassini/proj/gb/rust-boy/examples/unbricked/src/main.rs", Edition2024) }
+   0.007032792s  INFO prepare_target{force=false package_id=unbricked v0.1.0 (/Users/federicobassini/proj/gb/rust-boy/examples/unbricked) target="unbricked"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/federicobassini/proj/gb/rust-boy/examples/unbricked/target/debug/.fingerprint/unbricked-3265d1a7e4550b9a/bin-unbricked`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: std::backtrace::Backtrace::capture
+   2: cargo_util::paths::read_bytes
+   3: cargo_util::paths::read
+   4: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   5: cargo::core::compiler::fingerprint::prepare_target
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.025180500s  INFO prepare_target{force=false package_id=retroshield-z80-workbench v0.1.1 target="retroshield_z80_workbench"}: cargo::core::compiler::fingerprint: fingerprint error for retroshield-z80-workbench v0.1.1/Check { test: false }/TargetInner { ..: lib_target("retroshield_z80_workbench", ["lib"], "/Users/federicobassini/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/retroshield-z80-workbench-0.1.1/src/lib.rs", Edition2021) }
+   0.025386250s  INFO prepare_target{force=false package_id=retroshield-z80-workbench v0.1.1 target="retroshield_z80_workbench"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/federicobassini/proj/gb/rust-boy/examples/unbricked/target/debug/.fingerprint/retroshield-z80-workbench-80fd4f7805f4a300/lib-retroshield_z80_workbench`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: std::backtrace::Backtrace::capture
+   2: cargo_util::paths::read_bytes
+   3: cargo_util::paths::read
+   4: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   5: cargo::core::compiler::fingerprint::prepare_target
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   9: cargo::ops::cargo_compile::compile_ws
+  10: cargo::ops::cargo_compile::compile_with_exec
+  11: cargo::ops::cargo_compile::compile
+  12: cargo::commands::check::exec
+  13: <cargo::cli::Exec>::exec
+  14: cargo::main
+  15: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  16: std::rt::lang_start::<()>::{closure#0}
+  17: std::rt::lang_start_internal
+  18: _main
+   0.025603834s  INFO prepare_target{force=false package_id=unbricked v0.1.0 (/Users/federicobassini/proj/gb/rust-boy/examples/unbricked) target="unbricked"}: cargo::core::compiler::fingerprint: fingerprint error for unbricked v0.1.0 (/Users/federicobassini/proj/gb/rust-boy/examples/unbricked)/Check { test: true }/TargetInner { name: "unbricked", doc: true, ..: with_path("/Users/federicobassini/proj/gb/rust-boy/examples/unbricked/src/main.rs", Edition2024) }
+   0.025610167s  INFO prepare_target{force=false package_id=unbricked v0.1.0 (/Users/federicobassini/proj/gb/rust-boy/examples/unbricked) target="unbricked"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/federicobassini/proj/gb/rust-boy/examples/unbricked/target/debug/.fingerprint/unbricked-07bf46ce17d445e5/test-bin-unbricked`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: std::backtrace::Backtrace::create
+   1: std::backtrace::Backtrace::capture
+   2: cargo_util::paths::read_bytes
+   3: cargo_util::paths::read
+   4: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   5: cargo::core::compiler::fingerprint::prepare_target
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+    Checking retroshield-z80-workbench v0.1.1
+    Checking unbricked v0.1.0 (/Users/federicobassini/proj/gb/rust-boy/examples/unbricked)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.46s

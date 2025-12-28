@@ -68,11 +68,74 @@ impl GbGen {
     pub fn ld_hl_i_str(&mut self, value: &str) {
         self.main_code.push(format!("ld [hli], {}", value));
     }
+    pub fn ld_b_str(&mut self, value: &str) {
+        self.main_code.push(format!("ld b, {}", value));
+    }
+    pub fn ld_c_str(&mut self, value: &str) {
+        self.main_code.push(format!("ld c, {}", value));
+    }
+    pub fn ld_d_str(&mut self, value: &str) {
+        self.main_code.push(format!("ld d, {}", value));
+    }
+    pub fn ld_e_str(&mut self, value: &str) {
+        self.main_code.push(format!("ld e, {}", value));
+    }
+    pub fn ld_h_str(&mut self, value: &str) {
+        self.main_code.push(format!("ld h, {}", value));
+    }
+    pub fn ld_l_str(&mut self, value: &str) {
+        self.main_code.push(format!("ld l, {}", value));
+    }
     // jump sections
     pub fn jp(&mut self, label: &str) {
         self.main_code.push(format!("jp {}", label));
     }
     pub fn jp_cond(&mut self, condition: &str, label: &str) {
         self.main_code.push(format!("jp {}, {}", condition, label));
+    }
+    pub fn jr(&mut self, condition: &str, label: &str) {
+        self.main_code.push(format!("jr {}, {}", condition, label));
+    }
+    pub fn jr_uncond(&mut self, label: &str) {
+        self.main_code.push(format!("jr {}", label));
+    }
+    pub fn ret(&mut self) {
+        self.main_code.push(format!("ret"));
+    }
+    pub fn ret_cond(&mut self, condition: &str) {
+        self.main_code.push(format!("ret {}", condition));
+    }
+    pub fn add(&mut self, reg_a: &str, reg_b: &str) {
+        self.main_code.push(format!("add {}, {}", reg_a, reg_b));
+    }
+    pub fn adc(&mut self, reg: &str) {
+        self.main_code.push(format!("adc {}", reg));
+    }
+    pub fn sub(&mut self, reg_a: &str, reg_b: &str) {
+        self.main_code.push(format!("sub {}, {}", reg_a, reg_b));
+    }
+    pub fn and(&mut self, value: &str) {
+        self.main_code.push(format!("and a, {}", value));
+    }
+    pub fn or(&mut self, reg_a: &str, reg_b: &str) {
+        self.main_code.push(format!("or {}, {}", reg_a, reg_b));
+    }
+    pub fn xor(&mut self, reg_a: &str, reg_b: &str) {
+        self.main_code.push(format!("xor {}, {}", reg_a, reg_b));
+    }
+    pub fn cp_str(&mut self, value: &str) {
+        self.main_code.push(format!("cp a, {}", value));
+    }
+    pub fn srl(&mut self, register: &str) {
+        self.main_code.push(format!("srl {}", register));
+    }
+    pub fn swap(&mut self, register: &str) {
+        self.main_code.push(format!("swap {}", register));
+    }
+    pub fn daa(&mut self) {
+        self.main_code.push(format!("daa"));
+    }
+    pub fn ldh(&mut self, dest: &str, src: &str) {
+        self.main_code.push(format!("ldh {}, {}", dest, src));
     }
 }

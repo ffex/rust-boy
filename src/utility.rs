@@ -26,4 +26,24 @@ impl GbGen {
         self.labels.push(name.to_string());
         self.main_code.push(format!("{}:", name));
     }
+
+    pub fn raw(&mut self, line: &str) {
+        self.main_code.push(line.to_string());
+    }
+
+    pub fn comment(&mut self, text: &str) {
+        self.main_code.push(format!("; {}", text));
+    }
+
+    pub fn db(&mut self, values: &str) {
+        self.main_code.push(format!("\tdb {}", values));
+    }
+
+    pub fn dw(&mut self, value: &str) {
+        self.main_code.push(format!("\tdw {}", value));
+    }
+
+    pub fn output(&self) -> String {
+        self.main_code.join("\n")
+    }
 }

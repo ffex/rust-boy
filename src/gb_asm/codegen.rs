@@ -2,6 +2,38 @@ use super::asm::{Asm, Chunk};
 use super::instr::{Condition, Instr, JumpTarget, Operand, Register};
 use std::fmt;
 
+// Code generation implementation for Asm
+impl Asm {
+    /// Generate assembly code from the instruction chunks
+    pub fn to_asm(&self) -> String {
+        let mut asm = String::new();
+
+        // Define the order in which chunks should appear in the output
+        let chunk_order = [
+            Chunk::Main,
+            Chunk::Functions,
+            Chunk::Data,
+            Chunk::Tiles,
+            Chunk::Tilemap,
+        ];
+
+        for chunk in &chunk_order {
+            if let Some(instructions) = self.chunks.get(chunk) {
+                if !instructions.is_empty() {
+                    // Write instructions with indentation
+                    for instruction in instructions {
+                        asm.push_str(&format!("    {}\n", instruction));
+                    }
+
+                    // Add blank line between chunks
+                    asm.push('\n');
+                }
+            }
+        }
+
+        asm
+    }
+}
 // Display implementation for Register
 impl fmt::Display for Register {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -112,38 +144,5 @@ impl fmt::Display for Instr {
             Instr::Dw { value } => write!(f, "dw {}", value),
             Instr::Raw { line } => write!(f, "{}", line),
         }
-    }
-}
-
-// Code generation implementation for Asm
-impl Asm {
-    /// Generate assembly code from the instruction chunks
-    pub fn to_asm(&self) -> String {
-        let mut asm = String::new();
-
-        // Define the order in which chunks should appear in the output
-        let chunk_order = [
-            Chunk::Main,
-            Chunk::Functions,
-            Chunk::Data,
-            Chunk::Tiles,
-            Chunk::Tilemap,
-        ];
-
-        for chunk in &chunk_order {
-            if let Some(instructions) = self.chunks.get(chunk) {
-                if !instructions.is_empty() {
-                    // Write instructions with indentation
-                    for instruction in instructions {
-                        asm.push_str(&format!("    {}\n", instruction));
-                    }
-
-                    // Add blank line between chunks
-                    asm.push('\n');
-                }
-            }
-        }
-
-        asm
     }
 }

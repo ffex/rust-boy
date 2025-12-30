@@ -31,6 +31,7 @@ impl fmt::Display for Operand {
             Operand::Imm(val) => write!(f, "{}", val),
             Operand::Imm16(val) => write!(f, "{}", val),
             Operand::Addr(addr) => write!(f, "[${:04x}]", addr),
+            Operand::AddrDef(const_name) => write!(f, "[{}]", const_name),
             Operand::AddrReg(reg) => write!(f, "[{}]", reg),
             Operand::AddrRegInc(reg) => write!(f, "[{}i]", reg),
             Operand::Label(label) => write!(f, "{}", label),

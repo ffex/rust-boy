@@ -175,6 +175,23 @@ impl Asm {
         )
     }
 
+    pub fn ld_a_addr_def(&mut self, def_name: &str) -> &mut Self {
+        self.ld(
+            Operand::Reg(Register::A),
+            Operand::AddrDef(def_name.to_string()),
+        )
+    }
+
+    pub fn ld_addr_def_a(&mut self, def_name: &str) -> &mut Self {
+        self.ld(
+            Operand::AddrDef(def_name.to_string()),
+            Operand::Reg(Register::A),
+        )
+    }
+
+    pub fn ld_a_addr_reg(&mut self, reg: Register) -> &mut Self {
+        self.ld(Operand::Reg(Register::A), Operand::AddrReg(reg))
+    }
     // ============================================
     // Arithmetic instructions
     // ============================================
@@ -230,6 +247,7 @@ impl Asm {
     // ============================================
 
     pub fn and(&mut self, operand: Operand) -> &mut Self {
+        //TODO redo maybe?
         self.emit(Instr::And { operand })
     }
 
@@ -260,6 +278,7 @@ impl Asm {
     }
 
     pub fn cp(&mut self, operand: Operand) -> &mut Self {
+        //TODO check this (cp a, 14)
         self.emit(Instr::Cp { operand })
     }
 

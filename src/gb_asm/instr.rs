@@ -132,6 +132,7 @@ pub enum Operand {
     Imm(u8),
     Imm16(u16),
     Addr(u16),
+    AddrDef(String),
     AddrReg(Register),
     AddrRegInc(Register), // [HLI] - address at register with post-increment
     Label(String),

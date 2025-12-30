@@ -1,5 +1,6 @@
 // Game Boy Assembly Generator Library
 pub mod gb_asm;
+pub mod gb_std;
 
 #[cfg(test)]
 mod tests {

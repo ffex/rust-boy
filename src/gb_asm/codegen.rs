@@ -4,6 +4,12 @@ use std::fmt;
 
 // Code generation implementation for Asm
 impl Asm {
+    /// Get the instructions from the Main chunk as an owned vector
+    /// Returns an empty vector if the Main chunk has no instructions
+    pub fn get_main_instrs(&self) -> Vec<Instr> {
+        self.chunks.get(&Chunk::Main).cloned().unwrap_or_default()
+    }
+
     /// Generate assembly code from the instruction chunks
     pub fn to_asm(&self) -> String {
         let mut asm = String::new();

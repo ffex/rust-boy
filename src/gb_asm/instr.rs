@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub enum Instr {
     // Load instructions
     Ld {
@@ -111,6 +112,7 @@ pub enum Instr {
     },
 }
 
+#[derive(Clone)]
 pub enum Register {
     A,
     B,
@@ -127,6 +129,7 @@ pub enum Register {
     HL,
 }
 
+#[derive(Clone)]
 pub enum Operand {
     Reg(Register),
     Imm(u8),
@@ -138,11 +141,13 @@ pub enum Operand {
     Label(String),
 }
 
+#[derive(Clone)]
 pub enum JumpTarget {
     Label(String),
     Addr(u16),
 }
 
+#[derive(Clone)]
 pub enum Condition {
     Z,  // Zero
     NZ, // Not Zero

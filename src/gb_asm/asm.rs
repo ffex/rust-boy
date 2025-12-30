@@ -385,6 +385,30 @@ impl Asm {
         })
     }
 
+    pub fn incbin(&mut self, file: &str) -> &mut Self {
+        self.emit(Instr::Incbin {
+            file: file.to_string(),
+            offset: None,
+            length: None,
+        })
+    }
+
+    pub fn incbin_range(&mut self, file: &str, offset: u32, length: u32) -> &mut Self {
+        self.emit(Instr::Incbin {
+            file: file.to_string(),
+            offset: Some(offset),
+            length: Some(length),
+        })
+    }
+
+    pub fn incbin_offset(&mut self, file: &str, offset: u32) -> &mut Self {
+        self.emit(Instr::Incbin {
+            file: file.to_string(),
+            offset: Some(offset),
+            length: None,
+        })
+    }
+
     pub fn def<T: Display>(&mut self, label: &str, value: T) -> &mut Self {
         let value_str = format!("{}", value);
         self.emit(Instr::Def {

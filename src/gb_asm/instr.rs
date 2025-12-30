@@ -87,6 +87,11 @@ pub enum Instr {
     Include {
         file: String,
     },
+    Incbin {
+        file: String,
+        offset: Option<u32>,
+        length: Option<u32>,
+    },
     Def {
         label: String,
         value: String,

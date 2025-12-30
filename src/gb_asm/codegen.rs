@@ -142,6 +142,16 @@ impl fmt::Display for Instr {
                 starter_point,
             } => write!(f, "ds {}, {}", num_bytes, starter_point),
             Instr::Include { file } => write!(f, "INCLUDE \"{}\"", file),
+            Instr::Incbin {
+                file,
+                offset,
+                length,
+            } => match (offset, length) {
+                (Some(off), Some(len)) => write!(f, "INCBIN \"{}\",{},{}", file, off, len),
+                (Some(off), None) => write!(f, "INCBIN \"{}\",{}", file, off),
+                (None, Some(len)) => write!(f, "INCBIN \"{}\",0,{}", file, len),
+                (None, None) => write!(f, "INCBIN \"{}\"", file),
+            },
             Instr::Def { label, value } => write!(f, "DEF {} EQU {}", label, value),
             Instr::Section { name, mem_type } => write!(f, "SECTION \"{}\", {}", name, mem_type),
             Instr::Label { name } => write!(f, "{}:", name),

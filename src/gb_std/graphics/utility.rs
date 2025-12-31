@@ -73,3 +73,12 @@ pub fn turn_off_screen() -> Vec<Instr> {
     // Turn off LCD
     asm.ld_a(0).ld_addr_def_a("rLCDC").get_main_instrs()
 }
+
+pub fn wait_vblank() -> Vec<Instr> {
+    let mut asm = Asm::new();
+    asm.label("WaitVBlank");
+    asm.ld_a_addr_def("rLY");
+    asm.cp_imm(144);
+    asm.jp_cond(Condition::C, "WaitVBlank");
+    asm.get_main_instrs()
+}

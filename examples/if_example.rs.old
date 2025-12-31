@@ -1,0 +1,81 @@
+use rust_boy::gb_asm::{Asm, Instr, Operand, Register};
+use rust_boy::gb_std::flow::{ComparisonOp, ConditionOperand, If, IfCondition};
+
+fn main() {
+    let mut asm = Asm::new();
+
+    // Example 1: Simple if (no else)
+    // if a == 144 then jump to WaitVBlank2
+    asm.comment("Example 1: Simple if without else");
+
+    let condition = IfCondition::equal(
+        ConditionOperand::Register(Operand::Reg(Register::A)),
+        ConditionOperand::Immediate(144),
+    );
+
+    let then_branch = vec![Instr::Jp {
+        target: rust_boy::gb_asm::JumpTarget::Label("WaitVBlank2".to_string()),
+    }];
+
+    let if_stmt = If::new(condition, then_branch).with_label_counter(0);
+    if_stmt.emit_to(&mut asm);
+
+    asm.comment("");
+
+    // Example 2: If with else
+    // if [wCurKeys] == PADF_LEFT then move left, else check right
+    asm.comment("Example 2: If with else branch");
+
+    let condition = IfCondition::not_equal(
+        ConditionOperand::Label("wCurKeys".to_string()),
+        ConditionOperand::Label("PADF_LEFT".to_string()),
+    );
+
+    let then_branch = vec![Instr::Comment {
+        text: "Key not pressed, do nothing".to_string(),
+    }];
+
+    let else_branch = vec![
+        Instr::Comment {
+            text: "Move paddle left".to_string(),
+        },
+        Instr::Ld {
+            dst: Operand::Reg(Register::A),
+            src: Operand::AddrDef("_OAMRAM+1".to_string()),
+        },
+        Instr::Dec {
+            operand: Operand::Reg(Register::A),
+        },
+        Instr::Ld {
+            dst: Operand::AddrDef("_OAMRAM+1".to_string()),
+            src: Operand::Reg(Register::A),
+        },
+    ];
+
+    let if_stmt = If::new(condition, then_branch)
+        .with_else(else_branch)
+        .with_label_counter(1);
+    if_stmt.emit_to(&mut asm);
+
+    asm.comment("");
+
+    // Example 3: Using helper methods
+    asm.comment("Example 3: Using comparison helpers");
+
+    // Check if tile is greater or equal to BRICK_LEFT
+    let condition = IfCondition::greater_equal(
+        ConditionOperand::Register(Operand::Reg(Register::A)),
+        ConditionOperand::Immediate(5), // BRICK_LEFT
+    );
+
+    let then_branch = vec![Instr::Call {
+        target: rust_boy::gb_asm::JumpTarget::Label("HandleBrick".to_string()),
+    }];
+
+    let if_stmt = If::new(condition, then_branch).with_label_counter(2);
+    if_stmt.emit_to(&mut asm);
+
+    // Generate the assembly code
+    let output = rust_boy::gb_asm::codegen::generate_code(&asm);
+    println!("{}", output);
+}

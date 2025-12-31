@@ -117,7 +117,7 @@ pub enum Instr {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Register {
     A,
     B,
@@ -134,7 +134,7 @@ pub enum Register {
     HL,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Operand {
     Reg(Register),
     Imm(u8),

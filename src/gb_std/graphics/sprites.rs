@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr};
+use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 
 pub fn clear_objects_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
@@ -18,6 +18,7 @@ pub fn initialize_objects_screen() -> Vec<Instr> {
 }
 
 pub struct Sprite {
+    pub id: u8,
     pub x: u8,
     pub y: u8,
     pub tile: u8,
@@ -25,8 +26,14 @@ pub struct Sprite {
 }
 
 impl Sprite {
-    pub fn new(x: u8, y: u8, tile: u8, flags: u8) -> Self {
-        Sprite { x, y, tile, flags }
+    pub fn new(id: u8, x: u8, y: u8, tile: u8, flags: u8) -> Self {
+        Sprite {
+            id,
+            x,
+            y,
+            tile,
+            flags,
+        }
     }
     pub fn set_x(&mut self, x: u8) {
         self.x = x;
@@ -49,5 +56,41 @@ impl Sprite {
             .ld_hli_label("a");
         asm.get_main_instrs()
     }
-    //TODO we have to implement movement
+    pub fn move_left(&mut self, distance: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
+
+        asm.get_main_instrs()
+    }
+
+    pub fn move_right(&mut self, distance: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
+
+        asm.get_main_instrs()
+    }
+
+    pub fn move_up(&mut self, distance: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+
+        asm.get_main_instrs()
+    }
+
+    pub fn move_down(&mut self, distance: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+
+        asm.get_main_instrs()
+    }
+
+    //TODO we have to implement movement with limits
 }

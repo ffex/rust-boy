@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, JumpTarget, Operand, Register};
 
 pub fn clear_objects_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
@@ -58,39 +58,101 @@ impl Sprite {
     }
     pub fn move_left(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
+        asm.label("Left");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
             .add(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
 
+        asm.label("LeftEnd");
         asm.get_main_instrs()
     }
 
     pub fn move_right(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
+        asm.label("Right");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
             .sub(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
 
+        asm.label("RightEnd");
         asm.get_main_instrs()
     }
 
     pub fn move_up(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
+        asm.label("Up");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
             .sub(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
 
+        asm.label("UpEnd");
         asm.get_main_instrs()
     }
 
     pub fn move_down(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
+        asm.label("Down");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
             .add(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
 
+        asm.label("DownEnd");
         asm.get_main_instrs()
     }
 
-    //TODO we have to implement movement with limits
+    pub fn move_left_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        let jump_label = "LeftLimitEnd";
+        asm.label("LeftLimit");
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .cp(Operand::Imm(limit))
+            .jp_cond(Condition::Z, jump_label)
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
+
+        asm.label(jump_label);
+        asm.get_main_instrs()
+    }
+
+    pub fn move_right_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        let jump_label = "RightLimitEnd";
+        asm.label("RightLimit");
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .cp(Operand::Imm(limit))
+            .jp_cond(Condition::Z, jump_label)
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
+
+        asm.label(jump_label);
+        asm.get_main_instrs()
+    }
+
+    pub fn move_up_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        let jump_label = "UpLimitEnd";
+        asm.label("UpLimit");
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .cp(Operand::Imm(limit))
+            .jp_cond(Condition::Z, jump_label)
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+
+        asm.label(jump_label);
+        asm.get_main_instrs()
+    }
+
+    pub fn move_down_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        let jump_label = "DownLimitEnd";
+        asm.label("DownLimit");
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .cp(Operand::Imm(limit))
+            .jp_cond(Condition::Z, jump_label)
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+
+        asm.label(jump_label);
+        asm.get_main_instrs()
+    }
 }

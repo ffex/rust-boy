@@ -155,4 +155,15 @@ impl Sprite {
         asm.label(jump_label);
         asm.get_main_instrs()
     }
+    pub fn get_pivot(&self, x_offset: u8, y_offset: u8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
+            .sub(Operand::Reg(Register::A), Operand::Imm(16 + y_offset))
+            .ld(Operand::Reg(Register::C), Operand::Reg(Register::A))
+            .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+            .sub(Operand::Reg(Register::A), Operand::Imm(8 + x_offset))
+            .ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+
+        asm.get_main_instrs()
+    }
 }

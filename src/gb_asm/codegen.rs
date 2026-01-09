@@ -109,7 +109,8 @@ impl fmt::Display for Instr {
 
             // Arithmetic instructions
             Instr::Add { dst, src } => write!(f, "add {}, {}", dst, src),
-            Instr::Adc { operand } => write!(f, "adc {}", operand),
+            Instr::AdcA { operand } => write!(f, "adc {}", operand),
+            Instr::Adc { dst, src } => write!(f, "adc {}, {}", dst, src),
             Instr::Sub { dst, src } => write!(f, "sub {}, {}", dst, src),
             Instr::Inc { operand } => write!(f, "inc {}", operand),
             Instr::Dec { operand } => write!(f, "dec {}", operand),

@@ -207,8 +207,12 @@ impl Asm {
         )
     }
 
-    pub fn adc(&mut self, operand: Operand) -> &mut Self {
-        self.emit(Instr::Adc { operand })
+    pub fn adc_a(&mut self, operand: Operand) -> &mut Self {
+        self.emit(Instr::AdcA { operand })
+    }
+
+    pub fn adc(&mut self, dst: Operand, src: Operand) -> &mut Self {
+        self.emit(Instr::Adc { dst, src })
     }
 
     pub fn adc_label(&mut self, reg: &str) -> &mut Self {

@@ -15,9 +15,13 @@ pub enum Instr {
         dst: Operand,
         src: Operand,
     },
-    Adc {
+    AdcA {
         operand: Operand,
     },
+    Adc {
+        dst: Operand,
+        src: Operand,
+    }
     Sub {
         dst: Operand,
         src: Operand,

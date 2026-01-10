@@ -4,10 +4,10 @@ use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 // refactor code:
 // - punt in the form of builder (like cp_in_memory)
 
-pub fn add_tiles(label: &str, tiles: [[&str; 8]; 10]) -> Vec<Instr> {
+pub fn add_tiles(label: &str, tiles: &[[&str; 8]]) -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label(label);
-    for tile in &tiles {
+    for tile in tiles {
         for line in tile {
             asm.dw(line);
         }
@@ -74,6 +74,14 @@ pub fn turn_off_screen() -> Vec<Instr> {
     asm.ld_a(0).ld_addr_def_a("rLCDC").get_main_instrs()
 }
 
+pub fn turn_on_screen() -> Vec<Instr> {
+    let mut asm = Asm::new();
+    // Turn on LCD
+    asm.ld_a_label("LCDCF_ON | LCDCF_BGON | LCDCF_OBJON")
+        .ld_addr_def_a("rLCDC")
+        .get_main_instrs()
+}
+
 pub fn wait_vblank() -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label("WaitVBlank");
@@ -135,5 +143,16 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
     asm.ret();
 
+    asm.get_main_instrs()
+}
+
+pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
+    let mut asm = Asm::new();
+    asm.label(label);
+    for tile_id in tiles_ids {
+        asm.cp_label(tile_id); //TODO understand the tile id and how to manage it!
+        asm.ret_cond(Condition::Z);
+    }
+    asm.ret();
     asm.get_main_instrs()
 }

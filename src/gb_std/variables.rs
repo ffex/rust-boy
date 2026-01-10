@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::gb_asm::{Asm, Instr};
 
 pub fn def_const(name: &str, value: u8) -> Vec<Instr> {
+    //TODO probabibly useful
     let mut asm = Asm::new();
     asm.def(name, value);
     asm.get_main_instrs()

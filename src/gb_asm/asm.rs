@@ -216,7 +216,7 @@ impl Asm {
     }
 
     pub fn adc_label(&mut self, reg: &str) -> &mut Self {
-        self.adc(Operand::Label(reg.to_string()))
+        self.adc_a(Operand::Label(reg.to_string()))
     }
 
     pub fn sub(&mut self, dst: Operand, src: Operand) -> &mut Self {

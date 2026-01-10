@@ -21,7 +21,7 @@ pub enum Instr {
     Adc {
         dst: Operand,
         src: Operand,
-    }
+    },
     Sub {
         dst: Operand,
         src: Operand,

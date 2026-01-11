@@ -88,6 +88,16 @@ pub fn wait_vblank() -> Vec<Instr> {
     asm.ld_a_addr_def("rLY");
     asm.cp_imm(144);
     asm.jp_cond(Condition::C, "WaitVBlank");
+    asm.ret();
+    asm.get_main_instrs()
+}
+pub fn wait_not_vblank() -> Vec<Instr> {
+    let mut asm = Asm::new();
+    asm.label("WaitNotVBlank");
+    asm.ld_a_addr_def("rLY");
+    asm.cp_imm(144);
+    asm.jp_cond(Condition::NC, "WaitNotVBlank");
+    asm.ret();
     asm.get_main_instrs()
 }
 

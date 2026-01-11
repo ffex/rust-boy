@@ -16,7 +16,37 @@ pub fn initialize_objects_screen() -> Vec<Instr> {
     asm.ld_a(0).ld_b(160).ld_hl_label("_OAMRAM");
     asm.get_main_instrs()
 }
-
+pub struct SpriteManager {
+    sprites: Vec<Sprite>,
+    current_sprite_index: u8,
+}
+impl SpriteManager {
+    pub fn new() -> Self {
+        SpriteManager {
+            sprites: Vec::new(),
+            current_sprite_index: 0,
+        }
+    }
+    pub fn add_sprite(&mut self, x: u8, y: u8, tile: u8, flags: u8) {
+        let sprite = Sprite::new(self.current_sprite_index, x, y, tile, flags);
+        self.sprites.push(sprite);
+        self.current_sprite_index += 1;
+    }
+    pub fn draw(&self) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_hl_label("_OAMRAM");
+        for sprite in &self.sprites {
+            asm.emit_all(sprite.draw());
+        }
+        asm.get_main_instrs()
+    }
+    pub fn get_sprite(&self, id: u8) -> Option<&Sprite> {
+        self.sprites.iter().find(|s| s.id == id)
+    }
+    pub fn get_sprite_mut(&mut self, id: u8) -> Option<&mut Sprite> {
+        self.sprites.iter_mut().find(|s| s.id == id)
+    }
+}
 pub struct Sprite {
     pub id: u8,
     pub x: u8,
@@ -35,20 +65,12 @@ impl Sprite {
             flags,
         }
     }
-    pub fn set_x(&mut self, x: u8) {
-        self.x = x;
-    }
-
-    pub fn set_y(&mut self, y: u8) {
-        self.y = y;
-    }
     pub fn draw(&self) -> Vec<Instr> {
         let mut asm = Asm::new();
 
-        asm.ld_hl_label("_OAMRAM")
-            .ld_a(self.x + 16)
+        asm.ld_a(self.y + 16)
             .ld_hli_label("a")
-            .ld_a(self.y + 8)
+            .ld_a(self.x + 8)
             .ld_hli_label("a")
             .ld_a(self.tile)
             .ld_hli_label("a")

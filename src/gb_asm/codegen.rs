@@ -18,9 +18,9 @@ impl Asm {
         let chunk_order = [
             Chunk::Main,
             Chunk::Functions,
-            Chunk::Data,
             Chunk::Tiles,
             Chunk::Tilemap,
+            Chunk::Data,
         ];
 
         for chunk in &chunk_order {

@@ -82,7 +82,7 @@ impl Sprite {
         let mut asm = Asm::new();
         asm.label("Left");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
 
         asm.label("LeftEnd");
@@ -93,7 +93,7 @@ impl Sprite {
         let mut asm = Asm::new();
         asm.label("Right");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .add(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
 
         asm.label("RightEnd");
@@ -103,9 +103,9 @@ impl Sprite {
     pub fn move_up(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.label("Up");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .sub(Operand::Reg(Register::A), Operand::Imm(distance))
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
 
         asm.label("UpEnd");
         asm.get_main_instrs()
@@ -114,9 +114,9 @@ impl Sprite {
     pub fn move_down(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.label("Down");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .add(Operand::Reg(Register::A), Operand::Imm(distance))
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
 
         asm.label("DownEnd");
         asm.get_main_instrs()

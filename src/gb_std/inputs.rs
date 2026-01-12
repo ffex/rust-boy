@@ -56,7 +56,6 @@ impl PadButton {
 pub fn update_keys() -> Vec<Instr> {
     let mut asm = Asm::new();
 
-    asm.comment("Poll half the controller (buttons)");
     asm.label("UpdateKeys");
     asm.ld(
         Operand::Reg(Register::A),
@@ -64,22 +63,16 @@ pub fn update_keys() -> Vec<Instr> {
     );
     asm.call(".onenibble");
     asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-    asm.comment("B7-4 = 1; B3-0 = unpressed buttons");
 
-    asm.comment("Poll the other half (D-pad)");
     asm.ld(
         Operand::Reg(Register::A),
         Operand::Label("P1F_GET_DPAD".to_string()),
     );
     asm.call(".onenibble");
     asm.swap(Operand::Reg(Register::A));
-    asm.comment("A7-4 = unpressed directions; A3-0 = 1");
     asm.xor(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.comment("A = pressed buttons + directions");
     asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-    asm.comment("B = pressed buttons + directions");
 
-    asm.comment("Release the controller");
     asm.ld(
         Operand::Reg(Register::A),
         Operand::Label("P1F_GET_NONE".to_string()),
@@ -89,15 +82,12 @@ pub fn update_keys() -> Vec<Instr> {
         Operand::Reg(Register::A),
     );
 
-    asm.comment("Combine with previous wCurKeys to make wNewKeys");
     asm.ld(
         Operand::Reg(Register::A),
-        Operand::Label("wCurKeys".to_string()),
+        Operand::AddrDef("wCurKeys".to_string()),
     );
     asm.xor(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.comment("A = keys that changed state");
     asm.and(Operand::Reg(Register::B));
-    asm.comment("A = keys that changed to pressed");
     asm.ld(
         Operand::AddrDef("wNewKeys".to_string()),
         Operand::Reg(Register::A),
@@ -109,20 +99,12 @@ pub fn update_keys() -> Vec<Instr> {
     );
     asm.ret();
 
-    asm.comment("Helper function to read one nibble from joypad");
     asm.label(".onenibble");
     asm.ldh(
         Operand::AddrDef("rP1".to_string()),
         Operand::Reg(Register::A),
     );
-    asm.comment("Switch the key matrix");
     asm.call(".knowret");
-    asm.comment("Burn 10 cycles calling a known ret");
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.comment("Ignore value while waiting for key matrix to settle");
     asm.ldh(
         Operand::Reg(Register::A),
         Operand::AddrDef("rP1".to_string()),
@@ -131,9 +113,11 @@ pub fn update_keys() -> Vec<Instr> {
         Operand::Reg(Register::A),
         Operand::AddrDef("rP1".to_string()),
     );
-    asm.comment("This read counts");
+    asm.ldh(
+        Operand::Reg(Register::A),
+        Operand::AddrDef("rP1".to_string()),
+    );
     asm.or(Operand::Reg(Register::A), Operand::Imm(0xF0));
-    asm.comment("A7-4 = 1; A3-0 = unpressed keys");
 
     asm.label(".knowret");
     asm.ret();

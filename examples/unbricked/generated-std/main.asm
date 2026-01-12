@@ -58,16 +58,20 @@
     ld [rBGP], a
     ld a, 228
     ld [rOBP0], a
+    ld a, 0
+    ld [wNewKeys], a
+    ld [wCurKeys], a
     Main:
     call WaitNotVBlank
     call WaitVBlank
+    call UpdateKeys
     CheckLeft:
     ld a, [wCurKeys]
     and a, PADF_LEFT
     jp z, CheckLeftEnd
     Left:
     ld a, [_OAMRAM+5]
-    add a, 1
+    sub a, 1
     ld [_OAMRAM+5], a
     LeftEnd:
     CheckLeftEnd:
@@ -77,10 +81,30 @@
     jp z, CheckRightEnd
     Right:
     ld a, [_OAMRAM+5]
-    sub a, 1
+    add a, 1
     ld [_OAMRAM+5], a
     RightEnd:
     CheckRightEnd:
+    CheckUp:
+    ld a, [wCurKeys]
+    and a, PADF_UP
+    jp z, CheckUpEnd
+    Up:
+    ld a, [_OAMRAM+4]
+    sub a, 1
+    ld [_OAMRAM+4], a
+    UpEnd:
+    CheckUpEnd:
+    CheckDown:
+    ld a, [wCurKeys]
+    and a, PADF_DOWN
+    jp z, CheckDownEnd
+    Down:
+    ld a, [_OAMRAM+4]
+    add a, 1
+    ld [_OAMRAM+4], a
+    DownEnd:
+    CheckDownEnd:
     jp Main
 
     ; Copy bytes from one area to another
@@ -96,47 +120,31 @@
     or a, c
     jp nz, Memcopy
     ret
-    ; Poll half the controller (buttons)
     UpdateKeys:
     ld a, P1F_GET_BTN
     call .onenibble
     ld b, a
-    ; B7-4 = 1; B3-0 = unpressed buttons
-    ; Poll the other half (D-pad)
     ld a, P1F_GET_DPAD
     call .onenibble
     swap a
-    ; A7-4 = unpressed directions; A3-0 = 1
     xor a, b
-    ; A = pressed buttons + directions
     ld b, a
-    ; B = pressed buttons + directions
-    ; Release the controller
     ld a, P1F_GET_NONE
     ldh [rP1], a
-    ; Combine with previous wCurKeys to make wNewKeys
-    ld a, wCurKeys
+    ld a, [wCurKeys]
     xor a, b
-    ; A = keys that changed state
     and a, b
-    ; A = keys that changed to pressed
     ld [wNewKeys], a
     ld a, b
     ld [wCurKeys], a
     ret
-    ; Helper function to read one nibble from joypad
     .onenibble:
     ldh [rP1], a
-    ; Switch the key matrix
     call .knowret
-    ; Burn 10 cycles calling a known ret
-    ldh a, [rP1]
-    ; Ignore value while waiting for key matrix to settle
     ldh a, [rP1]
     ldh a, [rP1]
-    ; This read counts
+    ldh a, [rP1]
     or a, 240
-    ; A7-4 = 1; A3-0 = unpressed keys
     .knowret:
     ret
     WaitVBlank:
@@ -488,8 +496,8 @@
     wCurKeys: db
     wNewKeys: db
     SECTION "Ball Data", WRAM0
-    wBallMomentumY: db
     wBallMomentumX: db
+    wBallMomentumY: db
     SECTION "Score", WRAM0
     wScore: db
 

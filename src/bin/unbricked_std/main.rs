@@ -79,15 +79,20 @@ fn main() {
 
     //TODO miss the ball initialization
     //TODO init variables
+    asm.ld_a(0);
+    asm.ld_addr_def_a("wNewKeys");
+    asm.ld_addr_def_a("wCurKeys");
     //MAIN LOOP START
     // TODO probably we have to implement the main loop
     asm.label("Main");
     asm.call("WaitNotVBlank");
     asm.call("WaitVBlank");
-
+    asm.call("UpdateKeys");
     //TODO miss the ball management
     let left_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_left(1);
     let right_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_right(1);
+    let up_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_up(1);
+    let down_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_down(1);
     asm.emit_all(check_key(
         rust_boy::gb_std::inputs::PadButton::Left,
         left_pressed,
@@ -96,7 +101,14 @@ fn main() {
         rust_boy::gb_std::inputs::PadButton::Right,
         right_pressed,
     ));
-
+    asm.emit_all(check_key(
+        rust_boy::gb_std::inputs::PadButton::Up,
+        up_pressed,
+    ));
+    asm.emit_all(check_key(
+        rust_boy::gb_std::inputs::PadButton::Down,
+        down_pressed,
+    ));
     asm.jp("Main");
     //Variables management
     asm.chunk(rust_boy::gb_asm::Chunk::Data);

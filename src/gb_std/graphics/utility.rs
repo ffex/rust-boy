@@ -142,7 +142,7 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     asm.ld(Operand::Reg(Register::H), Operand::Reg(Register::A));
 
     // Add the offset to the tilemap's base address, and we are done!
-    asm.ld_bc(0x9800);
+    asm.ld_bc_label("$9800");
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
     asm.ret();
 
@@ -152,9 +152,11 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
 pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label(label);
-    for tile_id in tiles_ids {
+    for (index, tile_id) in tiles_ids.iter().enumerate() {
         asm.cp_label(tile_id); //TODO understand the tile id and how to manage it!
-        asm.ret_cond(Condition::Z);
+        if index < tiles_ids.len() - 1 {
+            asm.ret_cond(Condition::Z);
+        }
     }
     asm.ret();
     asm.get_main_instrs()

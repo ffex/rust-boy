@@ -180,7 +180,7 @@ impl Sprite {
 
     pub fn move_x_var(&mut self, var_name: &str) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+        asm.ld_a_addr_def(&format!("{}", var_name))
             .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
             .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
             .add(Operand::Reg(Register::A), Operand::Reg(Register::B))
@@ -191,7 +191,7 @@ impl Sprite {
 
     pub fn move_y_var(&mut self, var_name: &str) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
+        asm.ld_a_addr_def(&format!("{}", var_name))
             .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
             .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .add(Operand::Reg(Register::A), Operand::Reg(Register::B))

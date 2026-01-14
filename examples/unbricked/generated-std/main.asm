@@ -70,12 +70,12 @@
     Main:
     call WaitNotVBlank
     call WaitVBlank
-    ld a, [_OAMRAM+5]
+    ld a, [wBallMomentumX]
     ld b, a
     ld a, [_OAMRAM+5]
     add a, b
     ld [_OAMRAM+5], a
-    ld a, [_OAMRAM+4]
+    ld a, [wBallMomentumY]
     ld b, a
     ld a, [_OAMRAM+4]
     add a, b
@@ -234,7 +234,7 @@
     adc a, h
     sub a, l
     ld h, a
-    ld bc, 38912
+    ld bc, $9800
     add hl, bc
     ret
     IsWallTile:
@@ -251,7 +251,6 @@
     cp $06
     ret z
     cp $07
-    ret z
     ret
 
     Tiles:
@@ -592,8 +591,8 @@
     wCurKeys: db
     wNewKeys: db
     SECTION "Ball Data", WRAM0
-    wBallMomentumY: db
     wBallMomentumX: db
+    wBallMomentumY: db
     SECTION "Score", WRAM0
     wScore: db
 

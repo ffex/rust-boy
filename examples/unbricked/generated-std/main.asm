@@ -35,6 +35,10 @@
     ld [hli], a
     dec b
     jp nz, ClearOam
+    ld a, 1
+    ld [wBallMomentumX], a
+    ld a, -1
+    ld [wBallMomentumY], a
     ld hl, _OAMRAM
     ld a, 144
     ld [hli], a
@@ -59,52 +63,104 @@
     ld a, 228
     ld [rOBP0], a
     ld a, 0
+    ld [wFrameCounter], a
     ld [wNewKeys], a
     ld [wCurKeys], a
+    ld [wScore], a
     Main:
     call WaitNotVBlank
     call WaitVBlank
+    ld a, [_OAMRAM+5]
+    ld b, a
+    ld a, [_OAMRAM+5]
+    add a, b
+    ld [_OAMRAM+5], a
+    ld a, [_OAMRAM+4]
+    ld b, a
+    ld a, [_OAMRAM+4]
+    add a, b
+    ld [_OAMRAM+4], a
+    BounceOnTop:
+    ld a, [_OAMRAM+4]
+    sub a, 17
+    ld c, a
+    ld a, [_OAMRAM+5]
+    sub a, 8
+    ld b, a
+    call GetTileByPixel
+    ld a, [hl]
+    call IsWallTile
+    jp nz, BounceOnTopEnd
+    ld a, 1
+    ld [wBallMomentumY], a
+    BounceOnTopEnd:
+    BounceOnRight:
+    ld a, [_OAMRAM+4]
+    sub a, 16
+    ld c, a
+    ld a, [_OAMRAM+5]
+    sub a, 7
+    ld b, a
+    call GetTileByPixel
+    ld a, [hl]
+    call IsWallTile
+    jp nz, BounceOnRightEnd
+    ld a, -1
+    ld [wBallMomentumX], a
+    BounceOnRightEnd:
+    BounceOnLeft:
+    ld a, [_OAMRAM+4]
+    sub a, 16
+    ld c, a
+    ld a, [_OAMRAM+5]
+    sub a, 9
+    ld b, a
+    call GetTileByPixel
+    ld a, [hl]
+    call IsWallTile
+    jp nz, BounceOnLeftEnd
+    ld a, 1
+    ld [wBallMomentumX], a
+    BounceOnLeftEnd:
+    BounceOnBottom:
+    ld a, [_OAMRAM+4]
+    sub a, 15
+    ld c, a
+    ld a, [_OAMRAM+5]
+    sub a, 8
+    ld b, a
+    call GetTileByPixel
+    ld a, [hl]
+    call IsWallTile
+    jp nz, BounceOnBottomEnd
+    ld a, -1
+    ld [wBallMomentumY], a
+    BounceOnBottomEnd:
     call UpdateKeys
     CheckLeft:
     ld a, [wCurKeys]
     and a, PADF_LEFT
     jp z, CheckLeftEnd
-    Left:
-    ld a, [_OAMRAM+5]
+    LeftLimit:
+    ld a, [_OAMRAM+1]
     sub a, 1
-    ld [_OAMRAM+5], a
-    LeftEnd:
+    cp 15
+    jp z, LeftLimitEnd
+    ld [_OAMRAM+1], a
+    LeftLimitEnd:
     CheckLeftEnd:
     CheckRight:
     ld a, [wCurKeys]
     and a, PADF_RIGHT
     jp z, CheckRightEnd
-    Right:
-    ld a, [_OAMRAM+5]
+    RightLimit:
+    ld a, [_OAMRAM+1]
     add a, 1
-    ld [_OAMRAM+5], a
-    RightEnd:
+    cp 105
+    jp z, RightLimitEnd
+    ld [_OAMRAM+1], a
+    RightLimitEnd:
     CheckRightEnd:
-    CheckUp:
-    ld a, [wCurKeys]
-    and a, PADF_UP
-    jp z, CheckUpEnd
-    Up:
-    ld a, [_OAMRAM+4]
-    sub a, 1
-    ld [_OAMRAM+4], a
-    UpEnd:
-    CheckUpEnd:
-    CheckDown:
-    ld a, [wCurKeys]
-    and a, PADF_DOWN
-    jp z, CheckDownEnd
-    Down:
-    ld a, [_OAMRAM+4]
-    add a, 1
-    ld [_OAMRAM+4], a
-    DownEnd:
-    CheckDownEnd:
     jp Main
 
     ; Copy bytes from one area to another
@@ -156,6 +212,46 @@
     ld a, [rLY]
     cp 144
     jp nc, WaitNotVBlank
+    ret
+    ; Convert a pixel position to a tilemap address
+    ; hl = $9800 + X + Y * 32
+    ; @param b: X
+    ; @param c: Y
+    ; @return hl: tile address
+    GetTileByPixel:
+    ld a, c
+    and a, 248
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    ld a, b
+    srl a
+    srl a
+    srl a
+    add a, l
+    ld l, a
+    adc a, h
+    sub a, l
+    ld h, a
+    ld bc, 38912
+    add hl, bc
+    ret
+    IsWallTile:
+    cp $00
+    ret z
+    cp $01
+    ret z
+    cp $02
+    ret z
+    cp $04
+    ret z
+    cp $05
+    ret z
+    cp $06
+    ret z
+    cp $07
+    ret z
     ret
 
     Tiles:
@@ -496,8 +592,8 @@
     wCurKeys: db
     wNewKeys: db
     SECTION "Ball Data", WRAM0
-    wBallMomentumX: db
     wBallMomentumY: db
+    wBallMomentumX: db
     SECTION "Score", WRAM0
     wScore: db
 

@@ -119,36 +119,29 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     // First, we need to divide by 8 to convert a pixel position to a tile position.
     // After this we want to multiply the Y position by 32.
     // These operations effectively cancel out so we only need to mask the Y value.
-    asm.comment("First, we need to divide by 8 to convert a pixel position to a tile position.");
-    asm.comment("After this we want to multiply the Y position by 32.");
-    asm.comment("These operations effectively cancel out so we only need to mask the Y value.");
     asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::C));
     asm.and(Operand::Imm(0b11111000));
     asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
     asm.ld(Operand::Reg(Register::H), Operand::Imm(0));
 
     // Now we have the position * 8 in hl
-    asm.comment("Now we have the position * 8 in hl");
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::HL)); // position * 16
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::HL)); // position * 32
 
     // Convert the X position to an offset.
-    asm.comment("Convert the X position to an offset.");
     asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
     asm.srl(Operand::Reg(Register::A)); // a / 2
     asm.srl(Operand::Reg(Register::A)); // a / 4
     asm.srl(Operand::Reg(Register::A)); // a / 8
 
     // Add the two offsets together.
-    asm.comment("Add the two offsets together.");
     asm.add(Operand::Reg(Register::A), Operand::Reg(Register::L));
     asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
-    asm.adc(Operand::Reg(Register::H), Operand::Reg(Register::A));
+    asm.adc(Operand::Reg(Register::A), Operand::Reg(Register::H));
     asm.sub(Operand::Reg(Register::A), Operand::Reg(Register::L));
     asm.ld(Operand::Reg(Register::H), Operand::Reg(Register::A));
 
     // Add the offset to the tilemap's base address, and we are done!
-    asm.comment("Add the offset to the tilemap's base address, and we are done!");
     asm.ld_bc(0x9800);
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
     asm.ret();

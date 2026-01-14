@@ -127,7 +127,7 @@ impl Sprite {
         let jump_label = "LeftLimitEnd";
         asm.label("LeftLimit");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
             .cp(Operand::Imm(limit))
             .jp_cond(Condition::Z, jump_label)
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
@@ -141,7 +141,7 @@ impl Sprite {
         let jump_label = "RightLimitEnd";
         asm.label("RightLimit");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .add(Operand::Reg(Register::A), Operand::Imm(distance))
             .cp(Operand::Imm(limit))
             .jp_cond(Condition::Z, jump_label)
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
@@ -154,11 +154,11 @@ impl Sprite {
         let mut asm = Asm::new();
         let jump_label = "UpLimitEnd";
         asm.label("UpLimit");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .sub(Operand::Reg(Register::A), Operand::Imm(distance))
             .cp(Operand::Imm(limit))
             .jp_cond(Condition::Z, jump_label)
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
 
         asm.label(jump_label);
         asm.get_main_instrs()
@@ -168,22 +168,51 @@ impl Sprite {
         let mut asm = Asm::new();
         let jump_label = "DownLimitEnd";
         asm.label("DownLimit");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 2))
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .add(Operand::Reg(Register::A), Operand::Imm(distance))
             .cp(Operand::Imm(limit))
             .jp_cond(Condition::Z, jump_label)
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 2));
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
 
         asm.label(jump_label);
         asm.get_main_instrs()
     }
-    pub fn get_pivot(&self, x_offset: u8, y_offset: u8) -> Vec<Instr> {
+
+    pub fn move_x_var(&mut self, var_name: &str) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+            .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
+            .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
+            .add(Operand::Reg(Register::A), Operand::Reg(Register::B))
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
+
+        asm.get_main_instrs()
+    }
+
+    pub fn move_y_var(&mut self, var_name: &str) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
-            .sub(Operand::Reg(Register::A), Operand::Imm(16 + y_offset))
+            .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
+            .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
+            .add(Operand::Reg(Register::A), Operand::Reg(Register::B))
+            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
+
+        asm.get_main_instrs()
+    }
+
+    pub fn get_pivot(&self, x_offset: i16, y_offset: i16) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
+            .sub(
+                Operand::Reg(Register::A),
+                Operand::Imm(u8::try_from(16i16 + y_offset).unwrap_or(0)),
+            )
             .ld(Operand::Reg(Register::C), Operand::Reg(Register::A))
             .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .sub(Operand::Reg(Register::A), Operand::Imm(8 + x_offset))
+            .sub(
+                Operand::Reg(Register::A),
+                Operand::Imm(u8::try_from(8i16 + x_offset).unwrap_or(0)),
+            )
             .ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
 
         asm.get_main_instrs()

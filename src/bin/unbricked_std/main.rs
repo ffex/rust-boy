@@ -7,8 +7,8 @@ use rust_boy::{
         graphics::{
             sprites::{Sprite, SpriteManager, clear_objects_screen, initialize_objects_screen},
             utility::{
-                add_tilemap, add_tiles, cp_in_memory, memcopy, turn_off_screen, turn_on_screen,
-                wait_not_vblank, wait_vblank,
+                add_tilemap, add_tiles, cp_in_memory, get_tile_by_pixel, is_specific_tile, memcopy,
+                turn_off_screen, turn_on_screen, wait_not_vblank, wait_vblank,
             },
         },
         inputs::{check_key, update_keys},
@@ -63,36 +63,102 @@ fn main() {
 
     //Sprite managment
     let mut sprite_manager = SpriteManager::new();
-    let mut paddle = sprite_manager.add_sprite(16, 128, 0, 0);
-    let mut ball = sprite_manager.add_sprite(32, 100, 1, 0);
-    //TODO remove follow lines
-    //asm.emit_all(paddle.draw());
-    //asm.emit_all(ball.draw());
+    sprite_manager.add_sprite(16, 128, 0, 0);
+    sprite_manager.add_sprite(32, 100, 1, 0);
+    asm.ld_a(1);
+    asm.ld_addr_def_a("wBallMomentumX");
+    asm.ld_a_label("-1");
+    asm.ld_addr_def_a("wBallMomentumY");
     asm.emit_all(sprite_manager.draw());
 
     asm.emit_all(turn_on_screen());
-    // TODO follow the palette/register initialization
     asm.ld_a(0b11100100);
     asm.ld_addr_def_a("rBGP");
     asm.ld_a(0b11100100);
     asm.ld_addr_def_a("rOBP0");
 
-    //TODO miss the ball initialization
-    //TODO init variables
     asm.ld_a(0);
+    asm.ld_addr_def_a("wFrameCounter");
     asm.ld_addr_def_a("wNewKeys");
     asm.ld_addr_def_a("wCurKeys");
+    asm.ld_addr_def_a("wScore");
     //MAIN LOOP START
     // TODO probably we have to implement the main loop
     asm.label("Main");
     asm.call("WaitNotVBlank");
     asm.call("WaitVBlank");
+
+    asm.emit_all(
+        sprite_manager
+            .get_sprite_mut(1)
+            .unwrap()
+            .move_x_var("wBallMomentumX"),
+    );
+
+    asm.emit_all(
+        sprite_manager
+            .get_sprite_mut(1)
+            .unwrap()
+            .move_y_var("wBallMomentumY"),
+    );
+    //TODO refactor bounceTop
+    asm.label("BounceOnTop");
+    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, 1));
+    asm.call("GetTileByPixel");
+    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
+    asm.call("IsWallTile");
+    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnTopEnd");
+    //check brick collision
+    asm.ld_a(1);
+    asm.ld_addr_def_a("wBallMomentumY");
+    asm.label("BounceOnTopEnd");
+
+    //TODO refactor bounceRight
+    asm.label("BounceOnRight");
+    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(-1, 0));
+    asm.call("GetTileByPixel");
+    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
+    asm.call("IsWallTile");
+    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
+    //check brick collision
+    asm.ld_a_label("-1");
+    asm.ld_addr_def_a("wBallMomentumX");
+    asm.label("BounceOnRightEnd");
+
+    //TODO refactor bounceLeft
+    asm.label("BounceOnLeft");
+    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(1, 0));
+    asm.call("GetTileByPixel");
+    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
+    asm.call("IsWallTile");
+    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
+    //check brick collision
+    asm.ld_a_label("1");
+    asm.ld_addr_def_a("wBallMomentumX");
+    asm.label("BounceOnLeftEnd");
+
+    //TODO refactor bounceBottom
+    asm.label("BounceOnBottom");
+    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, -1));
+    asm.call("GetTileByPixel");
+    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
+    asm.call("IsWallTile");
+    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
+    //check brick collision
+    asm.ld_a_label("-1");
+    asm.ld_addr_def_a("wBallMomentumY");
+    asm.label("BounceOnBottomEnd");
+
     asm.call("UpdateKeys");
     //TODO miss the ball management
-    let left_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_left(1);
-    let right_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_right(1);
-    let up_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_up(1);
-    let down_pressed = sprite_manager.get_sprite_mut(1).unwrap().move_down(1);
+    let left_pressed = sprite_manager
+        .get_sprite_mut(0)
+        .unwrap()
+        .move_left_limit(1, 15);
+    let right_pressed = sprite_manager
+        .get_sprite_mut(0)
+        .unwrap()
+        .move_right_limit(1, 105);
     asm.emit_all(check_key(
         rust_boy::gb_std::inputs::PadButton::Left,
         left_pressed,
@@ -100,14 +166,6 @@ fn main() {
     asm.emit_all(check_key(
         rust_boy::gb_std::inputs::PadButton::Right,
         right_pressed,
-    ));
-    asm.emit_all(check_key(
-        rust_boy::gb_std::inputs::PadButton::Up,
-        up_pressed,
-    ));
-    asm.emit_all(check_key(
-        rust_boy::gb_std::inputs::PadButton::Down,
-        down_pressed,
     ));
     asm.jp("Main");
     //Variables management
@@ -136,6 +194,11 @@ fn main() {
     asm.emit_all(update_keys());
     asm.emit_all(wait_vblank());
     asm.emit_all(wait_not_vblank());
+    asm.emit_all(get_tile_by_pixel());
+    asm.emit_all(is_specific_tile(
+        "IsWallTile",
+        &["$00", "$01", "$02", "$04", "$05", "$06", "$07"],
+    ));
 
     // Tilemap Management
     asm.chunk(rust_boy::gb_asm::Chunk::Tilemap);

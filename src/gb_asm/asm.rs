@@ -9,10 +9,23 @@ pub struct Asm {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Chunk {
+    /// INCLUDE statements and header section
+    Header,
+    /// DEF constant definitions
+    Constants,
+    /// Initialization code (before main loop)
+    Init,
+    /// Main game loop
+    MainLoop,
+    /// Legacy: combines Init + MainLoop (for backwards compatibility)
     Main,
+    /// Function definitions
     Functions,
+    /// Tile data
     Tiles,
+    /// Tilemap data
     Tilemap,
+    /// Variable/data sections (WRAM)
     Data,
 }
 

@@ -16,11 +16,15 @@ impl Asm {
 
         // Define the order in which chunks should appear in the output
         let chunk_order = [
-            Chunk::Main,
-            Chunk::Functions,
-            Chunk::Tiles,
-            Chunk::Tilemap,
-            Chunk::Data,
+            Chunk::Header,    // INCLUDE, SECTION Header
+            Chunk::Constants, // DEF statements
+            Chunk::Init,      // Initialization code
+            Chunk::MainLoop,  // Main game loop
+            Chunk::Main,      // Legacy (backwards compatibility)
+            Chunk::Functions, // Function definitions
+            Chunk::Tiles,     // Tile data
+            Chunk::Tilemap,   // Tilemap data
+            Chunk::Data,      // Variables (WRAM sections)
         ];
 
         for chunk in &chunk_order {

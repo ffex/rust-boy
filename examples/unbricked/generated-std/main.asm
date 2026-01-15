@@ -136,6 +136,32 @@
     ld a, -1
     ld [wBallMomentumY], a
     BounceOnBottomEnd:
+    ; TESTBOUNCEDONCE
+    ld a, [_OAMRAM+0]
+    ld b, a
+    ld a, [_OAMRAM+4]
+    add a, 8
+    ld a, a
+    cp b
+    jp nz, .end_if_0
+    ld a, [_OAMRAM+5]
+    ld b, a
+    ld a, [_OAMRAM+1]
+    sub a, 5
+    ld a, a
+    cp b
+    jp nc, .end_if_1
+    add a, 24
+    ld a, a
+    cp b
+    jp c, .end_if_2
+    ld a, -1
+    ld [wBallMomentumY], a
+    .end_if_2:
+    .end_if_1:
+    .end_if_0:
+    ; PaddleBounceDone
+    ; TESTBOUNCEDONCEEND
     call UpdateKeys
     CheckLeft:
     ld a, [wCurKeys]

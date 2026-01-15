@@ -2,8 +2,9 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::Asm,
+    gb_asm::{Asm, Operand, Register},
     gb_std::{
+        flow::{ConditionOperand, If, IfCondition},
         graphics::{
             sprites::{Sprite, SpriteManager, clear_objects_screen, initialize_objects_screen},
             utility::{
@@ -148,7 +149,59 @@ fn main() {
     asm.ld_a_label("-1");
     asm.ld_addr_def_a("wBallMomentumY");
     asm.label("BounceOnBottomEnd");
+    //TODO refactorBounceDone
+    asm.comment("TESTBOUNCEDONCE");
+    asm.emit_all(sprite_manager.get_sprite(0).unwrap().get_y(Register::B));
+    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_y(Register::A));
+    asm.add(Operand::Reg(Register::A), Operand::Imm(5));
+    let if__ball_y_check = If::new(
+        IfCondition::new(
+            ConditionOperand::Register(Register::A),
+            ConditionOperand::Register(Register::B),
+            rust_boy::gb_std::flow::ComparisonOp::E,
+        ),
+        {
+            let mut bounce_x_check = Asm::new();
+            bounce_x_check.emit_all(sprite_manager.get_sprite(1).unwrap().get_x(Register::B));
+            bounce_x_check.emit_all(sprite_manager.get_sprite(0).unwrap().get_x(Register::A));
+            bounce_x_check.sub(Operand::Reg(Register::A), Operand::Imm(8));
+            let if__ball_y_check = If::new(
+                IfCondition::new(
+                    ConditionOperand::Register(Register::A),
+                    ConditionOperand::Register(Register::B),
+                    rust_boy::gb_std::flow::ComparisonOp::LT,
+                ),
+                {
+                    let mut bounce_x_check_2 = Asm::new();
+                    bounce_x_check_2.add(Operand::Reg(Register::A), Operand::Imm(8 + 16));
+                    let if__ball_x_check_2 = If::new(
+                        IfCondition::new(
+                            ConditionOperand::Register(Register::A),
+                            ConditionOperand::Register(Register::B),
+                            rust_boy::gb_std::flow::ComparisonOp::GE,
+                        ),
+                        {
+                            let mut bounce = Asm::new();
+                            bounce.ld_a_label("-1");
+                            bounce.ld_addr_def_a("wBallMomentumY");
+                            bounce.get_main_instrs()
+                        },
+                    )
+                    .with_label_counter(2);
+                    bounce_x_check_2.emit_all(if__ball_x_check_2.emit_to());
+                    bounce_x_check_2.get_main_instrs()
+                },
+            )
+            .with_label_counter(1);
+            bounce_x_check.emit_all(if__ball_y_check.emit_to());
+            bounce_x_check.get_main_instrs()
+        },
+    )
+    .with_label_counter(0);
+    asm.emit_all(if__ball_y_check.emit_to());
 
+    asm.comment("PaddleBounceDone");
+    asm.comment("TESTBOUNCEDONCEEND");
     asm.call("UpdateKeys");
     //TODO miss the ball management
     let left_pressed = sprite_manager

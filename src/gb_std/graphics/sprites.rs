@@ -217,4 +217,22 @@ impl Sprite {
 
         asm.get_main_instrs()
     }
+
+    pub fn get_y(&self, dest: Register) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4));
+        if !matches!(dest, Register::A) {
+            asm.ld(Operand::Reg(dest), Operand::Reg(Register::A));
+        }
+        asm.get_main_instrs()
+    }
+
+    pub fn get_x(&self, dest: Register) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1));
+        if !matches!(dest, Register::A) {
+            asm.ld(Operand::Reg(dest), Operand::Reg(Register::A));
+        }
+        asm.get_main_instrs()
+    }
 }

@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition as AsmCondition, Instr, Operand};
+use crate::gb_asm::{Asm, Condition as AsmCondition, Instr, Operand, Register};
 
 /// Comparison operators for conditions
 /// TODO probably can we implement witout considering the case LE and GT.
@@ -27,7 +27,7 @@ pub enum ComparisonOp {
 /// Represents a condition operand (can be a register value, immediate, or label)
 #[derive(Clone, Debug)]
 pub enum ConditionOperand {
-    Register(Operand),
+    Register(Register),
     Immediate(u8),
     Label(String),
 }
@@ -35,7 +35,7 @@ pub enum ConditionOperand {
 impl ConditionOperand {
     pub fn to_operand(&self) -> Operand {
         match self {
-            ConditionOperand::Register(op) => op.clone(),
+            ConditionOperand::Register(op) => Operand::Reg(op.clone()),
             ConditionOperand::Immediate(val) => Operand::Imm(*val),
             ConditionOperand::Label(label) => Operand::Label(label.clone()),
         }
@@ -226,7 +226,10 @@ impl If {
         // Step 1: Load left operand into register A
         match &self.condition.left {
             ConditionOperand::Register(op) => {
-                asm.ld(Operand::Reg(crate::gb_asm::Register::A), op.clone());
+                asm.ld(
+                    Operand::Reg(crate::gb_asm::Register::A),
+                    Operand::Reg(op.clone()),
+                );
             }
             ConditionOperand::Immediate(val) => {
                 asm.ld_a(*val);
@@ -347,7 +350,7 @@ mod tests {
     #[test]
     fn test_if_else() {
         let condition = IfCondition::not_equal(
-            ConditionOperand::Register(Operand::Reg(Register::A)),
+            ConditionOperand::Register(Register::A),
             ConditionOperand::Immediate(144),
         );
 
@@ -370,7 +373,7 @@ mod tests {
     #[test]
     fn test_less_equal() {
         let condition = IfCondition::less_equal(
-            ConditionOperand::Register(Operand::Reg(Register::A)),
+            ConditionOperand::Register(Register::A),
             ConditionOperand::Immediate(10),
         );
 
@@ -389,7 +392,7 @@ mod tests {
     #[test]
     fn test_greater_than() {
         let condition = IfCondition::greater_than(
-            ConditionOperand::Register(Operand::Reg(Register::A)),
+            ConditionOperand::Register(Register::A),
             ConditionOperand::Immediate(5),
         );
 

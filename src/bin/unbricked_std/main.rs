@@ -4,9 +4,9 @@ mod tiles;
 use rust_boy::{
     gb_asm::{Asm, Operand, Register},
     gb_std::{
-        flow::{ConditionOperand, If, IfCondition},
+        flow::{Emittable, If},
         graphics::{
-            sprites::{Sprite, SpriteManager, clear_objects_screen, initialize_objects_screen},
+            sprites::{clear_objects_screen, initialize_objects_screen, SpriteManager},
             utility::{
                 add_tilemap, add_tiles, cp_in_memory, get_tile_by_pixel, is_specific_tile, memcopy,
                 turn_off_screen, turn_on_screen, wait_not_vblank, wait_vblank,
@@ -14,13 +14,12 @@ use rust_boy::{
         },
         inputs::{check_key, update_keys},
         utility::header_section,
-        variables::{VariableSection, def_const},
+        variables::VariableSection,
     },
 };
 
 fn main() {
     let mut asm = Asm::new();
-    // TODO think about Hexadecimal rapresentation
     asm.include_hardware();
     asm.def("BRICK_LEFT", 0x05);
     asm.def("BRICK_RIGHT", 0x06);
@@ -28,26 +27,14 @@ fn main() {
     asm.def("DIGIT_OFFSET", 0x1A);
     asm.def("SCORE_TENS", 0x9870);
     asm.def("SCORE_ONES", 0x9871);
-    //TODO maybe we have to think about to hide the hex values... how?
-    // maybe we have to implement a variable system
-    // and a tile object? to manage the ids?
     asm.emit_all(header_section());
-    asm.label("EntryPoint"); //TODO make a main loop method?
+    asm.label("EntryPoint");
 
     asm.call("WaitVBlank");
     asm.emit_all(turn_off_screen());
-    //here we put the tiles mangement in the main also. FLOW1
 
-    //Tile management
-    // TODO some intializzation can be joined. (add_tiles and cp_in_memory)
-    // TODO can we also add memcopy in automatic way when it is called first time?
-    // TODO some address known can be put in constants
-    // or maybe build an memory management system?
-    // eg: add("paddle", WRAM)
-    // add("paddle" in WRAM)
-    // automatically manage the address ($8000 and after $8010)
+    // Tile management
     asm.chunk(rust_boy::gb_asm::Chunk::Tiles);
-
     asm.emit_all(add_tiles("Tiles", tiles::TILES));
     asm.emit_all(add_tiles("Ball", tiles::BALL));
     asm.emit_all(add_tiles("Paddle", tiles::PADDLE));
@@ -58,14 +45,13 @@ fn main() {
     asm.emit_all(cp_in_memory("Paddle", "$8000"));
     asm.emit_all(cp_in_memory("Tilemap", "$9800"));
 
-    //FLOW1 we continue with the main
     asm.emit_all(initialize_objects_screen());
     asm.emit_all(clear_objects_screen());
 
-    //Sprite managment
+    // Sprite management
     let mut sprite_manager = SpriteManager::new();
-    sprite_manager.add_sprite(16, 128, 0, 0);
-    sprite_manager.add_sprite(32, 100, 1, 0);
+    sprite_manager.add_sprite(16, 128, 0, 0); // Paddle (id 0)
+    sprite_manager.add_sprite(32, 100, 1, 0); // Ball (id 1)
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumX");
     asm.ld_a_label("-1");
@@ -83,127 +69,127 @@ fn main() {
     asm.ld_addr_def_a("wNewKeys");
     asm.ld_addr_def_a("wCurKeys");
     asm.ld_addr_def_a("wScore");
-    //MAIN LOOP START
-    // TODO probably we have to implement the main loop
+
+    // MAIN LOOP START
     asm.label("Main");
     asm.call("WaitNotVBlank");
     asm.call("WaitVBlank");
 
+    // Ball movement
     asm.emit_all(
         sprite_manager
             .get_sprite_mut(1)
             .unwrap()
             .move_x_var("wBallMomentumX"),
     );
-
     asm.emit_all(
         sprite_manager
             .get_sprite_mut(1)
             .unwrap()
             .move_y_var("wBallMomentumY"),
     );
-    //TODO refactor bounceTop
+
+    // Bounce on top
     asm.label("BounceOnTop");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, 1));
     asm.call("GetTileByPixel");
     asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnTopEnd");
-    //check brick collision
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumY");
     asm.label("BounceOnTopEnd");
 
-    //TODO refactor bounceRight
+    // Bounce on right
     asm.label("BounceOnRight");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(-1, 0));
     asm.call("GetTileByPixel");
     asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
-    //check brick collision
     asm.ld_a_label("-1");
     asm.ld_addr_def_a("wBallMomentumX");
     asm.label("BounceOnRightEnd");
 
-    //TODO refactor bounceLeft
+    // Bounce on left
     asm.label("BounceOnLeft");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(1, 0));
     asm.call("GetTileByPixel");
     asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
-    //check brick collision
     asm.ld_a_label("1");
     asm.ld_addr_def_a("wBallMomentumX");
     asm.label("BounceOnLeftEnd");
 
-    //TODO refactor bounceBottom
+    // Bounce on bottom
     asm.label("BounceOnBottom");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, -1));
     asm.call("GetTileByPixel");
     asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
-    //check brick collision
     asm.ld_a_label("-1");
     asm.ld_addr_def_a("wBallMomentumY");
     asm.label("BounceOnBottomEnd");
-    //TODO refactorBounceDone
-    asm.comment("TESTBOUNCEDONCE");
-    asm.emit_all(sprite_manager.get_sprite(0).unwrap().get_y(Register::B));
-    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_y(Register::A));
-    asm.add(Operand::Reg(Register::A), Operand::Imm(5));
-    let if__ball_y_check = If::new(
-        IfCondition::new(
-            ConditionOperand::Register(Register::A),
-            ConditionOperand::Register(Register::B),
-            rust_boy::gb_std::flow::ComparisonOp::E,
-        ),
-        {
-            let mut bounce_x_check = Asm::new();
-            bounce_x_check.emit_all(sprite_manager.get_sprite(1).unwrap().get_x(Register::B));
-            bounce_x_check.emit_all(sprite_manager.get_sprite(0).unwrap().get_x(Register::A));
-            bounce_x_check.sub(Operand::Reg(Register::A), Operand::Imm(8));
-            let if__ball_y_check = If::new(
-                IfCondition::new(
-                    ConditionOperand::Register(Register::A),
-                    ConditionOperand::Register(Register::B),
-                    rust_boy::gb_std::flow::ComparisonOp::LT,
-                ),
-                {
-                    let mut bounce_x_check_2 = Asm::new();
-                    bounce_x_check_2.add(Operand::Reg(Register::A), Operand::Imm(8 + 16));
-                    let if__ball_x_check_2 = If::new(
-                        IfCondition::new(
-                            ConditionOperand::Register(Register::A),
-                            ConditionOperand::Register(Register::B),
-                            rust_boy::gb_std::flow::ComparisonOp::GE,
-                        ),
-                        {
-                            let mut bounce = Asm::new();
-                            bounce.ld_a_label("-1");
-                            bounce.ld_addr_def_a("wBallMomentumY");
-                            bounce.get_main_instrs()
-                        },
-                    )
-                    .with_label_counter(2);
-                    bounce_x_check_2.emit_all(if__ball_x_check_2.emit_to());
-                    bounce_x_check_2.get_main_instrs()
-                },
-            )
-            .with_label_counter(1);
-            bounce_x_check.emit_all(if__ball_y_check.emit_to());
-            bounce_x_check.get_main_instrs()
-        },
-    )
-    .with_label_counter(0);
-    asm.emit_all(if__ball_y_check.emit_to());
 
+    // Paddle bounce using the new simplified If API!
+    asm.comment("Paddle bounce check");
+    {
+        let paddle = sprite_manager.get_sprite(0).unwrap();
+        let ball = sprite_manager.get_sprite(1).unwrap();
+
+        // Helper: get ball Y + 5 (for collision offset)
+        let ball_y_plus_5 = {
+            let mut a = Asm::new();
+            a.emit_all(ball.get_y());
+            a.add(Operand::Reg(Register::A), Operand::Imm(5));
+            a.get_main_instrs()
+        };
+
+        // Helper: get paddle X - 8 (left edge)
+        let paddle_x_minus_8 = {
+            let mut a = Asm::new();
+            a.emit_all(paddle.get_x());
+            a.sub(Operand::Reg(Register::A), Operand::Imm(8));
+            a.get_main_instrs()
+        };
+
+        // Helper: get paddle X + 16 (right edge)
+        let paddle_x_plus_16 = {
+            let mut a = Asm::new();
+            a.emit_all(paddle.get_x());
+            a.add(Operand::Reg(Register::A), Operand::Imm(8 + 16));
+            a.get_main_instrs()
+        };
+
+        // Bounce body: set Y momentum to -1
+        let bounce = {
+            let mut a = Asm::new();
+            a.ld_a_label("-1");
+            a.ld_addr_def_a("wBallMomentumY");
+            a.get_main_instrs()
+        };
+
+        // Nested if structure using the new clean API
+        // Inner-most: paddle_x + 16 >= ball_x (ball within right bound)
+        let inner_if = If::ge(paddle_x_plus_16, ball.get_x(), bounce);
+
+        // Middle: paddle_x - 8 < ball_x (ball past left edge)
+        let middle_if = If::lt(paddle_x_minus_8, ball.get_x(), inner_if);
+
+        // Outer: ball_y + 5 == paddle_y (Y alignment)
+        let mut paddle_bounce = If::eq(ball_y_plus_5, paddle.get_y(), middle_if);
+
+        // Emit with counter management
+        let mut counter = 0;
+        asm.emit_all(paddle_bounce.emit(&mut counter));
+    }
     asm.comment("PaddleBounceDone");
-    asm.comment("TESTBOUNCEDONCEEND");
+
     asm.call("UpdateKeys");
-    //TODO miss the ball management
+
+    // Input handling
     let left_pressed = sprite_manager
         .get_sprite_mut(0)
         .unwrap()
@@ -220,16 +206,18 @@ fn main() {
         rust_boy::gb_std::inputs::PadButton::Right,
         right_pressed,
     ));
+
     asm.jp("Main");
-    //Variables management
+
+    // Variables management
     asm.chunk(rust_boy::gb_asm::Chunk::Data);
     let mut counter_sec = VariableSection::new("Counter", "WRAM0");
     let mut input_vars_sec = VariableSection::new("Input Variables", "WRAM0");
     let mut ball_data_sec = VariableSection::new("Ball Data", "WRAM0");
     let mut score_sec = VariableSection::new("Score", "WRAM0");
 
-    counter_sec.add_data("wFrameCounter", "db"); //TODO make an enum with the var type?
-    input_vars_sec.add_data("wCurKeys", "db"); //TODO input vars automatically added?
+    counter_sec.add_data("wFrameCounter", "db");
+    input_vars_sec.add_data("wCurKeys", "db");
     input_vars_sec.add_data("wNewKeys", "db");
     ball_data_sec.add_data("wBallMomentumX", "db");
     ball_data_sec.add_data("wBallMomentumY", "db");
@@ -240,8 +228,7 @@ fn main() {
     asm.emit_all(ball_data_sec.generate());
     asm.emit_all(score_sec.generate());
 
-    // Function Managment
-    // TODO recognize that this are function (eg.: func_memcopy(), func_wait_vblank())
+    // Function Management
     asm.chunk(rust_boy::gb_asm::Chunk::Functions);
     asm.emit_all(memcopy());
     asm.emit_all(update_keys());

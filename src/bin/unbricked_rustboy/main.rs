@@ -7,11 +7,11 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, Condition, Operand, Register},
+    gb_asm::{Asm, Operand, Register},
     gb_std::{
-        flow::{ComparisonOp, ConditionOperand, If, IfCondition},
-        graphics::utility::{get_tile_by_pixel, is_specific_tile},
-        inputs::{PadButton, check_key, update_keys},
+        flow::{If, InstrOps},
+        graphics::utility::is_specific_tile,
+        inputs::{PadButton, check_key},
     },
     rust_boy::{BuiltinFunction, RustBoy, TileSource},
 };
@@ -61,7 +61,7 @@ fn main() {
     gb.add_to_main_loop(gb.sprites.move_x_var(ball, "wBallMomentumX"));
     gb.add_to_main_loop(gb.sprites.move_y_var(ball, "wBallMomentumY"));
 
-    // Bounce on top
+    // Bounce on top (using raw assembly for now - wall bounces need GetTileByPixel)
     {
         let mut bounce_top = Asm::new();
         bounce_top.label("BounceOnTop");
@@ -69,7 +69,7 @@ fn main() {
         bounce_top.call("GetTileByPixel");
         bounce_top.ld_a_addr_reg(Register::HL);
         bounce_top.call("IsWallTile");
-        bounce_top.jp_cond(Condition::NZ, "BounceOnTopEnd");
+        bounce_top.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnTopEnd");
         bounce_top.ld_a(1);
         bounce_top.ld_addr_def_a("wBallMomentumY");
         bounce_top.label("BounceOnTopEnd");
@@ -84,7 +84,7 @@ fn main() {
         bounce_right.call("GetTileByPixel");
         bounce_right.ld_a_addr_reg(Register::HL);
         bounce_right.call("IsWallTile");
-        bounce_right.jp_cond(Condition::NZ, "BounceOnRightEnd");
+        bounce_right.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
         bounce_right.ld_a_label("-1");
         bounce_right.ld_addr_def_a("wBallMomentumX");
         bounce_right.label("BounceOnRightEnd");
@@ -99,7 +99,7 @@ fn main() {
         bounce_left.call("GetTileByPixel");
         bounce_left.ld_a_addr_reg(Register::HL);
         bounce_left.call("IsWallTile");
-        bounce_left.jp_cond(Condition::NZ, "BounceOnLeftEnd");
+        bounce_left.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
         bounce_left.ld_a_label("1");
         bounce_left.ld_addr_def_a("wBallMomentumX");
         bounce_left.label("BounceOnLeftEnd");
@@ -114,76 +114,27 @@ fn main() {
         bounce_bottom.call("GetTileByPixel");
         bounce_bottom.ld_a_addr_reg(Register::HL);
         bounce_bottom.call("IsWallTile");
-        bounce_bottom.jp_cond(Condition::NZ, "BounceOnBottomEnd");
+        bounce_bottom.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
         bounce_bottom.ld_a_label("-1");
         bounce_bottom.ld_addr_def_a("wBallMomentumY");
         bounce_bottom.label("BounceOnBottomEnd");
         gb.add_to_main_loop(bounce_bottom.get_main_instrs());
     }
+    // Outer: ball_y + 5 == paddle_y (Y alignment)
+    let paddle_bounce = If::eq(
+        gb.sprites.get_y(ball).plus(5),
+        gb.sprites.get_y(paddle),
+        If::lt(
+            gb.sprites.get_x(paddle).minus(8),
+            gb.sprites.get_x(ball),
+            If::ge(gb.sprites.get_x(paddle).plus(16), gb.sprites.get_x(ball), {
+                //Bounce
+                _ball_momentum_y.set(-1)
+            }),
+        ),
+    );
 
-    // Paddle bounce (nested if statements)
-    {
-        let mut paddle_bounce = Asm::new();
-        paddle_bounce.comment("Paddle bounce check");
-        paddle_bounce.emit_all(gb.sprites.get_y(paddle, Register::B));
-        paddle_bounce.emit_all(gb.sprites.get_y(ball, Register::A));
-        paddle_bounce.add(Operand::Reg(Register::A), Operand::Imm(5));
-
-        // Nested if: check Y position
-        let if_ball_y_check = If::new(
-            IfCondition::new(
-                ConditionOperand::Register(Register::A),
-                ConditionOperand::Register(Register::B),
-                ComparisonOp::E,
-            ),
-            {
-                let mut bounce_x_check = Asm::new();
-                bounce_x_check.emit_all(gb.sprites.get_x(ball, Register::B));
-                bounce_x_check.emit_all(gb.sprites.get_x(paddle, Register::A));
-                bounce_x_check.sub(Operand::Reg(Register::A), Operand::Imm(8));
-
-                let if_ball_x_check = If::new(
-                    IfCondition::new(
-                        ConditionOperand::Register(Register::A),
-                        ConditionOperand::Register(Register::B),
-                        ComparisonOp::LT,
-                    ),
-                    {
-                        let mut bounce_x_check_2 = Asm::new();
-                        bounce_x_check_2.add(Operand::Reg(Register::A), Operand::Imm(8 + 16));
-
-                        let if_ball_x_check_2 = If::new(
-                            IfCondition::new(
-                                ConditionOperand::Register(Register::A),
-                                ConditionOperand::Register(Register::B),
-                                ComparisonOp::GE,
-                            ),
-                            {
-                                let mut bounce = Asm::new();
-                                bounce.ld_a_label("-1");
-                                bounce.ld_addr_def_a("wBallMomentumY");
-                                bounce.get_main_instrs()
-                            },
-                        )
-                        .with_label_counter(2);
-
-                        bounce_x_check_2.emit_all(if_ball_x_check_2.emit_to());
-                        bounce_x_check_2.get_main_instrs()
-                    },
-                )
-                .with_label_counter(1);
-
-                bounce_x_check.emit_all(if_ball_x_check.emit_to());
-                bounce_x_check.get_main_instrs()
-            },
-        )
-        .with_label_counter(0);
-
-        paddle_bounce.emit_all(if_ball_y_check.emit_to());
-        paddle_bounce.comment("Paddle bounce done");
-
-        gb.add_to_main_loop(paddle_bounce.get_main_instrs());
-    }
+    gb.add_to_main_loop(paddle_bounce);
 
     // Input handling
     {

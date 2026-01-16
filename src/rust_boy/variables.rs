@@ -2,11 +2,55 @@
 
 use std::collections::HashMap;
 
-use crate::gb_asm::Instr;
+use crate::gb_asm::{Asm, Instr};
 
 /// Unique identifier for a variable
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VarId(pub(crate) usize);
+
+/// A handle to a variable that provides convenient operations.
+///
+/// This allows writing:
+/// ```ignore
+/// let ball_momentum_y = gb.vars.create_i8("wBallMomentumY", -1);
+///
+/// // Set value
+/// gb.add_to_main_loop(ball_momentum_y.set(-1));
+///
+/// // Get value (loads into A)
+/// gb.add_to_main_loop(ball_momentum_y.get());
+/// ```
+#[derive(Debug, Clone)]
+pub struct Var {
+    name: String,
+    var_type: VarType,
+}
+
+impl Var {
+    /// Set the variable to an immediate value (returns instructions)
+    pub fn set(&self, value: i8) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        if value < 0 {
+            asm.ld_a_label(&format!("{}", value));
+        } else {
+            asm.ld_a(value as u8);
+        }
+        asm.ld_addr_def_a(&self.name);
+        asm.get_main_instrs()
+    }
+
+    /// Get the variable value into register A (returns instructions)
+    pub fn get(&self) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&self.name);
+        asm.get_main_instrs()
+    }
+
+    /// Get the variable name/label
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
 
 /// Variable type and size
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,22 +113,22 @@ impl VariableManager {
     }
 
     /// Create an unsigned 8-bit variable
-    pub fn create_u8(&mut self, name: &str, initial: u8) -> VarId {
+    pub fn create_u8(&mut self, name: &str, initial: u8) -> Var {
         self.create_var(name, VarType::U8, initial as i32, "Variables")
     }
 
     /// Create an unsigned 16-bit variable
-    pub fn create_u16(&mut self, name: &str, initial: u16) -> VarId {
+    pub fn create_u16(&mut self, name: &str, initial: u16) -> Var {
         self.create_var(name, VarType::U16, initial as i32, "Variables")
     }
 
     /// Create a signed 8-bit variable
-    pub fn create_i8(&mut self, name: &str, initial: i8) -> VarId {
+    pub fn create_i8(&mut self, name: &str, initial: i8) -> Var {
         self.create_var(name, VarType::I8, initial as i32, "Variables")
     }
 
     /// Create a signed 16-bit variable
-    pub fn create_i16(&mut self, name: &str, initial: i16) -> VarId {
+    pub fn create_i16(&mut self, name: &str, initial: i16) -> Var {
         self.create_var(name, VarType::I16, initial as i32, "Variables")
     }
 
@@ -95,11 +139,11 @@ impl VariableManager {
         var_type: VarType,
         initial: i32,
         section: &str,
-    ) -> VarId {
+    ) -> Var {
         self.create_var(name, var_type, initial, section)
     }
 
-    fn create_var(&mut self, name: &str, var_type: VarType, initial: i32, section: &str) -> VarId {
+    fn create_var(&mut self, name: &str, var_type: VarType, initial: i32, section: &str) -> Var {
         let addr = self.next_wram_addr;
         self.next_wram_addr += var_type.size();
 
@@ -120,7 +164,10 @@ impl VariableManager {
             .or_default()
             .push(id);
 
-        id
+        Var {
+            name: name.to_string(),
+            var_type,
+        }
     }
 
     /// Get the assembly label name for a variable

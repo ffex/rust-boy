@@ -218,21 +218,16 @@ impl Sprite {
         asm.get_main_instrs()
     }
 
-    pub fn get_y(&self, dest: Register) -> Vec<Instr> {
+    /// Get sprite Y position into register A (for use with If statements)
+    pub fn get_y(&self) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4));
-        if !matches!(dest, Register::A) {
-            asm.ld(Operand::Reg(dest), Operand::Reg(Register::A));
-        }
         asm.get_main_instrs()
     }
-
-    pub fn get_x(&self, dest: Register) -> Vec<Instr> {
+    /// Get sprite X position into register A (for use with If statements)
+    pub fn get_x(&self) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1));
-        if !matches!(dest, Register::A) {
-            asm.ld(Operand::Reg(dest), Operand::Reg(Register::A));
-        }
         asm.get_main_instrs()
     }
 }

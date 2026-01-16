@@ -1,6 +1,7 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
 use crate::gb_asm::{Asm, Chunk, Instr};
+use crate::gb_std::flow::Emittable;
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::sprites::SpriteManager;
@@ -108,8 +109,9 @@ impl RustBoy {
     }
 
     /// Add initialization code (runs once at startup)
-    pub fn init(&mut self, code: Vec<Instr>) -> &mut Self {
-        self.init_code.extend(code);
+    pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
+        let instrs = code.emit(&mut self.if_counter);
+        self.init_code.extend(instrs);
         self
     }
 
@@ -234,8 +236,22 @@ impl RustBoy {
     }
 
     /// Add code to the main game loop
-    pub fn add_to_main_loop(&mut self, code: Vec<Instr>) -> &mut Self {
-        self.main_loop_code.extend(code);
+    ///
+    /// Accepts anything that implements `Emittable`:
+    /// - `Vec<Instr>` - raw instructions
+    /// - `If` - control flow statements
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Raw instructions
+    /// gb.add_to_main_loop(asm.get_main_instrs());
+    ///
+    /// // If statement (counter managed automatically)
+    /// gb.add_to_main_loop(If::eq(left, right, body));
+    /// ```
+    pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {
+        let instrs = code.emit(&mut self.if_counter);
+        self.main_loop_code.extend(instrs);
         self
     }
 

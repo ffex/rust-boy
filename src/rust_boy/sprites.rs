@@ -223,15 +223,12 @@ impl SpriteManager {
     }
 
     /// Get sprite Y position
-    pub fn get_y(&self, id: SpriteId, dest: Register) -> Vec<Instr> {
+    pub fn get_y(&self, id: SpriteId) -> Vec<Instr> {
         if let Some(sprite) = self.sprites.get(&id) {
             let mut asm = Asm::new();
             let oam_offset = sprite.oam_index * 4;
 
             asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
-            if !matches!(dest, Register::A) {
-                asm.ld(Operand::Reg(dest), Operand::Reg(Register::A));
-            }
 
             asm.get_main_instrs()
         } else {
@@ -240,15 +237,12 @@ impl SpriteManager {
     }
 
     /// Get sprite X position
-    pub fn get_x(&self, id: SpriteId, dest: Register) -> Vec<Instr> {
+    pub fn get_x(&self, id: SpriteId) -> Vec<Instr> {
         if let Some(sprite) = self.sprites.get(&id) {
             let mut asm = Asm::new();
             let oam_offset = sprite.oam_index * 4 + 1;
 
             asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
-            if !matches!(dest, Register::A) {
-                asm.ld(Operand::Reg(dest), Operand::Reg(Register::A));
-            }
 
             asm.get_main_instrs()
         } else {

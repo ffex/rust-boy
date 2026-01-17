@@ -9,8 +9,8 @@ mod tiles;
 use rust_boy::{
     gb_asm::Asm,
     gb_std::{
-        flow::{If, IfCall, InstrOps},
-        graphics::utility::is_specific_tile,
+        flow::{Call, If, IfA, IfCall, IfConst, InstrOps, boxed},
+        graphics::{tile_ref::TileRef, utility::is_specific_tile},
         inputs::PadButton,
     },
     rust_boy::{InputManager, RustBoy, TileSource},
@@ -63,6 +63,28 @@ fn main() {
             &["$00", "$01", "$02", "$04", "$05", "$06", "$07"],
         ),
     );
+    gb.define_function_from(
+        "CheckAndHandleBrick",
+        vec![
+            boxed(IfConst::eq(
+                Call::with_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, 1)),
+                "BRICK_LEFT",
+                vec![
+                    TileRef::set_tile_label("BLANK_TILE"),
+                    TileRef::next_tile(),
+                    TileRef::set_tile_label("BLANK_TILE"),
+                ],
+            )),
+            boxed(IfA::eq(
+                "BRICK_RIGHT",
+                vec![
+                    TileRef::set_tile_label("BLANK_TILE"),
+                    TileRef::prev_tile(),
+                    TileRef::set_tile_label("BLANK_TILE"),
+                ],
+            )),
+        ],
+    );
     // ========================================
     // MAIN LOOP - Game logic
     // ========================================
@@ -73,7 +95,13 @@ fn main() {
 
     // Bounce on top
     gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, 1));
-    gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(1)));
+    gb.add_to_main_loop(IfCall::is_true(
+        "IsWallTile",
+        vec![
+            boxed(Call::new("CheckAndHandleBrick")),
+            boxed(_ball_momentum_y.set(1)),
+        ],
+    ));
 
     // Bounce on right
     gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, -1, 0));

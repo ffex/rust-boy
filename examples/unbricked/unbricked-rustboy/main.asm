@@ -14,21 +14,21 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
-    ld de, Tilemap
-    ld hl, $9800
-    ld bc, TilemapEnd - Tilemap
-    call Memcopy
     ld de, Tiles
     ld hl, $9000
     ld bc, TilesEnd - Tiles
     call Memcopy
-    ld de, Ball
-    ld hl, $8010
-    ld bc, BallEnd - Ball
-    call Memcopy
     ld de, Paddle
     ld hl, $8000
     ld bc, PaddleEnd - Paddle
+    call Memcopy
+    ld de, Tilemap
+    ld hl, $9800
+    ld bc, TilemapEnd - Tilemap
+    call Memcopy
+    ld de, Ball
+    ld hl, $8010
+    ld bc, BallEnd - Ball
     call Memcopy
     ld a, 0
     ld b, 160
@@ -54,18 +54,18 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
-    ld a, -1
-    ld [wBallMomentumY], a
     ld a, 0
     ld [wFrameCounter], a
     ld a, 0
-    ld [wScore], a
+    ld [wNewKeys], a
+    ld a, 0
+    ld [wCurKeys], a
+    ld a, -1
+    ld [wBallMomentumY], a
     ld a, 1
     ld [wBallMomentumX], a
     ld a, 0
-    ld [wCurKeys], a
-    ld a, 0
-    ld [wNewKeys], a
+    ld [wScore], a
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON
     ld [rLCDC], a
     ld a, 228
@@ -94,10 +94,11 @@
     ld b, a
     call GetTileByPixel
     call IsWallTile
-    jp nz, .end_if_0
+    jp nz, .end_if_2
+    call CheckAndHandleBrick
     ld a, 1
     ld [wBallMomentumY], a
-    .end_if_0:
+    .end_if_2:
     ld a, [_OAMRAM+4]
     sub a, 16
     ld c, a
@@ -106,10 +107,10 @@
     ld b, a
     call GetTileByPixel
     call IsWallTile
-    jp nz, .end_if_1
+    jp nz, .end_if_3
     ld a, -1
     ld [wBallMomentumX], a
-    .end_if_1:
+    .end_if_3:
     ld a, [_OAMRAM+4]
     sub a, 16
     ld c, a
@@ -118,10 +119,10 @@
     ld b, a
     call GetTileByPixel
     call IsWallTile
-    jp nz, .end_if_2
+    jp nz, .end_if_4
     ld a, 1
     ld [wBallMomentumX], a
-    .end_if_2:
+    .end_if_4:
     ld a, [_OAMRAM+4]
     sub a, 15
     ld c, a
@@ -130,34 +131,34 @@
     ld b, a
     call GetTileByPixel
     call IsWallTile
-    jp nz, .end_if_3
+    jp nz, .end_if_5
     ld a, -1
     ld [wBallMomentumY], a
-    .end_if_3:
+    .end_if_5:
     PaddleBounce:
     ld a, [_OAMRAM+0]
     ld b, a
     ld a, [_OAMRAM+4]
     add a, 5
     cp b
-    jp nz, .end_if_4
+    jp nz, .end_if_6
     ld a, [_OAMRAM+5]
     ld b, a
     ld a, [_OAMRAM+1]
     sub a, 8
     cp b
-    jp nc, .end_if_5
+    jp nc, .end_if_7
     ld a, [_OAMRAM+5]
     ld b, a
     ld a, [_OAMRAM+1]
     add a, 16
     cp b
-    jp c, .end_if_6
+    jp c, .end_if_8
     ld a, -1
     ld [wBallMomentumY], a
+    .end_if_8:
+    .end_if_7:
     .end_if_6:
-    .end_if_5:
-    .end_if_4:
     PaddleBounceEND:
     call UpdateKeys
     CheckLeft:
@@ -184,11 +185,6 @@
     CheckRightEnd:
     jp Main
 
-    WaitNotVBlank:
-    ld a, [rLY]
-    cp 144
-    jp nc, WaitNotVBlank
-    ret
     ; Convert a pixel position to a tilemap address
     ; hl = $9800 + X + Y * 32
     ; @param b: X
@@ -213,19 +209,6 @@
     ld bc, $9800
     add hl, bc
     ld a, [hl]
-    ret
-    ; Copy bytes from one area to another
-    ; @param de: source
-    ; @param hl: destination
-    ; @param bc: length
-    Memcopy:
-    ld a, [de]
-    ld [hli], a
-    inc de
-    dec bc
-    ld a, b
-    or a, c
-    jp nz, Memcopy
     ret
     WaitVBlank:
     ld a, [rLY]
@@ -259,6 +242,24 @@
     or a, 240
     .knowret:
     ret
+    ; Copy bytes from one area to another
+    ; @param de: source
+    ; @param hl: destination
+    ; @param bc: length
+    Memcopy:
+    ld a, [de]
+    ld [hli], a
+    inc de
+    dec bc
+    ld a, b
+    or a, c
+    jp nz, Memcopy
+    ret
+    WaitNotVBlank:
+    ld a, [rLY]
+    cp 144
+    jp nc, WaitNotVBlank
+    ret
     IsWallTile:
     cp $00
     ret z
@@ -274,17 +275,28 @@
     ret z
     cp $07
     ret
+    CheckAndHandleBrick:
+    ld a, [_OAMRAM+4]
+    sub a, 17
+    ld c, a
+    ld a, [_OAMRAM+5]
+    sub a, 8
+    ld b, a
+    call GetTileByPixel
+    cp BRICK_LEFT
+    jp nz, .end_if_0
+    ld [hl], BLANK_TILE
+    inc hl
+    ld [hl], BLANK_TILE
+    .end_if_0:
+    cp BRICK_RIGHT
+    jp nz, .end_if_1
+    ld [hl], BLANK_TILE
+    dec hl
+    ld [hl], BLANK_TILE
+    .end_if_1:
+    ret
 
-    Ball:
-    dw `00033000
-    dw `00322300
-    dw `03222230
-    dw `03222230
-    dw `00322300
-    dw `00033000
-    dw `00000000
-    dw `00000000
-    BallEnd:
     Paddle:
     dw `13333331
     dw `30000003
@@ -295,6 +307,16 @@
     dw `00000000
     dw `00000000
     PaddleEnd:
+    Ball:
+    dw `00033000
+    dw `00322300
+    dw `03222230
+    dw `03222230
+    dw `00322300
+    dw `00033000
+    dw `00000000
+    dw `00000000
+    BallEnd:
     Tiles:
     dw `33333333
     dw `33333333

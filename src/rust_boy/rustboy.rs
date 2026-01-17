@@ -141,7 +141,7 @@ impl RustBoy {
         self
     }
 
-    /// Register a user-defined function
+    /// Register a user-defined function from raw instructions
     ///
     /// The function body should include its own label as the first instruction.
     ///
@@ -151,6 +151,28 @@ impl RustBoy {
     /// ```
     pub fn define_function(&mut self, name: &str, body: Vec<Instr>) -> &mut Self {
         self.functions.register_user_function(name, body);
+        self
+    }
+
+    /// Register a user-defined function from an Emittable
+    ///
+    /// This method automatically adds the function label and ret instruction.
+    /// Use this when building functions from control flow structures like If, IfConst, etc.
+    ///
+    /// # Example
+    /// ```ignore
+    /// gb.define_function_from("CheckBrick", vec![
+    ///     IfConst::eq(value, "BRICK", handle_brick),
+    ///     IfA::eq("OTHER", handle_other),
+    /// ]);
+    /// ```
+    pub fn define_function_from(&mut self, name: &str, mut body: impl Emittable) -> &mut Self {
+        let mut asm = Asm::new();
+        asm.label(name);
+        asm.emit_all(body.emit(&mut self.if_counter));
+        asm.ret();
+        self.functions
+            .register_user_function(name, asm.get_main_instrs());
         self
     }
 

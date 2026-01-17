@@ -327,6 +327,459 @@ impl Emittable for If {
     }
 }
 
+/// If statement that compares register A with a constant/label.
+///
+/// This is a simpler and more efficient variant of `If` when you want to compare
+/// the current value in A against a compile-time constant or label.
+///
+/// # Example
+/// ```ignore
+/// // Compare A with a constant
+/// gb.add_to_main_loop(
+///     IfConst::eq(
+///         sprite.get_tile(),  // loads tile index into A
+///         "WALL_TILE",        // constant label to compare against
+///         handle_wall,
+///     )
+/// );
+///
+/// // With else branch
+/// gb.add_to_main_loop(
+///     IfConst::lt(sprite.get_y(), "SCREEN_TOP", clamp_top)
+///         .or_else(continue_movement)
+/// );
+/// ```
+pub struct IfConst {
+    /// Instructions that load value into A
+    value: Box<dyn Emittable>,
+    /// Constant label to compare against
+    const_label: String,
+    /// Comparison operator
+    op: ComparisonOp,
+    /// Then branch
+    then_branch: Box<dyn Emittable>,
+    /// Optional else branch
+    else_branch: Option<Box<dyn Emittable>>,
+}
+
+impl IfConst {
+    /// Create an IfConst with equality comparison (A == const)
+    pub fn eq(
+        value: impl Emittable + 'static,
+        const_label: &str,
+        then_branch: impl Emittable + 'static,
+    ) -> Self {
+        Self {
+            value: Box::new(value),
+            const_label: const_label.to_string(),
+            op: ComparisonOp::E,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfConst with not-equal comparison (A != const)
+    pub fn ne(
+        value: impl Emittable + 'static,
+        const_label: &str,
+        then_branch: impl Emittable + 'static,
+    ) -> Self {
+        Self {
+            value: Box::new(value),
+            const_label: const_label.to_string(),
+            op: ComparisonOp::NE,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfConst with less-than comparison (A < const)
+    pub fn lt(
+        value: impl Emittable + 'static,
+        const_label: &str,
+        then_branch: impl Emittable + 'static,
+    ) -> Self {
+        Self {
+            value: Box::new(value),
+            const_label: const_label.to_string(),
+            op: ComparisonOp::LT,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfConst with greater-or-equal comparison (A >= const)
+    pub fn ge(
+        value: impl Emittable + 'static,
+        const_label: &str,
+        then_branch: impl Emittable + 'static,
+    ) -> Self {
+        Self {
+            value: Box::new(value),
+            const_label: const_label.to_string(),
+            op: ComparisonOp::GE,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfConst with less-or-equal comparison (A <= const)
+    pub fn le(
+        value: impl Emittable + 'static,
+        const_label: &str,
+        then_branch: impl Emittable + 'static,
+    ) -> Self {
+        Self {
+            value: Box::new(value),
+            const_label: const_label.to_string(),
+            op: ComparisonOp::LE,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfConst with greater-than comparison (A > const)
+    pub fn gt(
+        value: impl Emittable + 'static,
+        const_label: &str,
+        then_branch: impl Emittable + 'static,
+    ) -> Self {
+        Self {
+            value: Box::new(value),
+            const_label: const_label.to_string(),
+            op: ComparisonOp::GT,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Add an else branch to the if statement
+    pub fn or_else(mut self, else_branch: impl Emittable + 'static) -> Self {
+        self.else_branch = Some(Box::new(else_branch));
+        self
+    }
+
+    /// Generate assembly for simple conditions (E, NE, LT, GE)
+    fn emit_simple(
+        &mut self,
+        asm: &mut Asm,
+        counter: &mut usize,
+        end_label: &str,
+        else_label: &str,
+    ) {
+        if self.else_branch.is_some() {
+            asm.jp_cond(self.op.inverted_asm_condition(), else_label);
+            asm.emit_all(self.then_branch.emit(counter));
+            asm.jp(end_label);
+            asm.label(else_label);
+            if let Some(ref mut else_instrs) = self.else_branch {
+                asm.emit_all(else_instrs.emit(counter));
+            }
+        } else {
+            asm.jp_cond(self.op.inverted_asm_condition(), end_label);
+            asm.emit_all(self.then_branch.emit(counter));
+        }
+    }
+
+    /// Generate assembly for LE (A <= const): true if C || Z
+    fn emit_le(
+        &mut self,
+        asm: &mut Asm,
+        counter: &mut usize,
+        end_label: &str,
+        else_label: &str,
+        then_label: &str,
+    ) {
+        if self.else_branch.is_some() {
+            asm.jp_cond(AsmCondition::C, then_label);
+            asm.jp_cond(AsmCondition::Z, then_label);
+            asm.jp(else_label);
+            asm.label(then_label);
+            asm.emit_all(self.then_branch.emit(counter));
+            asm.jp(end_label);
+            asm.label(else_label);
+            if let Some(ref mut else_instrs) = self.else_branch {
+                asm.emit_all(else_instrs.emit(counter));
+            }
+        } else {
+            asm.jp_cond(AsmCondition::C, then_label);
+            asm.jp_cond(AsmCondition::Z, then_label);
+            asm.jp(end_label);
+            asm.label(then_label);
+            asm.emit_all(self.then_branch.emit(counter));
+        }
+    }
+
+    /// Generate assembly for GT (A > const): true if NC && NZ
+    fn emit_gt(&mut self, asm: &mut Asm, counter: &mut usize, end_label: &str, else_label: &str) {
+        let else_or_end = if self.else_branch.is_some() {
+            else_label
+        } else {
+            end_label
+        };
+
+        asm.jp_cond(AsmCondition::C, else_or_end);
+        asm.jp_cond(AsmCondition::Z, else_or_end);
+        asm.emit_all(self.then_branch.emit(counter));
+
+        if let Some(ref mut else_instrs) = self.else_branch {
+            asm.jp(end_label);
+            asm.label(else_label);
+            asm.emit_all(else_instrs.emit(counter));
+        }
+    }
+}
+
+impl Emittable for IfConst {
+    /// Generate the assembly code for this if-const statement.
+    ///
+    /// Generated pattern:
+    /// ```asm
+    /// ; value instructions (result in A)
+    /// cp CONST_LABEL       ; compare A with constant
+    /// jp <condition>, .end_if_N
+    /// ; then branch
+    /// .end_if_N:
+    /// ```
+    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
+        let mut asm = Asm::new();
+
+        let my_counter = *counter;
+        *counter += 1;
+
+        let end_label = format!(".end_if_{}", my_counter);
+        let else_label = format!(".else_{}", my_counter);
+        let then_label = format!(".then_{}", my_counter);
+
+        // Step 1: Execute value instructions (result in A)
+        asm.emit_all(self.value.emit(counter));
+
+        // Step 2: Compare A with constant label
+        asm.cp(Operand::Label(self.const_label.clone()));
+
+        // Step 3: Handle conditional jumps based on operator type
+        match self.op {
+            ComparisonOp::E | ComparisonOp::NE | ComparisonOp::LT | ComparisonOp::GE => {
+                self.emit_simple(&mut asm, counter, &end_label, &else_label);
+            }
+            ComparisonOp::LE => {
+                self.emit_le(&mut asm, counter, &end_label, &else_label, &then_label);
+            }
+            ComparisonOp::GT => {
+                self.emit_gt(&mut asm, counter, &end_label, &else_label);
+            }
+        }
+
+        asm.label(&end_label);
+
+        asm.get_main_instrs()
+    }
+}
+
+/// If statement that compares register A (already loaded) with a constant/label.
+///
+/// This is the simplest variant - it assumes A already contains the value to compare.
+/// Use this when you've already loaded A in previous instructions.
+///
+/// # Example
+/// ```ignore
+/// // A is already loaded, just compare with constant
+/// gb.add_to_main_loop(vec![
+///     load_something_into_a(),
+///     IfA::eq("WALL_TILE", handle_wall),
+/// ]);
+/// ```
+pub struct IfA {
+    /// Constant label to compare against
+    const_label: String,
+    /// Comparison operator
+    op: ComparisonOp,
+    /// Then branch
+    then_branch: Box<dyn Emittable>,
+    /// Optional else branch
+    else_branch: Option<Box<dyn Emittable>>,
+}
+
+impl IfA {
+    /// Create an IfA with equality comparison (A == const)
+    pub fn eq(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            const_label: const_label.to_string(),
+            op: ComparisonOp::E,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfA with not-equal comparison (A != const)
+    pub fn ne(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            const_label: const_label.to_string(),
+            op: ComparisonOp::NE,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfA with less-than comparison (A < const)
+    pub fn lt(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            const_label: const_label.to_string(),
+            op: ComparisonOp::LT,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfA with greater-or-equal comparison (A >= const)
+    pub fn ge(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            const_label: const_label.to_string(),
+            op: ComparisonOp::GE,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfA with less-or-equal comparison (A <= const)
+    pub fn le(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            const_label: const_label.to_string(),
+            op: ComparisonOp::LE,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Create an IfA with greater-than comparison (A > const)
+    pub fn gt(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            const_label: const_label.to_string(),
+            op: ComparisonOp::GT,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Add an else branch to the if statement
+    pub fn or_else(mut self, else_branch: impl Emittable + 'static) -> Self {
+        self.else_branch = Some(Box::new(else_branch));
+        self
+    }
+
+    /// Generate assembly for simple conditions (E, NE, LT, GE)
+    fn emit_simple(
+        &mut self,
+        asm: &mut Asm,
+        counter: &mut usize,
+        end_label: &str,
+        else_label: &str,
+    ) {
+        if self.else_branch.is_some() {
+            asm.jp_cond(self.op.inverted_asm_condition(), else_label);
+            asm.emit_all(self.then_branch.emit(counter));
+            asm.jp(end_label);
+            asm.label(else_label);
+            if let Some(ref mut else_instrs) = self.else_branch {
+                asm.emit_all(else_instrs.emit(counter));
+            }
+        } else {
+            asm.jp_cond(self.op.inverted_asm_condition(), end_label);
+            asm.emit_all(self.then_branch.emit(counter));
+        }
+    }
+
+    /// Generate assembly for LE (A <= const): true if C || Z
+    fn emit_le(
+        &mut self,
+        asm: &mut Asm,
+        counter: &mut usize,
+        end_label: &str,
+        else_label: &str,
+        then_label: &str,
+    ) {
+        if self.else_branch.is_some() {
+            asm.jp_cond(AsmCondition::C, then_label);
+            asm.jp_cond(AsmCondition::Z, then_label);
+            asm.jp(else_label);
+            asm.label(then_label);
+            asm.emit_all(self.then_branch.emit(counter));
+            asm.jp(end_label);
+            asm.label(else_label);
+            if let Some(ref mut else_instrs) = self.else_branch {
+                asm.emit_all(else_instrs.emit(counter));
+            }
+        } else {
+            asm.jp_cond(AsmCondition::C, then_label);
+            asm.jp_cond(AsmCondition::Z, then_label);
+            asm.jp(end_label);
+            asm.label(then_label);
+            asm.emit_all(self.then_branch.emit(counter));
+        }
+    }
+
+    /// Generate assembly for GT (A > const): true if NC && NZ
+    fn emit_gt(&mut self, asm: &mut Asm, counter: &mut usize, end_label: &str, else_label: &str) {
+        let else_or_end = if self.else_branch.is_some() {
+            else_label
+        } else {
+            end_label
+        };
+
+        asm.jp_cond(AsmCondition::C, else_or_end);
+        asm.jp_cond(AsmCondition::Z, else_or_end);
+        asm.emit_all(self.then_branch.emit(counter));
+
+        if let Some(ref mut else_instrs) = self.else_branch {
+            asm.jp(end_label);
+            asm.label(else_label);
+            asm.emit_all(else_instrs.emit(counter));
+        }
+    }
+}
+
+impl Emittable for IfA {
+    /// Generate the assembly code for this if-a statement.
+    ///
+    /// Generated pattern:
+    /// ```asm
+    /// cp CONST_LABEL       ; compare A with constant
+    /// jp <condition>, .end_if_N
+    /// ; then branch
+    /// .end_if_N:
+    /// ```
+    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
+        let mut asm = Asm::new();
+
+        let my_counter = *counter;
+        *counter += 1;
+
+        let end_label = format!(".end_if_{}", my_counter);
+        let else_label = format!(".else_{}", my_counter);
+        let then_label = format!(".then_{}", my_counter);
+
+        // Compare A with constant label (A already loaded)
+        asm.cp(Operand::Label(self.const_label.clone()));
+
+        // Handle conditional jumps based on operator type
+        match self.op {
+            ComparisonOp::E | ComparisonOp::NE | ComparisonOp::LT | ComparisonOp::GE => {
+                self.emit_simple(&mut asm, counter, &end_label, &else_label);
+            }
+            ComparisonOp::LE => {
+                self.emit_le(&mut asm, counter, &end_label, &else_label, &then_label);
+            }
+            ComparisonOp::GT => {
+                self.emit_gt(&mut asm, counter, &end_label, &else_label);
+            }
+        }
+
+        asm.label(&end_label);
+
+        asm.get_main_instrs()
+    }
+}
+
 /// If statement that branches based on a function call result.
 ///
 /// This is useful for functions that set CPU flags to indicate their result.

@@ -42,7 +42,7 @@ impl TileSource {
     pub fn size_bytes(&self) -> u16 {
         match self {
             TileSource::Raw(tiles) => (tiles.len() * 16) as u16, // 16 bytes per tile
-            TileSource::File(_) => 0, // Size determined at assembly time
+            TileSource::File(_) => 0,                            // Size determined at assembly time
         }
     }
 }
@@ -53,8 +53,8 @@ pub(crate) struct TileData {
     pub name: String,
     pub source: TileSource,
     pub vram_address: u16,
-    pub is_sprite: bool,      // Sprites go to $8000, background to $9000
-    pub is_tilemap: bool,     // Tilemaps go to $9800
+    pub is_sprite: bool,  // Sprites go to $8000, background to $9000
+    pub is_tilemap: bool, // Tilemaps go to $9800
 }
 
 /// Manages tiles with automatic VRAM allocation
@@ -192,7 +192,11 @@ impl TileManager {
         }
 
         // Then background tiles
-        for tile in self.tiles.values().filter(|t| !t.is_sprite && !t.is_tilemap) {
+        for tile in self
+            .tiles
+            .values()
+            .filter(|t| !t.is_sprite && !t.is_tilemap)
+        {
             asm.label(&tile.name);
             match &tile.source {
                 TileSource::Raw(data) => {
@@ -267,7 +271,8 @@ mod tests {
         let mut tm = TileManager::new();
 
         // Add a sprite with 1 tile (16 bytes)
-        let paddle_data: [[&str; 8]; 1] = [["$FF", "$00", "$FF", "$00", "$FF", "$00", "$FF", "$00"]];
+        let paddle_data: [[&str; 8]; 1] =
+            [["$FF", "$00", "$FF", "$00", "$FF", "$00", "$FF", "$00"]];
         let id = tm.add_sprite("Paddle", TileSource::from_raw(&paddle_data));
 
         assert_eq!(tm.get_address(id), Some(0x8000));

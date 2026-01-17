@@ -97,9 +97,11 @@ impl SpriteManager {
         asm.dec_label("b");
         asm.jp_cond(Condition::NZ, "ClearOam");
 
-        // Draw all sprites to OAM
+        // Draw all sprites to OAM (sorted by oam_index to ensure correct order)
         asm.ld_hl_label("_OAMRAM");
-        for sprite in self.sprites.values() {
+        let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
+        sorted_sprites.sort_by_key(|s| s.oam_index);
+        for sprite in sorted_sprites {
             // Y position (add 16 for screen offset)
             asm.ld_a(sprite.y + 16);
             asm.ld_hli_label("a");

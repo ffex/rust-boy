@@ -4,6 +4,7 @@
 //! hiding all low-level details from the developer.
 
 mod functions;
+mod inputs;
 mod memory;
 mod rustboy;
 mod sprites;
@@ -11,6 +12,7 @@ mod tiles;
 mod variables;
 
 pub use functions::BuiltinFunction;
+pub use inputs::InputManager;
 pub use memory::MemoryRegion;
 pub use rustboy::RustBoy;
 pub use sprites::{SpriteId, SpriteManager};

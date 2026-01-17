@@ -1,6 +1,6 @@
 //! Builtin function registry for auto-inclusion
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 
@@ -31,6 +31,18 @@ impl BuiltinFunction {
         }
     }
 
+    /// Try to get a BuiltinFunction from its label name
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Memcopy" => Some(BuiltinFunction::Memcopy),
+            "WaitVBlank" => Some(BuiltinFunction::WaitVBlank),
+            "WaitNotVBlank" => Some(BuiltinFunction::WaitNotVBlank),
+            "UpdateKeys" => Some(BuiltinFunction::UpdateKeys),
+            "GetTileByPixel" => Some(BuiltinFunction::GetTileByPixel),
+            _ => None,
+        }
+    }
+
     /// Generate the assembly instructions for this function
     pub fn generate(&self) -> Vec<Instr> {
         match self {
@@ -43,10 +55,15 @@ impl BuiltinFunction {
     }
 }
 
-/// Registry for tracking which functions are used
-#[derive(Debug, Default)]
+/// Registry for tracking which functions are used (both builtin and user-defined)
+#[derive(Default)]
 pub struct FunctionRegistry {
-    used: HashSet<BuiltinFunction>,
+    /// Builtin functions that have been marked as used
+    used_builtins: HashSet<BuiltinFunction>,
+    /// User-defined functions (name -> instructions)
+    user_functions: HashMap<String, Vec<Instr>>,
+    /// User functions that have been called (for validation)
+    used_user_functions: HashSet<String>,
 }
 
 impl FunctionRegistry {
@@ -54,22 +71,70 @@ impl FunctionRegistry {
         Self::default()
     }
 
-    /// Mark a function as used
+    /// Mark a builtin function as used
     pub fn use_function(&mut self, func: BuiltinFunction) {
-        self.used.insert(func);
+        self.used_builtins.insert(func);
     }
 
-    /// Check if a function is used
+    /// Check if a builtin function is used
     pub fn is_used(&self, func: BuiltinFunction) -> bool {
-        self.used.contains(&func)
+        self.used_builtins.contains(&func)
     }
 
-    /// Generate all used functions
+    /// Register a user-defined function
+    pub fn register_user_function(&mut self, name: &str, body: Vec<Instr>) {
+        self.user_functions.insert(name.to_string(), body);
+    }
+
+    /// Check if a function exists (builtin or user-defined)
+    pub fn function_exists(&self, name: &str) -> bool {
+        BuiltinFunction::from_name(name).is_some() || self.user_functions.contains_key(name)
+    }
+
+    /// Mark a function as called and auto-register if builtin
+    /// Returns true if the function exists, false otherwise
+    pub fn call_function(&mut self, name: &str) -> bool {
+        // Check if it's a builtin function
+        if let Some(builtin) = BuiltinFunction::from_name(name) {
+            self.used_builtins.insert(builtin);
+            return true;
+        }
+
+        // Check if it's a user-defined function
+        if self.user_functions.contains_key(name) {
+            self.used_user_functions.insert(name.to_string());
+            return true;
+        }
+
+        false
+    }
+
+    /// Get list of all registered function names (for error messages)
+    pub fn available_functions(&self) -> Vec<String> {
+        let mut names: Vec<String> = vec![
+            "Memcopy".to_string(),
+            "WaitVBlank".to_string(),
+            "WaitNotVBlank".to_string(),
+            "UpdateKeys".to_string(),
+            "GetTileByPixel".to_string(),
+        ];
+        names.extend(self.user_functions.keys().cloned());
+        names.sort();
+        names
+    }
+
+    /// Generate all used functions (builtin and user-defined)
     pub fn generate_all(&self) -> Vec<Instr> {
         let mut all_instrs = Vec::new();
 
-        for func in &self.used {
+        // Generate builtin functions
+        for func in &self.used_builtins {
             all_instrs.extend(func.generate());
+        }
+
+        // Generate user-defined functions
+        for (_, body) in &self.user_functions {
+            all_instrs.extend(body.clone());
         }
 
         all_instrs
@@ -232,6 +297,8 @@ fn generate_get_tile_by_pixel() -> Vec<Instr> {
     // Add the offset to the tilemap's base address, and we are done!
     asm.ld_bc_label("$9800");
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
+
+    asm.ld_a_addr_reg(Register::HL); //done to help, fit good in unbreaked
     asm.ret();
 
     asm.get_main_instrs()

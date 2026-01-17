@@ -4,5 +4,5 @@ pub mod operation;
 
 // Re-export for convenience
 pub use emittable::Emittable;
-pub use flow_if::{ComparisonOp, If};
+pub use flow_if::{ComparisonOp, If, IfCall};
 pub use operation::{InstrOps, Op};

@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition as AsmCondition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition as AsmCondition, Instr, JumpTarget, Operand, Register};
 
 use super::emittable::Emittable;
 
@@ -321,6 +321,190 @@ impl Emittable for If {
         }
 
         // Emit end label
+        asm.label(&end_label);
+
+        asm.get_main_instrs()
+    }
+}
+
+/// If statement that branches based on a function call result.
+///
+/// This is useful for functions that set CPU flags to indicate their result.
+/// For example, `IsWallTile` returns true (Z flag) if the tile is a wall.
+///
+/// # Example
+/// ```ignore
+/// // Execute body if IsWallTile returns true
+/// gb.add_to_main_loop(IfCall::is_true("IsWallTile", body));
+///
+/// // With setup code before the call:
+/// gb.add_to_main_loop(
+///     IfCall::is_true("IsWallTile", body).with_setup(setup_instrs)
+/// );
+///
+/// // With else branch:
+/// gb.add_to_main_loop(
+///     IfCall::is_true("IsWallTile", then_body).or_else(else_body)
+/// );
+/// ```
+pub struct IfCall {
+    /// Optional setup instructions to run before the call
+    setup: Option<Box<dyn Emittable>>,
+    /// Function name to call
+    func_name: String,
+    /// Condition to check (Z means "execute if zero flag set")
+    condition: AsmCondition,
+    /// Then branch
+    then_branch: Box<dyn Emittable>,
+    /// Optional else branch
+    else_branch: Option<Box<dyn Emittable>>,
+}
+
+impl IfCall {
+    /// Execute body if the function returns true (Z flag set).
+    ///
+    /// Most "Is*" functions (like `IsWallTile`) set the Z flag when the
+    /// condition is true.
+    ///
+    /// # Example
+    /// ```ignore
+    /// IfCall::is_true("IsWallTile", bounce_body)
+    /// ```
+    pub fn is_true(func_name: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            setup: None,
+            func_name: func_name.to_string(),
+            condition: AsmCondition::Z,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Execute body if the function returns false (Z flag not set).
+    ///
+    /// # Example
+    /// ```ignore
+    /// IfCall::is_false("IsWallTile", not_wall_body)
+    /// ```
+    pub fn is_false(func_name: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            setup: None,
+            func_name: func_name.to_string(),
+            condition: AsmCondition::NZ,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Execute body if the function result indicates "less than" (C flag set).
+    ///
+    /// Useful for comparison functions that set carry on less-than.
+    pub fn is_less(func_name: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            setup: None,
+            func_name: func_name.to_string(),
+            condition: AsmCondition::C,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Execute body if the function result indicates "greater or equal" (C flag not set).
+    ///
+    /// Useful for comparison functions that clear carry on greater-or-equal.
+    pub fn is_greater_eq(func_name: &str, then_branch: impl Emittable + 'static) -> Self {
+        Self {
+            setup: None,
+            func_name: func_name.to_string(),
+            condition: AsmCondition::NC,
+            then_branch: Box::new(then_branch),
+            else_branch: None,
+        }
+    }
+
+    /// Add setup instructions to run before the function call.
+    ///
+    /// This is useful for setting up registers/memory before the call.
+    pub fn with_setup(mut self, setup: impl Emittable + 'static) -> Self {
+        self.setup = Some(Box::new(setup));
+        self
+    }
+
+    /// Add an else branch to the if statement.
+    pub fn or_else(mut self, else_branch: impl Emittable + 'static) -> Self {
+        self.else_branch = Some(Box::new(else_branch));
+        self
+    }
+
+    /// Get the inverted condition for jumping AWAY from the then branch.
+    fn inverted_condition(&self) -> AsmCondition {
+        match self.condition {
+            AsmCondition::Z => AsmCondition::NZ,
+            AsmCondition::NZ => AsmCondition::Z,
+            AsmCondition::C => AsmCondition::NC,
+            AsmCondition::NC => AsmCondition::C,
+        }
+    }
+}
+
+impl Emittable for IfCall {
+    /// Generate the assembly code for this if-call statement.
+    ///
+    /// Generated pattern (without else):
+    /// ```asm
+    /// ; setup instructions (optional)
+    /// call FuncName
+    /// jp <inverted_condition>, .end_if_N
+    /// ; then branch
+    /// .end_if_N:
+    /// ```
+    ///
+    /// Generated pattern (with else):
+    /// ```asm
+    /// ; setup instructions (optional)
+    /// call FuncName
+    /// jp <inverted_condition>, .else_N
+    /// ; then branch
+    /// jp .end_if_N
+    /// .else_N:
+    /// ; else branch
+    /// .end_if_N:
+    /// ```
+    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
+        let mut asm = Asm::new();
+
+        let my_counter = *counter;
+        *counter += 1;
+
+        let end_label = format!(".end_if_{}", my_counter);
+        let else_label = format!(".else_{}", my_counter);
+
+        // Step 1: Emit setup instructions (if any)
+        if let Some(ref mut setup) = self.setup {
+            asm.emit_all(setup.emit(counter));
+        }
+
+        // Step 2: Call the function
+        asm.emit(Instr::Call {
+            target: JumpTarget::Label(self.func_name.clone()),
+        });
+
+        // Step 3: Conditional jump and branches
+        if self.else_branch.is_some() {
+            // Jump to else if condition is false
+            asm.jp_cond(self.inverted_condition(), &else_label);
+            asm.emit_all(self.then_branch.emit(counter));
+            asm.jp(&end_label);
+            asm.label(&else_label);
+            if let Some(ref mut else_instrs) = self.else_branch {
+                asm.emit_all(else_instrs.emit(counter));
+            }
+        } else {
+            // Jump to end if condition is false
+            asm.jp_cond(self.inverted_condition(), &end_label);
+            asm.emit_all(self.then_branch.emit(counter));
+        }
+
         asm.label(&end_label);
 
         asm.get_main_instrs()

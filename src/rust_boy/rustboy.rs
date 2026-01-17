@@ -1,9 +1,10 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
-use crate::gb_asm::{Asm, Chunk, Instr};
+use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget};
 use crate::gb_std::flow::Emittable;
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
+use super::inputs::InputManager;
 use super::sprites::SpriteManager;
 use super::tiles::TileManager;
 use super::variables::VariableManager;
@@ -140,6 +141,86 @@ impl RustBoy {
         self
     }
 
+    /// Register a user-defined function
+    ///
+    /// The function body should include its own label as the first instruction.
+    ///
+    /// # Example
+    /// ```ignore
+    /// gb.define_function("IsWallTile", is_specific_tile("IsWallTile", &["$00", "$01"]));
+    /// ```
+    pub fn define_function(&mut self, name: &str, body: Vec<Instr>) -> &mut Self {
+        self.functions.register_user_function(name, body);
+        self
+    }
+
+    /// Generate a call instruction with validation
+    ///
+    /// This method validates that the function exists (either as a builtin or
+    /// user-defined function) and automatically registers builtin functions
+    /// when they are called.
+    ///
+    /// # Panics
+    /// Panics if the function doesn't exist.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Automatically registers GetTileByPixel as used
+    /// gb.add_to_main_loop(gb.call("GetTileByPixel"));
+    ///
+    /// // Works with user-defined functions too
+    /// gb.define_function("IsWallTile", ...);
+    /// gb.add_to_main_loop(gb.call("IsWallTile"));
+    /// ```
+    pub fn call(&mut self, name: &str) -> Vec<Instr> {
+        if !self.functions.call_function(name) {
+            let available = self.functions.available_functions();
+            panic!(
+                "Unknown function '{}'. Available functions: {}",
+                name,
+                available.join(", ")
+            );
+        }
+        vec![Instr::Call {
+            target: JumpTarget::Label(name.to_string()),
+        }]
+    }
+
+    /// Call a function with setup instructions (parameters) and add to main loop
+    ///
+    /// This method emits the setup instructions before the call directly to
+    /// the main loop, allowing fluent chaining without borrow checker issues.
+    ///
+    /// # Panics
+    /// Panics if the function doesn't exist.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Call GetTileByPixel with setup from get_pivot
+    /// gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, 1));
+    /// gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(1)));
+    /// ```
+    pub fn call_args(&mut self, name: &str, setup: Vec<Instr>) -> &mut Self {
+        if !self.functions.call_function(name) {
+            let available = self.functions.available_functions();
+            panic!(
+                "Unknown function '{}'. Available functions: {}",
+                name,
+                available.join(", ")
+            );
+        }
+        self.main_loop_code.extend(setup);
+        self.main_loop_code.push(Instr::Call {
+            target: JumpTarget::Label(name.to_string()),
+        });
+        self
+    }
+
+    /// Check if a function exists (builtin or user-defined)
+    pub fn function_exists(&self, name: &str) -> bool {
+        self.functions.function_exists(name)
+    }
+
     /// Build the final assembly output
     pub fn build(&mut self) -> String {
         // Start fresh assembly
@@ -252,6 +333,40 @@ impl RustBoy {
     pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {
         let instrs = code.emit(&mut self.if_counter);
         self.main_loop_code.extend(instrs);
+        self
+    }
+
+    /// Add input handling to the main game loop
+    ///
+    /// This method takes an InputManager and generates the complete input
+    /// handling code, including:
+    /// 1. Calling UpdateKeys to poll the controller
+    /// 2. Checking each registered button binding
+    /// 3. Executing associated actions when buttons are pressed
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut inputs = InputManager::new();
+    /// inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 15));
+    /// inputs.on_press(PadButton::Right, gb.sprites.move_right_limit(paddle, 1, 105));
+    /// gb.add_inputs(inputs);
+    /// ```
+    pub fn add_inputs(&mut self, inputs: InputManager) -> &mut Self {
+        if inputs.is_empty() {
+            return self;
+        }
+
+        // Auto-register UpdateKeys as used
+        self.functions.use_function(BuiltinFunction::UpdateKeys);
+
+        // Add call to UpdateKeys
+        self.main_loop_code.push(Instr::Call {
+            target: JumpTarget::Label("UpdateKeys".to_string()),
+        });
+
+        // Add the input handling code
+        self.main_loop_code.extend(inputs.generate_code());
+
         self
     }
 

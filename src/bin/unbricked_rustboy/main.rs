@@ -7,6 +7,7 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
+    gb_asm::Asm,
     gb_std::{
         flow::{If, IfCall, InstrOps},
         graphics::utility::is_specific_tile,
@@ -85,20 +86,31 @@ fn main() {
     // Bounce on bottom
     gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, -1));
     gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(-1)));
-
+    gb.add_to_main_loop({
+        // make a debug label in as API
+        let mut lbl_debug = Asm::new();
+        lbl_debug.label("PaddleBounce");
+        lbl_debug.get_main_instrs()
+    });
     // Paddle bounce
     let paddle_bounce = If::eq(
-        gb.sprites.get_y(ball).plus(5),
         gb.sprites.get_y(paddle),
+        gb.sprites.get_y(ball).plus(5),
         If::lt(
-            gb.sprites.get_x(paddle).minus(8),
             gb.sprites.get_x(ball),
-            If::ge(gb.sprites.get_x(paddle).plus(16), gb.sprites.get_x(ball), {
+            gb.sprites.get_x(paddle).minus(8),
+            If::ge(gb.sprites.get_x(ball), gb.sprites.get_x(paddle).plus(16), {
                 _ball_momentum_y.set(-1)
             }),
         ),
     );
     gb.add_to_main_loop(paddle_bounce);
+    gb.add_to_main_loop({
+        // make a debug label in as API
+        let mut lbl_debug = Asm::new();
+        lbl_debug.label("PaddleBounceEND");
+        lbl_debug.get_main_instrs()
+    });
     // Input handling
     let mut inputs = InputManager::new();
     inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 15));

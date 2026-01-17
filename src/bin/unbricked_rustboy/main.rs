@@ -7,13 +7,12 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, Operand, Register},
     gb_std::{
-        flow::{If, InstrOps},
+        flow::{If, IfCall, InstrOps},
         graphics::utility::is_specific_tile,
-        inputs::{PadButton, check_key},
+        inputs::PadButton,
     },
-    rust_boy::{BuiltinFunction, RustBoy, TileSource},
+    rust_boy::{InputManager, RustBoy, TileSource},
 };
 
 fn main() {
@@ -54,6 +53,16 @@ fn main() {
     let _score = gb.vars.create_u8("wScore", 0);
 
     // ========================================
+    // FUNCTIONS - Auto WRAM allocation!
+    // ========================================
+    gb.define_function(
+        "IsWallTile",
+        is_specific_tile(
+            "IsWallTile",
+            &["$00", "$01", "$02", "$04", "$05", "$06", "$07"],
+        ),
+    );
+    // ========================================
     // MAIN LOOP - Game logic
     // ========================================
 
@@ -61,66 +70,23 @@ fn main() {
     gb.add_to_main_loop(gb.sprites.move_x_var(ball, "wBallMomentumX"));
     gb.add_to_main_loop(gb.sprites.move_y_var(ball, "wBallMomentumY"));
 
-    // Bounce on top (using raw assembly for now - wall bounces need GetTileByPixel)
-    {
-        let mut bounce_top = Asm::new();
-        bounce_top.label("BounceOnTop");
-        bounce_top.emit_all(gb.sprites.get_pivot(ball, 0, 1));
-        bounce_top.call("GetTileByPixel");
-        bounce_top.ld_a_addr_reg(Register::HL);
-        bounce_top.call("IsWallTile");
-        bounce_top.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnTopEnd");
-        bounce_top.ld_a(1);
-        bounce_top.ld_addr_def_a("wBallMomentumY");
-        bounce_top.label("BounceOnTopEnd");
-        gb.add_to_main_loop(bounce_top.get_main_instrs());
-    }
+    // Bounce on top
+    gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, 1));
+    gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(1)));
 
     // Bounce on right
-    {
-        let mut bounce_right = Asm::new();
-        bounce_right.label("BounceOnRight");
-        bounce_right.emit_all(gb.sprites.get_pivot(ball, -1, 0));
-        bounce_right.call("GetTileByPixel");
-        bounce_right.ld_a_addr_reg(Register::HL);
-        bounce_right.call("IsWallTile");
-        bounce_right.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
-        bounce_right.ld_a_label("-1");
-        bounce_right.ld_addr_def_a("wBallMomentumX");
-        bounce_right.label("BounceOnRightEnd");
-        gb.add_to_main_loop(bounce_right.get_main_instrs());
-    }
+    gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, -1, 0));
+    gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_x.set(-1)));
 
     // Bounce on left
-    {
-        let mut bounce_left = Asm::new();
-        bounce_left.label("BounceOnLeft");
-        bounce_left.emit_all(gb.sprites.get_pivot(ball, 1, 0));
-        bounce_left.call("GetTileByPixel");
-        bounce_left.ld_a_addr_reg(Register::HL);
-        bounce_left.call("IsWallTile");
-        bounce_left.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
-        bounce_left.ld_a_label("1");
-        bounce_left.ld_addr_def_a("wBallMomentumX");
-        bounce_left.label("BounceOnLeftEnd");
-        gb.add_to_main_loop(bounce_left.get_main_instrs());
-    }
+    gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, 1, 0));
+    gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_x.set(1)));
 
     // Bounce on bottom
-    {
-        let mut bounce_bottom = Asm::new();
-        bounce_bottom.label("BounceOnBottom");
-        bounce_bottom.emit_all(gb.sprites.get_pivot(ball, 0, -1));
-        bounce_bottom.call("GetTileByPixel");
-        bounce_bottom.ld_a_addr_reg(Register::HL);
-        bounce_bottom.call("IsWallTile");
-        bounce_bottom.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
-        bounce_bottom.ld_a_label("-1");
-        bounce_bottom.ld_addr_def_a("wBallMomentumY");
-        bounce_bottom.label("BounceOnBottomEnd");
-        gb.add_to_main_loop(bounce_bottom.get_main_instrs());
-    }
-    // Outer: ball_y + 5 == paddle_y (Y alignment)
+    gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, -1));
+    gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(-1)));
+
+    // Paddle bounce
     let paddle_bounce = If::eq(
         gb.sprites.get_y(ball).plus(5),
         gb.sprites.get_y(paddle),
@@ -128,40 +94,19 @@ fn main() {
             gb.sprites.get_x(paddle).minus(8),
             gb.sprites.get_x(ball),
             If::ge(gb.sprites.get_x(paddle).plus(16), gb.sprites.get_x(ball), {
-                //Bounce
                 _ball_momentum_y.set(-1)
             }),
         ),
     );
-
     gb.add_to_main_loop(paddle_bounce);
-
     // Input handling
-    {
-        let mut input_code = Asm::new();
-        input_code.call("UpdateKeys");
-
-        let left_pressed = gb.sprites.move_left_limit(paddle, 1, 15);
-        let right_pressed = gb.sprites.move_right_limit(paddle, 1, 105);
-
-        input_code.emit_all(check_key(PadButton::Left, left_pressed));
-        input_code.emit_all(check_key(PadButton::Right, right_pressed));
-
-        gb.add_to_main_loop(input_code.get_main_instrs());
-    }
-
-    // Mark functions as used (for auto-include)
-    gb.use_function(BuiltinFunction::UpdateKeys);
-    gb.use_function(BuiltinFunction::GetTileByPixel);
-
-    // Add custom IsWallTile function using raw()
-    gb.raw(|asm| {
-        asm.chunk(rust_boy::gb_asm::Chunk::Functions);
-        asm.emit_all(is_specific_tile(
-            "IsWallTile",
-            &["$00", "$01", "$02", "$04", "$05", "$06", "$07"],
-        ));
-    });
+    let mut inputs = InputManager::new();
+    inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 15));
+    inputs.on_press(
+        PadButton::Right,
+        gb.sprites.move_right_limit(paddle, 1, 105),
+    );
+    gb.add_inputs(inputs);
 
     // ========================================
     // BUILD AND OUTPUT

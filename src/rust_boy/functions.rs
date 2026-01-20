@@ -17,6 +17,8 @@ pub enum BuiltinFunction {
     UpdateKeys,
     /// Convert pixel position to tile address
     GetTileByPixel,
+    /// Delay loop using BC as counter
+    Delay,
 }
 
 impl BuiltinFunction {
@@ -28,6 +30,7 @@ impl BuiltinFunction {
             BuiltinFunction::WaitNotVBlank => "WaitNotVBlank",
             BuiltinFunction::UpdateKeys => "UpdateKeys",
             BuiltinFunction::GetTileByPixel => "GetTileByPixel",
+            BuiltinFunction::Delay => "Delay",
         }
     }
 
@@ -39,6 +42,7 @@ impl BuiltinFunction {
             "WaitNotVBlank" => Some(BuiltinFunction::WaitNotVBlank),
             "UpdateKeys" => Some(BuiltinFunction::UpdateKeys),
             "GetTileByPixel" => Some(BuiltinFunction::GetTileByPixel),
+            "Delay" => Some(BuiltinFunction::Delay),
             _ => None,
         }
     }
@@ -51,6 +55,7 @@ impl BuiltinFunction {
             BuiltinFunction::WaitNotVBlank => generate_wait_not_vblank(),
             BuiltinFunction::UpdateKeys => generate_update_keys(),
             BuiltinFunction::GetTileByPixel => generate_get_tile_by_pixel(),
+            BuiltinFunction::Delay => generate_delay(),
         }
     }
 }
@@ -117,6 +122,7 @@ impl FunctionRegistry {
             "WaitNotVBlank".to_string(),
             "UpdateKeys".to_string(),
             "GetTileByPixel".to_string(),
+            "Delay".to_string(),
         ];
         names.extend(self.user_functions.keys().cloned());
         names.sort();
@@ -299,6 +305,21 @@ fn generate_get_tile_by_pixel() -> Vec<Instr> {
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
 
     asm.ld_a_addr_reg(Register::HL); //done to help, fit good in unbreaked
+    asm.ret();
+
+    asm.get_main_instrs()
+}
+
+fn generate_delay() -> Vec<Instr> {
+    let mut asm = Asm::new();
+
+    asm.comment("Delay loop using BC as counter");
+    asm.comment("@param bc: delay counter (higher = longer delay)");
+    asm.label("Delay");
+    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
+    asm.or(Operand::Reg(Register::A), Operand::Reg(Register::C));
+    asm.dec(Operand::Reg(Register::BC));
+    asm.jr_cond(Condition::NZ, "Delay");
     asm.ret();
 
     asm.get_main_instrs()

@@ -3,6 +3,7 @@
 //! This module provides a complete abstraction over assembly generation,
 //! hiding all low-level details from the developer.
 
+mod animations;
 mod functions;
 mod inputs;
 mod memory;
@@ -11,6 +12,7 @@ mod sprites;
 mod tiles;
 mod variables;
 
+pub use animations::AnimationType;
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
 pub use memory::MemoryRegion;

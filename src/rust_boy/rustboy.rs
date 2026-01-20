@@ -57,6 +57,9 @@ pub struct RustBoy {
 
     /// Main loop code
     main_loop_code: Vec<Instr>,
+
+    /// Animation delay value in frames (higher = slower animations)
+    animation_delay: u8,
 }
 
 impl RustBoy {
@@ -73,7 +76,15 @@ impl RustBoy {
             constants: Vec::new(),
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
+            animation_delay: 8, // Default: update animation every 8 frames
         }
+    }
+
+    /// Set the animation delay value in frames (higher = slower animations)
+    /// Default is 8 (animation updates every 8 frames, ~7.5 fps at 60fps)
+    pub fn set_animation_delay(&mut self, delay: u8) -> &mut Self {
+        self.animation_delay = delay;
+        self
     }
 
     /// Define a constant value
@@ -285,6 +296,16 @@ impl RustBoy {
         // Emit user init code
         asm.emit_all(self.init_code.clone());
 
+        // Add animation variables if animations are used
+        if self.sprites.has_animations() {
+            self.vars.create_u8("wFrameCounter", 0);
+
+            // Create enabled flag for each animation
+            for (var_name, initial_value) in self.sprites.get_animation_variables() {
+                self.vars.create_u8(&var_name, initial_value);
+            }
+        }
+
         // Emit variable initialization
         asm.emit_all(self.vars.generate_init_code());
 
@@ -306,6 +327,11 @@ impl RustBoy {
         asm.call("WaitNotVBlank");
         asm.call("WaitVBlank");
 
+        // Generate animation calls at start of main loop
+        if self.sprites.has_animations() {
+            asm.emit_all(self.sprites.generate_animation_calls(self.animation_delay));
+        }
+
         // Emit main loop code
         asm.emit_all(self.main_loop_code.clone());
 
@@ -319,6 +345,13 @@ impl RustBoy {
         // === FUNCTIONS CHUNK ===
         asm.chunk(Chunk::Functions);
         asm.emit_all(self.functions.generate_all());
+
+        // Generate animation functions
+        for (name, body) in self.sprites.generate_animation_functions() {
+            // Register function first so it's tracked (though we emit directly)
+            self.functions.register_user_function(&name, Vec::new());
+            asm.emit_all(body);
+        }
 
         // === TILES CHUNK ===
         asm.chunk(Chunk::Tiles);
@@ -380,6 +413,10 @@ impl RustBoy {
 
         // Auto-register UpdateKeys as used
         self.functions.use_function(BuiltinFunction::UpdateKeys);
+
+        // Auto-create input variables required by UpdateKeys
+        self.vars.create_u8("wCurKeys", 0);
+        self.vars.create_u8("wNewKeys", 0);
 
         // Add call to UpdateKeys
         self.main_loop_code.push(Instr::Call {

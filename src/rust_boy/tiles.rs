@@ -13,8 +13,8 @@ pub struct TileId(pub(crate) usize);
 pub enum TileSource {
     /// Raw tile data as 2D array of hex strings (legacy format)
     Raw(Vec<[String; 8]>),
-    /// Binary file path (.2bpp format)
-    File(String),
+    /// Binary file path (.2bpp format) with tile count
+    File(String, usize),
 }
 
 impl TileSource {
@@ -33,16 +33,25 @@ impl TileSource {
         TileSource::Raw(converted)
     }
 
-    /// Create from a .2bpp file path
-    pub fn from_file(path: &str) -> Self {
-        TileSource::File(path.to_string())
+    /// Create from a .2bpp file path with tile count
+    /// Each tile is 16 bytes in 2bpp format
+    pub fn from_file(path: &str, tile_count: usize) -> Self {
+        TileSource::File(path.to_string(), tile_count)
     }
 
     /// Calculate the size in bytes
     pub fn size_bytes(&self) -> u16 {
         match self {
             TileSource::Raw(tiles) => (tiles.len() * 16) as u16, // 16 bytes per tile
-            TileSource::File(_) => 0,                            // Size determined at assembly time
+            TileSource::File(_, tile_count) => (*tile_count * 16) as u16, // 16 bytes per tile
+        }
+    }
+
+    /// Get the number of tiles
+    pub fn tile_count(&self) -> usize {
+        match self {
+            TileSource::Raw(tiles) => tiles.len(),
+            TileSource::File(_, tile_count) => *tile_count,
         }
     }
 }
@@ -184,7 +193,7 @@ impl TileManager {
                         }
                     }
                 }
-                TileSource::File(path) => {
+                TileSource::File(path, _) => {
                     asm.incbin(path);
                 }
             }
@@ -206,7 +215,7 @@ impl TileManager {
                         }
                     }
                 }
-                TileSource::File(path) => {
+                TileSource::File(path, _) => {
                     asm.incbin(path);
                 }
             }

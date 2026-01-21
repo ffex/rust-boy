@@ -310,7 +310,7 @@ impl RustBoy {
         asm.emit_all(self.vars.generate_init_code());
 
         // Turn on screen
-        asm.ld_a_label("LCDCF_ON | LCDCF_BGON | LCDCF_OBJON");
+        asm.ld_a_label("LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16"); //TODO set in the struct
         asm.ld_addr_def_a("rLCDC");
 
         // Set default palettes
@@ -439,11 +439,14 @@ impl RustBoy {
         y: u8,
         flags: u8,
     ) -> super::sprites::SpriteId {
+        // Get tile count before moving tile_source
+        let tile_count = tile_source.tile_count() as u8;
+
         // Add the tile to the tile manager
         let tile_id = self.tiles.add_sprite(name, tile_source);
 
-        // Add the sprite to the sprite manager
-        let sprite_id = self.sprites.add(name, x, y, flags);
+        // Add the sprite to the sprite manager with tile count for proper index allocation
+        let sprite_id = self.sprites.add(name, x, y, flags, tile_count);
 
         // Link the tile ID to the sprite
         self.sprites.set_tile_id(sprite_id, tile_id);

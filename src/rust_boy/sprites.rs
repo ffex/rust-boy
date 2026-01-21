@@ -46,7 +46,8 @@ impl SpriteManager {
 
     /// Add a new sprite with tile data and initial position
     /// Returns both the sprite ID and tile ID for reference
-    pub fn add(&mut self, name: &str, x: u8, y: u8, flags: u8) -> SpriteId {
+    /// `tile_count` is the number of tiles this sprite uses (for proper tile index allocation)
+    pub fn add(&mut self, name: &str, x: u8, y: u8, flags: u8, tile_count: u8) -> SpriteId {
         let tile_index = self.next_tile_index;
         let oam_index = self.next_oam_index;
 
@@ -56,7 +57,7 @@ impl SpriteManager {
         let id = SpriteId(self.next_id);
         self.next_id += 1;
         self.next_oam_index += 1;
-        self.next_tile_index += 1;
+        self.next_tile_index += tile_count;
 
         self.sprites.insert(
             id,
@@ -461,8 +462,8 @@ mod tests {
     fn test_add_sprite() {
         let mut sm = SpriteManager::new();
 
-        let paddle = sm.add("Paddle", 16, 128, 0);
-        let ball = sm.add("Ball", 32, 100, 0);
+        let paddle = sm.add("Paddle", 16, 128, 0, 1);
+        let ball = sm.add("Ball", 32, 100, 0, 1);
 
         assert_eq!(sm.get(paddle).unwrap().x, 16);
         assert_eq!(sm.get(paddle).unwrap().y, 128);
@@ -474,8 +475,8 @@ mod tests {
     fn test_oam_indices() {
         let mut sm = SpriteManager::new();
 
-        let paddle = sm.add("Paddle", 16, 128, 0);
-        let ball = sm.add("Ball", 32, 100, 0);
+        let paddle = sm.add("Paddle", 16, 128, 0, 1);
+        let ball = sm.add("Ball", 32, 100, 0, 1);
 
         assert_eq!(sm.get(paddle).unwrap().oam_index, 0);
         assert_eq!(sm.get(ball).unwrap().oam_index, 1);

@@ -7,9 +7,13 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
-    ld de, Coin
+    ld de, player
     ld hl, $8000
-    ld bc, CoinEnd - Coin
+    ld bc, playerEnd - player
+    call Memcopy
+    ld de, playerDx
+    ld hl, $8400
+    ld bc, playerDxEnd - playerDx
     call Memcopy
     ld a, 0
     ld b, 160
@@ -27,15 +31,25 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
+    ld a, 88
+    ld [hli], a
+    ld a, 96
+    ld [hli], a
+    ld a, 64
+    ld [hli], a
     ld a, 0
-    ld [wFrameCounter], a
-    ld a, 0
-    ld [wCurKeys], a
+    ld [hli], a
     ld a, 0
     ld [wNewKeys], a
     ld a, 1
-    ld [wAnim_CoinAnim_Active], a
-    ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON
+    ld [wAnim_playerWalkDx_Active], a
+    ld a, 0
+    ld [wCurKeys], a
+    ld a, 0
+    ld [wFrameCounter], a
+    ld a, 1
+    ld [wAnim_playerWalk_Active], a
+    ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16
     ld [rLCDC], a
     ld a, 228
     ld [rBGP], a
@@ -52,11 +66,16 @@
     jr c, AnimEnd
     ld a, 0
     ld [wFrameCounter], a
-    ld a, [wAnim_CoinAnim_Active]
+    ld a, [wAnim_playerWalk_Active]
     cp 0
-    jr z, .skip_CoinAnim
-    call Anim_CoinAnim
-    .skip_CoinAnim:
+    jr z, .skip_playerWalk
+    call Anim_playerWalk
+    .skip_playerWalk:
+    ld a, [wAnim_playerWalkDx_Active]
+    cp 0
+    jr z, .skip_playerWalkDx
+    call Anim_playerWalkDx
+    .skip_playerWalkDx:
     AnimEnd:
     call UpdateKeys
     CheckA:
@@ -64,14 +83,18 @@
     and a, PADF_A
     jp z, CheckAEnd
     ld a, 1
-    ld [wAnim_CoinAnim_Active], a
+    ld [wAnim_playerWalk_Active], a
+    ld a, 1
+    ld [wAnim_playerWalkDx_Active], a
     CheckAEnd:
     CheckB:
     ld a, [wCurKeys]
     and a, PADF_B
     jp z, CheckBEnd
     ld a, 0
-    ld [wAnim_CoinAnim_Active], a
+    ld [wAnim_playerWalk_Active], a
+    ld a, 0
+    ld [wAnim_playerWalkDx_Active], a
     CheckBEnd:
     CheckLeft:
     ld a, [wCurKeys]
@@ -83,6 +106,12 @@
     jp z, Sprite0LeftLimitEnd
     ld [_OAMRAM+1], a
     Sprite0LeftLimitEnd:
+    ld a, [_OAMRAM+5]
+    sub a, 1
+    cp 0
+    jp z, Sprite1LeftLimitEnd
+    ld [_OAMRAM+5], a
+    Sprite1LeftLimitEnd:
     CheckLeftEnd:
     CheckRight:
     ld a, [wCurKeys]
@@ -94,6 +123,12 @@
     jp z, Sprite0RightLimitEnd
     ld [_OAMRAM+1], a
     Sprite0RightLimitEnd:
+    ld a, [_OAMRAM+5]
+    add a, 1
+    cp 150
+    jp z, Sprite1RightLimitEnd
+    ld [_OAMRAM+5], a
+    Sprite1RightLimitEnd:
     CheckRightEnd:
     CheckUp:
     ld a, [wCurKeys]
@@ -105,6 +140,12 @@
     jp z, Sprite0UpLimitEnd
     ld [_OAMRAM+0], a
     Sprite0UpLimitEnd:
+    ld a, [_OAMRAM+4]
+    sub a, 1
+    cp 0
+    jp z, Sprite1UpLimitEnd
+    ld [_OAMRAM+4], a
+    Sprite1UpLimitEnd:
     CheckUpEnd:
     CheckDown:
     ld a, [wCurKeys]
@@ -116,9 +157,38 @@
     jp z, Sprite0DownLimitEnd
     ld [_OAMRAM+0], a
     Sprite0DownLimitEnd:
+    ld a, [_OAMRAM+4]
+    add a, 1
+    cp 150
+    jp z, Sprite1DownLimitEnd
+    ld [_OAMRAM+4], a
+    Sprite1DownLimitEnd:
     CheckDownEnd:
     jp Main
 
+    WaitVBlank:
+    ld a, [rLY]
+    cp 144
+    jp c, WaitVBlank
+    ret
+    ; Copy bytes from one area to another
+    ; @param de: source
+    ; @param hl: destination
+    ; @param bc: length
+    Memcopy:
+    ld a, [de]
+    ld [hli], a
+    inc de
+    dec bc
+    ld a, b
+    or a, c
+    jp nz, Memcopy
+    ret
+    WaitNotVBlank:
+    ld a, [rLY]
+    cp 144
+    jp nc, WaitNotVBlank
+    ret
     UpdateKeys:
     ld a, P1F_GET_BTN
     call .onenibble
@@ -146,47 +216,37 @@
     or a, 240
     .knowret:
     ret
-    WaitNotVBlank:
-    ld a, [rLY]
-    cp 144
-    jp nc, WaitNotVBlank
-    ret
-    ; Copy bytes from one area to another
-    ; @param de: source
-    ; @param hl: destination
-    ; @param bc: length
-    Memcopy:
-    ld a, [de]
-    ld [hli], a
-    inc de
-    dec bc
-    ld a, b
-    or a, c
-    jp nz, Memcopy
-    ret
-    WaitVBlank:
-    ld a, [rLY]
-    cp 144
-    jp c, WaitVBlank
-    ret
-    Anim_CoinAnim:
+    Anim_playerWalk:
     ld a, [_OAMRAM+2]
     inc a
-    cp 7
-    jr nz, updateSpriteIndex_CoinAnim
+    cp 5
+    jr nz, updateSpriteIndex_playerWalk
     ld a, 0
-    updateSpriteIndex_CoinAnim:
+    updateSpriteIndex_playerWalk:
     ld [_OAMRAM+2], a
     ret
+    Anim_playerWalkDx:
+    ld a, [_OAMRAM+6]
+    inc a
+    cp 69
+    jr nz, updateSpriteIndex_playerWalkDx
+    ld a, 64
+    updateSpriteIndex_playerWalkDx:
+    ld [_OAMRAM+6], a
+    ret
 
-    Coin:
-    INCBIN "coin.2bpp"
-    CoinEnd:
+    player:
+    INCBIN "char.2bpp"
+    playerEnd:
+    playerDx:
+    INCBIN "char-dx.2bpp"
+    playerDxEnd:
 
     SECTION "Variables", WRAM0
     wCurKeys: db
     wNewKeys: db
     wFrameCounter: db
-    wAnim_CoinAnim_Active: db
+    wAnim_playerWalk_Active: db
+    wAnim_playerWalkDx_Active: db
 
 

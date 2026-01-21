@@ -7,7 +7,7 @@ fn main() {
     let mut gb = RustBoy::new();
 
     // Add sprite with coin animation tiles (7 frames: 0-6)
-    let coin = gb.add_sprite("Coin", TileSource::from_file("coin.2bpp"), 80, 72, 0);
+    let coin = gb.add_sprite("Coin", TileSource::from_file("coin.2bpp", 7), 80, 72, 0);
 
     // Add looping animation with relative frame indices 0 to 6
     gb.sprites

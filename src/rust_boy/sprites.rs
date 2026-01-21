@@ -198,6 +198,46 @@ impl SpriteManager {
         }
     }
 
+    /// Move sprite up with limit
+    pub fn move_up_limit(&self, id: SpriteId, distance: u8, limit: u8) -> Vec<Instr> {
+        if let Some(sprite) = self.sprites.get(&id) {
+            let mut asm = Asm::new();
+            let oam_offset = sprite.oam_index * 4;
+            let jump_label = format!("Sprite{}UpLimitEnd", sprite.oam_index);
+
+            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
+            asm.sub(Operand::Reg(Register::A), Operand::Imm(distance));
+            asm.cp(Operand::Imm(limit));
+            asm.jp_cond(Condition::Z, &jump_label);
+            asm.ld_addr_def_a(&format!("_OAMRAM+{}", oam_offset));
+            asm.label(&jump_label);
+
+            asm.get_main_instrs()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Move sprite down with limit
+    pub fn move_down_limit(&self, id: SpriteId, distance: u8, limit: u8) -> Vec<Instr> {
+        if let Some(sprite) = self.sprites.get(&id) {
+            let mut asm = Asm::new();
+            let oam_offset = sprite.oam_index * 4;
+            let jump_label = format!("Sprite{}DownLimitEnd", sprite.oam_index);
+
+            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
+            asm.add(Operand::Reg(Register::A), Operand::Imm(distance));
+            asm.cp(Operand::Imm(limit));
+            asm.jp_cond(Condition::Z, &jump_label);
+            asm.ld_addr_def_a(&format!("_OAMRAM+{}", oam_offset));
+            asm.label(&jump_label);
+
+            asm.get_main_instrs()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Get sprite pivot point (for collision detection)
     pub fn get_pivot(&self, id: SpriteId, x_offset: i16, y_offset: i16) -> Vec<Instr> {
         if let Some(sprite) = self.sprites.get(&id) {

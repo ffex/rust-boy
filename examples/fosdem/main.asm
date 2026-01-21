@@ -29,12 +29,12 @@
     ld [hli], a
     ld a, 0
     ld [wFrameCounter], a
-    ld a, 1
-    ld [wAnim_CoinAnim_Active], a
-    ld a, 0
-    ld [wNewKeys], a
     ld a, 0
     ld [wCurKeys], a
+    ld a, 0
+    ld [wNewKeys], a
+    ld a, 1
+    ld [wAnim_CoinAnim_Active], a
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON
     ld [rLCDC], a
     ld a, 228
@@ -95,13 +95,30 @@
     ld [_OAMRAM+1], a
     Sprite0RightLimitEnd:
     CheckRightEnd:
+    CheckUp:
+    ld a, [wCurKeys]
+    and a, PADF_UP
+    jp z, CheckUpEnd
+    ld a, [_OAMRAM+0]
+    sub a, 1
+    cp 0
+    jp z, Sprite0UpLimitEnd
+    ld [_OAMRAM+0], a
+    Sprite0UpLimitEnd:
+    CheckUpEnd:
+    CheckDown:
+    ld a, [wCurKeys]
+    and a, PADF_DOWN
+    jp z, CheckDownEnd
+    ld a, [_OAMRAM+0]
+    add a, 1
+    cp 150
+    jp z, Sprite0DownLimitEnd
+    ld [_OAMRAM+0], a
+    Sprite0DownLimitEnd:
+    CheckDownEnd:
     jp Main
 
-    WaitVBlank:
-    ld a, [rLY]
-    cp 144
-    jp c, WaitVBlank
-    ret
     UpdateKeys:
     ld a, P1F_GET_BTN
     call .onenibble
@@ -129,6 +146,11 @@
     or a, 240
     .knowret:
     ret
+    WaitNotVBlank:
+    ld a, [rLY]
+    cp 144
+    jp nc, WaitNotVBlank
+    ret
     ; Copy bytes from one area to another
     ; @param de: source
     ; @param hl: destination
@@ -142,10 +164,10 @@
     or a, c
     jp nz, Memcopy
     ret
-    WaitNotVBlank:
+    WaitVBlank:
     ld a, [rLY]
     cp 144
-    jp nc, WaitNotVBlank
+    jp c, WaitVBlank
     ret
     Anim_CoinAnim:
     ld a, [_OAMRAM+2]

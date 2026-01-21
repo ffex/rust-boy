@@ -19,6 +19,8 @@ fn main() {
     inputs.on_press(PadButton::B, gb.sprites.disable_animation("CoinAnim"));
     inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(coin, 1, 0));
     inputs.on_press(PadButton::Right, gb.sprites.move_right_limit(coin, 1, 150));
+    inputs.on_press(PadButton::Up, gb.sprites.move_up_limit(coin, 1, 0));
+    inputs.on_press(PadButton::Down, gb.sprites.move_down_limit(coin, 1, 150));
     gb.add_inputs(inputs);
     println!("{}", gb.build());
 }

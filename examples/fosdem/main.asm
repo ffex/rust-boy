@@ -7,13 +7,13 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
-    ld de, player
+    ld de, player_left
     ld hl, $8000
-    ld bc, playerEnd - player
+    ld bc, player_leftEnd - player_left
     call Memcopy
-    ld de, playerDx
+    ld de, player_right
     ld hl, $8400
-    ld bc, playerDxEnd - playerDx
+    ld bc, player_rightEnd - player_right
     call Memcopy
     ld a, 0
     ld b, 160
@@ -40,15 +40,15 @@
     ld a, 0
     ld [hli], a
     ld a, 0
+    ld [wAnim_playerWalk_1_Active], a
+    ld a, 0
+    ld [wAnim_playerWalk_0_Active], a
+    ld a, 0
     ld [wNewKeys], a
-    ld a, 1
-    ld [wAnim_playerWalkDx_Active], a
     ld a, 0
     ld [wCurKeys], a
     ld a, 0
     ld [wFrameCounter], a
-    ld a, 1
-    ld [wAnim_playerWalk_Active], a
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16
     ld [rLCDC], a
     ld a, 228
@@ -66,16 +66,16 @@
     jr c, AnimEnd
     ld a, 0
     ld [wFrameCounter], a
-    ld a, [wAnim_playerWalk_Active]
+    ld a, [wAnim_playerWalk_0_Active]
     cp 0
-    jr z, .skip_playerWalk
-    call Anim_playerWalk
-    .skip_playerWalk:
-    ld a, [wAnim_playerWalkDx_Active]
+    jr z, .skip_playerWalk_0
+    call Anim_playerWalk_0
+    .skip_playerWalk_0:
+    ld a, [wAnim_playerWalk_1_Active]
     cp 0
-    jr z, .skip_playerWalkDx
-    call Anim_playerWalkDx
-    .skip_playerWalkDx:
+    jr z, .skip_playerWalk_1
+    call Anim_playerWalk_1
+    .skip_playerWalk_1:
     AnimEnd:
     call UpdateKeys
     CheckA:
@@ -83,18 +83,18 @@
     and a, PADF_A
     jp z, CheckAEnd
     ld a, 1
-    ld [wAnim_playerWalk_Active], a
+    ld [wAnim_playerWalk_0_Active], a
     ld a, 1
-    ld [wAnim_playerWalkDx_Active], a
+    ld [wAnim_playerWalk_1_Active], a
     CheckAEnd:
     CheckB:
     ld a, [wCurKeys]
     and a, PADF_B
     jp z, CheckBEnd
     ld a, 0
-    ld [wAnim_playerWalk_Active], a
+    ld [wAnim_playerWalk_0_Active], a
     ld a, 0
-    ld [wAnim_playerWalkDx_Active], a
+    ld [wAnim_playerWalk_1_Active], a
     CheckBEnd:
     CheckLeft:
     ld a, [wCurKeys]
@@ -171,24 +171,6 @@
     cp 144
     jp c, WaitVBlank
     ret
-    ; Copy bytes from one area to another
-    ; @param de: source
-    ; @param hl: destination
-    ; @param bc: length
-    Memcopy:
-    ld a, [de]
-    ld [hli], a
-    inc de
-    dec bc
-    ld a, b
-    or a, c
-    jp nz, Memcopy
-    ret
-    WaitNotVBlank:
-    ld a, [rLY]
-    cp 144
-    jp nc, WaitNotVBlank
-    ret
     UpdateKeys:
     ld a, P1F_GET_BTN
     call .onenibble
@@ -216,37 +198,55 @@
     or a, 240
     .knowret:
     ret
-    Anim_playerWalk:
+    WaitNotVBlank:
+    ld a, [rLY]
+    cp 144
+    jp nc, WaitNotVBlank
+    ret
+    ; Copy bytes from one area to another
+    ; @param de: source
+    ; @param hl: destination
+    ; @param bc: length
+    Memcopy:
+    ld a, [de]
+    ld [hli], a
+    inc de
+    dec bc
+    ld a, b
+    or a, c
+    jp nz, Memcopy
+    ret
+    Anim_playerWalk_0:
     ld a, [_OAMRAM+2]
     inc a
-    cp 5
-    jr nz, updateSpriteIndex_playerWalk
+    cp 7
+    jr nz, updateSpriteIndex_playerWalk_0
     ld a, 0
-    updateSpriteIndex_playerWalk:
+    updateSpriteIndex_playerWalk_0:
     ld [_OAMRAM+2], a
     ret
-    Anim_playerWalkDx:
+    Anim_playerWalk_1:
     ld a, [_OAMRAM+6]
     inc a
-    cp 69
-    jr nz, updateSpriteIndex_playerWalkDx
+    cp 71
+    jr nz, updateSpriteIndex_playerWalk_1
     ld a, 64
-    updateSpriteIndex_playerWalkDx:
+    updateSpriteIndex_playerWalk_1:
     ld [_OAMRAM+6], a
     ret
 
-    player:
+    player_left:
     INCBIN "char.2bpp"
-    playerEnd:
-    playerDx:
+    player_leftEnd:
+    player_right:
     INCBIN "char-dx.2bpp"
-    playerDxEnd:
+    player_rightEnd:
 
     SECTION "Variables", WRAM0
     wCurKeys: db
     wNewKeys: db
     wFrameCounter: db
-    wAnim_playerWalk_Active: db
-    wAnim_playerWalkDx_Active: db
+    wAnim_playerWalk_0_Active: db
+    wAnim_playerWalk_1_Active: db
 
 

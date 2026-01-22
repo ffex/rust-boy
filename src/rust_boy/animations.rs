@@ -15,6 +15,7 @@ pub struct Animation {
     pub(crate) start_frame: u8, // Relative start frame (e.g., 0)
     pub(crate) end_frame: u8,   // Relative end frame (e.g., 6)
     pub(crate) anim_type: AnimationType,
+    pub(crate) initially_enabled: bool, // Whether the animation starts enabled
 }
 
 impl Animation {

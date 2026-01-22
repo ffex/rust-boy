@@ -12,6 +12,20 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SpriteId(pub(crate) usize);
 
+/// Unique identifier for a composite sprite (group of sprites that move together)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompositeSpriteId(pub(crate) usize);
+
+/// A composite sprite made of multiple hardware sprites that move together
+#[derive(Debug, Clone)]
+pub(crate) struct CompositeSpriteData {
+    pub name: String,
+    /// The individual sprite IDs that make up this composite
+    pub sprites: Vec<SpriteId>,
+    /// Animation names for this composite (all sprites share the same animation name prefix)
+    pub animation_names: Vec<String>,
+}
+
 /// Internal sprite data
 #[derive(Debug, Clone)]
 pub(crate) struct SpriteData {
@@ -29,7 +43,9 @@ pub(crate) struct SpriteData {
 #[derive(Debug)]
 pub struct SpriteManager {
     sprites: HashMap<SpriteId, SpriteData>,
+    composite_sprites: HashMap<CompositeSpriteId, CompositeSpriteData>,
     next_id: usize,
+    next_composite_id: usize,
     next_oam_index: u8,
     next_tile_index: u8,
 }
@@ -38,7 +54,9 @@ impl SpriteManager {
     pub(crate) fn new() -> Self {
         Self {
             sprites: HashMap::new(),
+            composite_sprites: HashMap::new(),
             next_id: 0,
+            next_composite_id: 0,
             next_oam_index: 0,
             next_tile_index: 0,
         }
@@ -109,8 +127,22 @@ impl SpriteManager {
                 start_frame,
                 end_frame,
                 anim_type,
+                initially_enabled: true,
             };
             sprite.animations.push(animation);
+        }
+    }
+
+    /// Set whether an animation should start enabled or disabled
+    /// Call this after add_animation to configure the initial state
+    pub fn set_animation_initial_state(&mut self, name: &str, enabled: bool) {
+        for sprite in self.sprites.values_mut() {
+            for animation in &mut sprite.animations {
+                if animation.name == name {
+                    animation.initially_enabled = enabled;
+                    return;
+                }
+            }
         }
     }
 
@@ -149,6 +181,186 @@ impl SpriteManager {
         asm.ld_addr_def_a(&var_name);
 
         asm.get_main_instrs()
+    }
+
+    // ==================== Composite Sprite Methods ====================
+
+    /// Create a composite sprite from multiple sprite IDs
+    /// This groups sprites together so they can be moved/animated as one unit
+    pub(crate) fn create_composite(
+        &mut self,
+        name: &str,
+        sprites: Vec<SpriteId>,
+    ) -> CompositeSpriteId {
+        let id = CompositeSpriteId(self.next_composite_id);
+        self.next_composite_id += 1;
+
+        self.composite_sprites.insert(
+            id,
+            CompositeSpriteData {
+                name: name.to_string(),
+                sprites,
+                animation_names: Vec::new(),
+            },
+        );
+
+        id
+    }
+
+    /// Get the sprite IDs that make up a composite sprite
+    pub fn get_composite_sprites(&self, id: CompositeSpriteId) -> Option<&Vec<SpriteId>> {
+        self.composite_sprites.get(&id).map(|c| &c.sprites)
+    }
+
+    /// Add an animation to all sprites in a composite
+    /// The animation name will be used as a prefix, with each sprite getting a unique suffix
+    pub fn add_composite_animation(
+        &mut self,
+        composite_id: CompositeSpriteId,
+        name: &str,
+        start_frame: u8,
+        end_frame: u8,
+        anim_type: super::animations::AnimationType,
+    ) {
+        if let Some(composite) = self.composite_sprites.get_mut(&composite_id) {
+            let sprite_ids = composite.sprites.clone();
+            composite.animation_names.push(name.to_string());
+
+            for (i, sprite_id) in sprite_ids.iter().enumerate() {
+                let anim_name = format!("{}_{}", name, i);
+                self.add_animation(
+                    *sprite_id,
+                    &anim_name,
+                    start_frame,
+                    end_frame,
+                    anim_type.clone(),
+                );
+            }
+        }
+    }
+
+    /// Set whether a composite animation should start enabled or disabled
+    pub fn set_composite_animation_initial_state(
+        &mut self,
+        composite_id: CompositeSpriteId,
+        name: &str,
+        enabled: bool,
+    ) {
+        if let Some(composite) = self.composite_sprites.get(&composite_id) {
+            let sprite_count = composite.sprites.len();
+            for i in 0..sprite_count {
+                let anim_name = format!("{}_{}", name, i);
+                self.set_animation_initial_state(&anim_name, enabled);
+            }
+        }
+    }
+
+    /// Generate code to enable all animations in a composite sprite
+    pub fn enable_composite_animation(
+        &self,
+        composite_id: CompositeSpriteId,
+        name: &str,
+    ) -> Vec<Instr> {
+        let mut instrs = Vec::new();
+
+        if let Some(composite) = self.composite_sprites.get(&composite_id) {
+            for i in 0..composite.sprites.len() {
+                let anim_name = format!("{}_{}", name, i);
+                instrs.extend(self.enable_animation(&anim_name));
+            }
+        }
+
+        instrs
+    }
+
+    /// Generate code to disable all animations in a composite sprite
+    pub fn disable_composite_animation(
+        &self,
+        composite_id: CompositeSpriteId,
+        name: &str,
+    ) -> Vec<Instr> {
+        let mut instrs = Vec::new();
+
+        if let Some(composite) = self.composite_sprites.get(&composite_id) {
+            for i in 0..composite.sprites.len() {
+                let anim_name = format!("{}_{}", name, i);
+                instrs.extend(self.disable_animation(&anim_name));
+            }
+        }
+
+        instrs
+    }
+
+    /// Move all sprites in a composite left with limit
+    pub fn move_composite_left_limit(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        let mut instrs = Vec::new();
+
+        if let Some(composite) = self.composite_sprites.get(&id) {
+            for sprite_id in &composite.sprites {
+                instrs.extend(self.move_left_limit(*sprite_id, distance, limit));
+            }
+        }
+
+        instrs
+    }
+
+    /// Move all sprites in a composite right with limit
+    pub fn move_composite_right_limit(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        let mut instrs = Vec::new();
+
+        if let Some(composite) = self.composite_sprites.get(&id) {
+            for sprite_id in &composite.sprites {
+                instrs.extend(self.move_right_limit(*sprite_id, distance, limit));
+            }
+        }
+
+        instrs
+    }
+
+    /// Move all sprites in a composite up with limit
+    pub fn move_composite_up_limit(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        let mut instrs = Vec::new();
+
+        if let Some(composite) = self.composite_sprites.get(&id) {
+            for sprite_id in &composite.sprites {
+                instrs.extend(self.move_up_limit(*sprite_id, distance, limit));
+            }
+        }
+
+        instrs
+    }
+
+    /// Move all sprites in a composite down with limit
+    pub fn move_composite_down_limit(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        let mut instrs = Vec::new();
+
+        if let Some(composite) = self.composite_sprites.get(&id) {
+            for sprite_id in &composite.sprites {
+                instrs.extend(self.move_down_limit(*sprite_id, distance, limit));
+            }
+        }
+
+        instrs
     }
 
     /// Generate OAM initialization code
@@ -445,8 +657,8 @@ impl SpriteManager {
         for sprite in self.sprites.values() {
             for animation in &sprite.animations {
                 let var_name = format!("wAnim_{}_Active", animation.name);
-                // Default: enabled (1)
-                vars.push((var_name, 1));
+                let initial_value = if animation.initially_enabled { 1 } else { 0 };
+                vars.push((var_name, initial_value));
             }
         }
 

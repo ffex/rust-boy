@@ -453,6 +453,43 @@ impl RustBoy {
 
         sprite_id
     }
+
+    /// Add a 16x16 composite sprite made of two 8x16 sprites side by side
+    ///
+    /// This creates two hardware sprites (left and right halves) and groups them
+    /// as a composite sprite that can be moved and animated together.
+    ///
+    /// # Arguments
+    /// * `name` - Base name for the composite sprite
+    /// * `left_tiles` - Tile source for the left 8x16 half
+    /// * `right_tiles` - Tile source for the right 8x16 half
+    /// * `x` - X position of the left edge
+    /// * `y` - Y position
+    /// * `flags` - OAM flags for both sprites
+    ///
+    /// # Returns
+    /// A `CompositeSpriteId` that can be used with composite sprite methods
+    pub fn add_sprite_16x16(
+        &mut self,
+        name: &str,
+        left_tiles: super::tiles::TileSource,
+        right_tiles: super::tiles::TileSource,
+        x: u8,
+        y: u8,
+        flags: u8,
+    ) -> super::sprites::CompositeSpriteId {
+        // Create the left sprite
+        let left_name = format!("{}_left", name);
+        let left_sprite = self.add_sprite(&left_name, left_tiles, x, y, flags);
+
+        // Create the right sprite (8 pixels to the right)
+        let right_name = format!("{}_right", name);
+        let right_sprite = self.add_sprite(&right_name, right_tiles, x + 8, y, flags);
+
+        // Group them as a composite sprite
+        self.sprites
+            .create_composite(name, vec![left_sprite, right_sprite])
+    }
 }
 
 impl Default for RustBoy {

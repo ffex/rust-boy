@@ -1,6 +1,6 @@
 use rust_boy::{
     gb_std::inputs::PadButton,
-    rust_boy::{AnimationType, InputManager, RustBoy, TileSource},
+    rust_boy::{ANIM_DISABLED, AnimationType, InputManager, RustBoy, TileSource},
 };
 
 fn main() {
@@ -16,38 +16,63 @@ fn main() {
         0,
     );
 
-    // Add looping animation to the composite sprite (applies to both halves)
-    // Start with animation disabled
+    // Add looping animations to the composite sprite (applies to both halves)
+    // add_composite_animation returns the animation index
+    // Animation order: front, back, left, right (frames 0-3, 4-7, 8-11, 12-15)
+    let anim_walk_front =
+        gb.sprites
+            .add_composite_animation(player, "playerWalkFront", 0, 3, AnimationType::Loop);
+    let anim_walk_back =
+        gb.sprites
+            .add_composite_animation(player, "playerWalkBack", 4, 7, AnimationType::Loop);
+    let anim_walk_left =
+        gb.sprites
+            .add_composite_animation(player, "playerWalkLeft", 8, 11, AnimationType::Loop);
+    let anim_walk_right =
+        gb.sprites
+            .add_composite_animation(player, "playerWalkRight", 12, 15, AnimationType::Loop);
+
+    // Start with no animation (disabled)
     gb.sprites
-        .add_composite_animation(player, "playerWalk", 0, 6, AnimationType::Loop);
-    gb.sprites
-        .set_composite_animation_initial_state(player, "playerWalk", false);
+        .set_composite_initial_animation(player, ANIM_DISABLED);
 
     // Input handling
     let mut inputs = InputManager::new();
     inputs.on_press(
-        PadButton::A,
-        gb.sprites.enable_composite_animation(player, "playerWalk"),
-    );
-    inputs.on_press(
-        PadButton::B,
-        gb.sprites.disable_composite_animation(player, "playerWalk"),
-    );
-    inputs.on_press(
         PadButton::Left,
-        gb.sprites.move_composite_left_limit(player, 1, 0),
+        [
+            gb.sprites.move_composite_left_limit(player, 1, 0),
+            gb.sprites
+                .enable_composite_animation(player, anim_walk_left),
+        ]
+        .concat(),
     );
     inputs.on_press(
         PadButton::Right,
-        gb.sprites.move_composite_right_limit(player, 1, 150),
+        [
+            gb.sprites.move_composite_right_limit(player, 1, 150),
+            gb.sprites
+                .enable_composite_animation(player, anim_walk_right),
+        ]
+        .concat(),
     );
     inputs.on_press(
         PadButton::Up,
-        gb.sprites.move_composite_up_limit(player, 1, 0),
+        [
+            gb.sprites.move_composite_up_limit(player, 1, 0),
+            gb.sprites
+                .enable_composite_animation(player, anim_walk_back),
+        ]
+        .concat(),
     );
     inputs.on_press(
         PadButton::Down,
-        gb.sprites.move_composite_down_limit(player, 1, 150),
+        [
+            gb.sprites.move_composite_down_limit(player, 1, 150),
+            gb.sprites
+                .enable_composite_animation(player, anim_walk_front),
+        ]
+        .concat(),
     );
     gb.add_inputs(inputs);
     println!("{}", gb.build());

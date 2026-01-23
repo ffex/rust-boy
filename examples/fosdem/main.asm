@@ -7,13 +7,13 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
-    ld de, player_left
-    ld hl, $8000
-    ld bc, player_leftEnd - player_left
-    call Memcopy
     ld de, player_right
     ld hl, $8400
     ld bc, player_rightEnd - player_right
+    call Memcopy
+    ld de, player_left
+    ld hl, $8000
+    ld bc, player_leftEnd - player_left
     call Memcopy
     ld a, 0
     ld b, 160
@@ -39,16 +39,16 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
-    ld a, 0
-    ld [wAnim_playerWalk_1_Active], a
-    ld a, 0
-    ld [wAnim_playerWalk_0_Active], a
-    ld a, 0
-    ld [wNewKeys], a
+    ld a, 255
+    ld [wAnim_player_left_Current], a
+    ld a, 255
+    ld [wAnim_player_right_Current], a
     ld a, 0
     ld [wCurKeys], a
     ld a, 0
     ld [wFrameCounter], a
+    ld a, 0
+    ld [wNewKeys], a
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16
     ld [rLCDC], a
     ld a, 228
@@ -66,36 +66,56 @@
     jr c, AnimEnd
     ld a, 0
     ld [wFrameCounter], a
-    ld a, [wAnim_playerWalk_0_Active]
+    ld a, [wAnim_player_left_Current]
+    cp 255
+    jr z, .animEnd_player_left
     cp 0
-    jr z, .skip_playerWalk_0
-    call Anim_playerWalk_0
-    .skip_playerWalk_0:
-    ld a, [wAnim_playerWalk_1_Active]
+    jr nz, .skip_playerWalkFront_0
+    call Anim_playerWalkFront_0
+    jr .animEnd_player_left
+    .skip_playerWalkFront_0:
+    cp 1
+    jr nz, .skip_playerWalkBack_0
+    call Anim_playerWalkBack_0
+    jr .animEnd_player_left
+    .skip_playerWalkBack_0:
+    cp 2
+    jr nz, .skip_playerWalkLeft_0
+    call Anim_playerWalkLeft_0
+    jr .animEnd_player_left
+    .skip_playerWalkLeft_0:
+    cp 3
+    jr nz, .skip_playerWalkRight_0
+    call Anim_playerWalkRight_0
+    jr .animEnd_player_left
+    .skip_playerWalkRight_0:
+    .animEnd_player_left:
+    ld a, [wAnim_player_right_Current]
+    cp 255
+    jr z, .animEnd_player_right
     cp 0
-    jr z, .skip_playerWalk_1
-    call Anim_playerWalk_1
-    .skip_playerWalk_1:
+    jr nz, .skip_playerWalkFront_1
+    call Anim_playerWalkFront_1
+    jr .animEnd_player_right
+    .skip_playerWalkFront_1:
+    cp 1
+    jr nz, .skip_playerWalkBack_1
+    call Anim_playerWalkBack_1
+    jr .animEnd_player_right
+    .skip_playerWalkBack_1:
+    cp 2
+    jr nz, .skip_playerWalkLeft_1
+    call Anim_playerWalkLeft_1
+    jr .animEnd_player_right
+    .skip_playerWalkLeft_1:
+    cp 3
+    jr nz, .skip_playerWalkRight_1
+    call Anim_playerWalkRight_1
+    jr .animEnd_player_right
+    .skip_playerWalkRight_1:
+    .animEnd_player_right:
     AnimEnd:
     call UpdateKeys
-    CheckA:
-    ld a, [wCurKeys]
-    and a, PADF_A
-    jp z, CheckAEnd
-    ld a, 1
-    ld [wAnim_playerWalk_0_Active], a
-    ld a, 1
-    ld [wAnim_playerWalk_1_Active], a
-    CheckAEnd:
-    CheckB:
-    ld a, [wCurKeys]
-    and a, PADF_B
-    jp z, CheckBEnd
-    ld a, 0
-    ld [wAnim_playerWalk_0_Active], a
-    ld a, 0
-    ld [wAnim_playerWalk_1_Active], a
-    CheckBEnd:
     CheckLeft:
     ld a, [wCurKeys]
     and a, PADF_LEFT
@@ -112,6 +132,10 @@
     jp z, Sprite1LeftLimitEnd
     ld [_OAMRAM+5], a
     Sprite1LeftLimitEnd:
+    ld a, 2
+    ld [wAnim_player_left_Current], a
+    ld a, 2
+    ld [wAnim_player_right_Current], a
     CheckLeftEnd:
     CheckRight:
     ld a, [wCurKeys]
@@ -129,6 +153,10 @@
     jp z, Sprite1RightLimitEnd
     ld [_OAMRAM+5], a
     Sprite1RightLimitEnd:
+    ld a, 3
+    ld [wAnim_player_left_Current], a
+    ld a, 3
+    ld [wAnim_player_right_Current], a
     CheckRightEnd:
     CheckUp:
     ld a, [wCurKeys]
@@ -146,6 +174,10 @@
     jp z, Sprite1UpLimitEnd
     ld [_OAMRAM+4], a
     Sprite1UpLimitEnd:
+    ld a, 1
+    ld [wAnim_player_left_Current], a
+    ld a, 1
+    ld [wAnim_player_right_Current], a
     CheckUpEnd:
     CheckDown:
     ld a, [wCurKeys]
@@ -163,9 +195,18 @@
     jp z, Sprite1DownLimitEnd
     ld [_OAMRAM+4], a
     Sprite1DownLimitEnd:
+    ld a, 0
+    ld [wAnim_player_left_Current], a
+    ld a, 0
+    ld [wAnim_player_right_Current], a
     CheckDownEnd:
     jp Main
 
+    WaitNotVBlank:
+    ld a, [rLY]
+    cp 144
+    jp nc, WaitNotVBlank
+    ret
     WaitVBlank:
     ld a, [rLY]
     cp 144
@@ -198,11 +239,6 @@
     or a, 240
     .knowret:
     ret
-    WaitNotVBlank:
-    ld a, [rLY]
-    cp 144
-    jp nc, WaitNotVBlank
-    ret
     ; Copy bytes from one area to another
     ; @param de: source
     ; @param hl: destination
@@ -216,37 +252,115 @@
     or a, c
     jp nz, Memcopy
     ret
-    Anim_playerWalk_0:
+    Anim_playerWalkFront_0:
     ld a, [_OAMRAM+2]
-    inc a
-    cp 7
-    jr nz, updateSpriteIndex_playerWalk_0
+    add a, 2
+    cp 0
+    jr c, .reset_playerWalkFront_0
+    cp 8
+    jr c, .store_playerWalkFront_0
+    .reset_playerWalkFront_0:
     ld a, 0
-    updateSpriteIndex_playerWalk_0:
+    .store_playerWalkFront_0:
     ld [_OAMRAM+2], a
     ret
-    Anim_playerWalk_1:
+    Anim_playerWalkBack_0:
+    ld a, [_OAMRAM+2]
+    add a, 2
+    cp 8
+    jr c, .reset_playerWalkBack_0
+    cp 16
+    jr c, .store_playerWalkBack_0
+    .reset_playerWalkBack_0:
+    ld a, 8
+    .store_playerWalkBack_0:
+    ld [_OAMRAM+2], a
+    ret
+    Anim_playerWalkLeft_0:
+    ld a, [_OAMRAM+2]
+    add a, 2
+    cp 16
+    jr c, .reset_playerWalkLeft_0
+    cp 24
+    jr c, .store_playerWalkLeft_0
+    .reset_playerWalkLeft_0:
+    ld a, 16
+    .store_playerWalkLeft_0:
+    ld [_OAMRAM+2], a
+    ret
+    Anim_playerWalkRight_0:
+    ld a, [_OAMRAM+2]
+    add a, 2
+    cp 24
+    jr c, .reset_playerWalkRight_0
+    cp 32
+    jr c, .store_playerWalkRight_0
+    .reset_playerWalkRight_0:
+    ld a, 24
+    .store_playerWalkRight_0:
+    ld [_OAMRAM+2], a
+    ret
+    Anim_playerWalkFront_1:
     ld a, [_OAMRAM+6]
-    inc a
-    cp 71
-    jr nz, updateSpriteIndex_playerWalk_1
+    add a, 2
+    cp 64
+    jr c, .reset_playerWalkFront_1
+    cp 72
+    jr c, .store_playerWalkFront_1
+    .reset_playerWalkFront_1:
     ld a, 64
-    updateSpriteIndex_playerWalk_1:
+    .store_playerWalkFront_1:
+    ld [_OAMRAM+6], a
+    ret
+    Anim_playerWalkBack_1:
+    ld a, [_OAMRAM+6]
+    add a, 2
+    cp 72
+    jr c, .reset_playerWalkBack_1
+    cp 80
+    jr c, .store_playerWalkBack_1
+    .reset_playerWalkBack_1:
+    ld a, 72
+    .store_playerWalkBack_1:
+    ld [_OAMRAM+6], a
+    ret
+    Anim_playerWalkLeft_1:
+    ld a, [_OAMRAM+6]
+    add a, 2
+    cp 80
+    jr c, .reset_playerWalkLeft_1
+    cp 88
+    jr c, .store_playerWalkLeft_1
+    .reset_playerWalkLeft_1:
+    ld a, 80
+    .store_playerWalkLeft_1:
+    ld [_OAMRAM+6], a
+    ret
+    Anim_playerWalkRight_1:
+    ld a, [_OAMRAM+6]
+    add a, 2
+    cp 88
+    jr c, .reset_playerWalkRight_1
+    cp 96
+    jr c, .store_playerWalkRight_1
+    .reset_playerWalkRight_1:
+    ld a, 88
+    .store_playerWalkRight_1:
     ld [_OAMRAM+6], a
     ret
 
-    player_left:
-    INCBIN "char.2bpp"
-    player_leftEnd:
     player_right:
     INCBIN "char-dx.2bpp"
     player_rightEnd:
+    player_left:
+    INCBIN "char.2bpp"
+    player_leftEnd:
 
     SECTION "Variables", WRAM0
     wCurKeys: db
     wNewKeys: db
     wFrameCounter: db
-    wAnim_playerWalk_0_Active: db
-    wAnim_playerWalk_1_Active: db
+    wAnim_player_left_Current: db
+    wAnim_player_right_Current: db
 
 

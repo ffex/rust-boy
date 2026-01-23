@@ -26,6 +26,9 @@ pub(crate) struct CompositeSpriteData {
     pub animation_names: Vec<String>,
 }
 
+/// No animation active (255 = disabled)
+pub const ANIM_DISABLED: u8 = 255;
+
 /// Internal sprite data
 #[derive(Debug, Clone)]
 pub(crate) struct SpriteData {
@@ -37,6 +40,7 @@ pub(crate) struct SpriteData {
     pub tile_index: u8,
     pub flags: u8,
     pub animations: Vec<Animation>,
+    pub initial_animation: u8, // Index of initially active animation, or ANIM_DISABLED
 }
 
 /// Manages sprites with automatic tile allocation and OAM handling
@@ -88,6 +92,7 @@ impl SpriteManager {
                 tile_index,
                 flags,
                 animations: Vec::new(),
+                initial_animation: ANIM_DISABLED, // No animation by default
             },
         );
 
@@ -106,11 +111,12 @@ impl SpriteManager {
         self.sprites.get(&id)
     }
 
-    /// Add an animation to a sprite
+    /// Add an animation to a sprite (8x8 mode, frame_step=1)
     /// - `name`: Animation name (used for label generation)
     /// - `start_frame`: Relative start frame index (e.g., 0)
     /// - `end_frame`: Relative end frame index (e.g., 6)
     /// - `anim_type`: Type of animation (Loop, PingPong, Once)
+    /// Returns the animation index within this sprite
     pub fn add_animation(
         &mut self,
         sprite_id: SpriteId,
@@ -118,8 +124,24 @@ impl SpriteManager {
         start_frame: u8,
         end_frame: u8,
         anim_type: super::animations::AnimationType,
-    ) {
+    ) -> u8 {
+        self.add_animation_with_step(sprite_id, name, start_frame, end_frame, anim_type, 1)
+    }
+
+    /// Add an animation to a sprite with custom frame step
+    /// Use frame_step=2 for 8x16 sprites
+    /// Returns the animation index within this sprite
+    pub fn add_animation_with_step(
+        &mut self,
+        sprite_id: SpriteId,
+        name: &str,
+        start_frame: u8,
+        end_frame: u8,
+        anim_type: super::animations::AnimationType,
+        frame_step: u8,
+    ) -> u8 {
         if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
+            let index = sprite.animations.len() as u8;
             let animation = Animation {
                 name: name.to_string(),
                 oam_index: sprite.oam_index,
@@ -127,58 +149,72 @@ impl SpriteManager {
                 start_frame,
                 end_frame,
                 anim_type,
-                initially_enabled: true,
+                index,
+                frame_step,
             };
             sprite.animations.push(animation);
+            index
+        } else {
+            0
         }
     }
 
-    /// Set whether an animation should start enabled or disabled
-    /// Call this after add_animation to configure the initial state
-    pub fn set_animation_initial_state(&mut self, name: &str, enabled: bool) {
-        for sprite in self.sprites.values_mut() {
-            for animation in &mut sprite.animations {
-                if animation.name == name {
-                    animation.initially_enabled = enabled;
+    /// Set the initial animation for a sprite by animation index
+    /// Use ANIM_DISABLED (255) to start with no animation
+    pub fn set_initial_animation(&mut self, sprite_id: SpriteId, animation_index: u8) {
+        if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
+            sprite.initial_animation = animation_index;
+        }
+    }
+
+    /// Set the initial animation for a sprite by animation name
+    pub fn set_initial_animation_by_name(&mut self, sprite_id: SpriteId, name: &str) {
+        if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
+            for (i, anim) in sprite.animations.iter().enumerate() {
+                if anim.name == name {
+                    sprite.initial_animation = i as u8;
                     return;
                 }
             }
         }
     }
 
-    /// Generate code to enable an animation
-    /// Sets wAnim_[name]_Active to 1
-    pub fn enable_animation(&self, name: &str) -> Vec<Instr> {
+    /// Generate code to enable an animation by index for a sprite
+    /// Sets wAnim_[sprite_name]_Current to the animation index
+    pub fn enable_animation(&self, sprite_id: SpriteId, animation_index: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        let var_name = format!("wAnim_{}_Active", name);
 
-        asm.ld_a(1);
-        asm.ld_addr_def_a(&var_name);
+        if let Some(sprite) = self.sprites.get(&sprite_id) {
+            let var_name = format!("wAnim_{}_Current", sprite.name);
+            asm.ld_a(animation_index);
+            asm.ld_addr_def_a(&var_name);
+        }
 
         asm.get_main_instrs()
     }
 
-    /// Generate code to disable an animation
-    /// Sets wAnim_[name]_Active to 0
-    pub fn disable_animation(&self, name: &str) -> Vec<Instr> {
-        let mut asm = Asm::new();
-        let var_name = format!("wAnim_{}_Active", name);
-
-        asm.ld_a(0);
-        asm.ld_addr_def_a(&var_name);
-
-        asm.get_main_instrs()
+    /// Generate code to enable an animation by name for a sprite
+    pub fn enable_animation_by_name(&self, sprite_id: SpriteId, name: &str) -> Vec<Instr> {
+        if let Some(sprite) = self.sprites.get(&sprite_id) {
+            for (i, anim) in sprite.animations.iter().enumerate() {
+                if anim.name == name {
+                    return self.enable_animation(sprite_id, i as u8);
+                }
+            }
+        }
+        Vec::new()
     }
 
-    /// Generate code to toggle an animation
-    /// XORs wAnim_[name]_Active with 1
-    pub fn toggle_animation(&self, name: &str) -> Vec<Instr> {
+    /// Generate code to disable all animations for a sprite
+    /// Sets wAnim_[sprite_name]_Current to ANIM_DISABLED (255)
+    pub fn disable_animation(&self, sprite_id: SpriteId) -> Vec<Instr> {
         let mut asm = Asm::new();
-        let var_name = format!("wAnim_{}_Active", name);
 
-        asm.ld_a_addr_def(&var_name);
-        asm.xor(Operand::Reg(Register::A), Operand::Imm(1));
-        asm.ld_addr_def_a(&var_name);
+        if let Some(sprite) = self.sprites.get(&sprite_id) {
+            let var_name = format!("wAnim_{}_Current", sprite.name);
+            asm.ld_a(ANIM_DISABLED);
+            asm.ld_addr_def_a(&var_name);
+        }
 
         asm.get_main_instrs()
     }
@@ -214,6 +250,8 @@ impl SpriteManager {
 
     /// Add an animation to all sprites in a composite
     /// The animation name will be used as a prefix, with each sprite getting a unique suffix
+    /// Uses frame_step=2 for 8x16 sprite mode
+    /// Returns the animation index (same for all sprites in the composite)
     pub fn add_composite_animation(
         &mut self,
         composite_id: CompositeSpriteId,
@@ -221,70 +259,70 @@ impl SpriteManager {
         start_frame: u8,
         end_frame: u8,
         anim_type: super::animations::AnimationType,
-    ) {
+    ) -> u8 {
+        let mut anim_index = 0u8;
+
         if let Some(composite) = self.composite_sprites.get_mut(&composite_id) {
             let sprite_ids = composite.sprites.clone();
             composite.animation_names.push(name.to_string());
 
             for (i, sprite_id) in sprite_ids.iter().enumerate() {
                 let anim_name = format!("{}_{}", name, i);
-                self.add_animation(
+                // Use frame_step=2 for composite sprites (8x16 mode)
+                anim_index = self.add_animation_with_step(
                     *sprite_id,
                     &anim_name,
                     start_frame,
                     end_frame,
                     anim_type.clone(),
+                    2,
                 );
             }
         }
+
+        anim_index
     }
 
-    /// Set whether a composite animation should start enabled or disabled
-    pub fn set_composite_animation_initial_state(
+    /// Set the initial animation for all sprites in a composite by animation index
+    pub fn set_composite_initial_animation(
         &mut self,
         composite_id: CompositeSpriteId,
-        name: &str,
-        enabled: bool,
+        animation_index: u8,
     ) {
         if let Some(composite) = self.composite_sprites.get(&composite_id) {
-            let sprite_count = composite.sprites.len();
-            for i in 0..sprite_count {
-                let anim_name = format!("{}_{}", name, i);
-                self.set_animation_initial_state(&anim_name, enabled);
+            let sprite_ids = composite.sprites.clone();
+            for sprite_id in sprite_ids {
+                self.set_initial_animation(sprite_id, animation_index);
             }
         }
     }
 
-    /// Generate code to enable all animations in a composite sprite
+    /// Generate code to enable a composite animation by index
+    /// Sets all sprites in the composite to the same animation index
     pub fn enable_composite_animation(
         &self,
         composite_id: CompositeSpriteId,
-        name: &str,
+        animation_index: u8,
     ) -> Vec<Instr> {
         let mut instrs = Vec::new();
 
         if let Some(composite) = self.composite_sprites.get(&composite_id) {
-            for i in 0..composite.sprites.len() {
-                let anim_name = format!("{}_{}", name, i);
-                instrs.extend(self.enable_animation(&anim_name));
+            for sprite_id in &composite.sprites {
+                instrs.extend(self.enable_animation(*sprite_id, animation_index));
             }
         }
 
         instrs
     }
 
-    /// Generate code to disable all animations in a composite sprite
-    pub fn disable_composite_animation(
-        &self,
-        composite_id: CompositeSpriteId,
-        name: &str,
-    ) -> Vec<Instr> {
+    /// Generate code to disable all animations for a composite sprite
+    /// Sets all sprites to ANIM_DISABLED (255)
+    pub fn disable_composite_animation(&self, composite_id: CompositeSpriteId) -> Vec<Instr> {
         let mut instrs = Vec::new();
 
         if let Some(composite) = self.composite_sprites.get(&composite_id) {
-            for i in 0..composite.sprites.len() {
-                let anim_name = format!("{}_{}", name, i);
-                instrs.extend(self.disable_animation(&anim_name));
+            for sprite_id in &composite.sprites {
+                instrs.extend(self.disable_animation(*sprite_id));
             }
         }
 
@@ -605,11 +643,11 @@ impl SpriteManager {
     }
 
     /// Generate the main loop animation code with frame-based timing
-    /// Uses wFrameCounter and wAnimDelay variables for non-blocking animation updates
+    /// Uses wFrameCounter for non-blocking animation updates
     /// - Increments frame counter each frame
     /// - Only updates animations when counter >= delay
     /// - Resets counter after animation update
-    /// - Checks wAnim_[name]_Active flag before calling each animation
+    /// - Checks wAnim_[sprite_name]_Current to call only the active animation
     pub(crate) fn generate_animation_calls(&self, delay_value: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
 
@@ -626,22 +664,39 @@ impl SpriteManager {
         asm.ld_a(0);
         asm.ld_addr_def_a("wFrameCounter");
 
-        // Call all animation functions (only if enabled)
+        // For each sprite, check its current animation index and call the right animation
         for sprite in self.sprites.values() {
+            if sprite.animations.is_empty() {
+                continue;
+            }
+
+            let current_var = format!("wAnim_{}_Current", sprite.name);
+            let sprite_end_label = format!(".animEnd_{}", sprite.name);
+
+            // Load current animation index
+            asm.ld_a_addr_def(&current_var);
+
+            // Check if disabled (255)
+            asm.cp_imm(ANIM_DISABLED);
+            asm.jr_cond(Condition::Z, &sprite_end_label);
+
+            // For each animation, check if it's the current one
             for animation in &sprite.animations {
                 let func_name = format!("Anim_{}", animation.name);
-                let enabled_var = format!("wAnim_{}_Active", animation.name);
                 let skip_label = format!(".skip_{}", animation.name);
 
-                // Check if animation is active
-                asm.ld_a_addr_def(&enabled_var);
-                asm.cp_imm(0);
-                asm.jr_cond(Condition::Z, &skip_label); // if disabled, skip
+                // Check if this animation index is selected
+                asm.cp_imm(animation.index);
+                asm.jr_cond(Condition::NZ, &skip_label);
 
+                // Call this animation
                 asm.call(&func_name);
+                asm.jr(&sprite_end_label);
 
                 asm.label(&skip_label);
             }
+
+            asm.label(&sprite_end_label);
         }
 
         asm.label("AnimEnd");
@@ -651,14 +706,14 @@ impl SpriteManager {
 
     /// Get list of animation variable names (for auto-creating variables)
     /// Returns (name, initial_value) pairs
+    /// Creates one variable per sprite: wAnim_[sprite_name]_Current
     pub(crate) fn get_animation_variables(&self) -> Vec<(String, u8)> {
         let mut vars = Vec::new();
 
         for sprite in self.sprites.values() {
-            for animation in &sprite.animations {
-                let var_name = format!("wAnim_{}_Active", animation.name);
-                let initial_value = if animation.initially_enabled { 1 } else { 0 };
-                vars.push((var_name, initial_value));
+            if !sprite.animations.is_empty() {
+                let var_name = format!("wAnim_{}_Current", sprite.name);
+                vars.push((var_name, sprite.initial_animation));
             }
         }
 

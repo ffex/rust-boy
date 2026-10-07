@@ -1,9 +1,21 @@
 use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 
+/// How an animation goes on after its last frame
+///
+/// The frames are `start_frame..=end_frame`. Each update shows the next frame; a sprite
+/// that shows none of the animation's frames (it was showing another animation, or its
+/// initial tile) starts again on the first frame.
 #[derive(Debug, Clone)]
 pub enum AnimationType {
+    /// After the last frame, start again on the first one: 0 1 2 3 0 1 2 3 ...
     Loop,
+    /// Play forward, then backward, and repeat; the first and last frames are shown
+    /// once per turn: 0 1 2 3 2 1 0 1 2 ... The direction is kept in a WRAM variable
+    /// per sprite, `wAnim_{sprite name}_Dir` (0 = forward, 1 = backward).
     PingPong,
+    /// Play the frames once, then stay on the last one: 0 1 2 3 3 3 ...
+    /// Enabling it again while the sprite shows its last frame does not replay it: the
+    /// sprite must show another tile first (e.g. another animation).
     Once,
 }
 
@@ -14,33 +26,71 @@ pub struct Animation {
     pub(crate) base_tile: u8,   // The sprite's base tile index in VRAM
     pub(crate) start_frame: u8, // Relative start frame (e.g., 0)
     pub(crate) end_frame: u8,   // Relative end frame (e.g., 6)
-    #[allow(dead_code)] // PingPong and Once are not implemented yet (B10)
     pub(crate) anim_type: AnimationType,
     pub(crate) index: u8, // Index of this animation within the sprite (0, 1, 2, ...)
     pub(crate) frame_step: u8, // Tile increment per frame (1 for 8x8, 2 for 8x16)
 }
 
 impl Animation {
-    pub(crate) fn generate_loop_func(&self) -> Vec<Instr> {
+    /// Whether this animation needs the sprite's direction variable
+    pub(crate) fn needs_direction(&self) -> bool {
+        matches!(self.anim_type, AnimationType::PingPong)
+    }
+
+    /// The body of the function that shows the next frame (without its label and `ret`)
+    ///
+    /// `direction_var` is the sprite's direction variable, used by `PingPong` only. Only
+    /// the register `a` and the flags are changed.
+    pub(crate) fn generate_func(&self, direction_var: &str) -> Vec<Instr> {
+        match self.anim_type {
+            AnimationType::Loop => self.generate_loop_func(),
+            AnimationType::PingPong => self.generate_ping_pong_func(direction_var),
+            AnimationType::Once => self.generate_once_func(),
+        }
+    }
+
+    /// OAM address of the sprite's tile index: byte 2 of its entry (Y, X, tile, flags)
+    fn oam_tile_addr(&self) -> String {
+        format!("_OAMRAM+{}", self.oam_index * 4 + 2)
+    }
+
+    /// Absolute tile indices of the first and last frames; frames are `frame_step` tiles
+    /// apart (2 for 8x16 sprites)
+    fn abs_frames(&self) -> (u8, u8) {
+        let abs_start = self.base_tile + (self.start_frame * self.frame_step);
+        let abs_end = self.base_tile + (self.end_frame * self.frame_step);
+        (abs_start, abs_end)
+    }
+
+    /// `a` = the next frame's tile
+    fn step_forward(&self, asm: &mut Asm) {
+        if self.frame_step == 1 {
+            asm.inc(Operand::Reg(Register::A));
+        } else {
+            asm.add(Operand::Reg(Register::A), Operand::Imm(self.frame_step));
+        }
+    }
+
+    /// `a` = the previous frame's tile
+    fn step_backward(&self, asm: &mut Asm) {
+        if self.frame_step == 1 {
+            asm.dec(Operand::Reg(Register::A));
+        } else {
+            asm.sub(Operand::Reg(Register::A), Operand::Imm(self.frame_step));
+        }
+    }
+
+    fn generate_loop_func(&self) -> Vec<Instr> {
         let mut asm = Asm::new();
 
         let label_store = format!(".store_{}", self.name);
-        // OAM tile index is at offset: oam_index * 4 + 2 (Y=+0, X=+1, Tile=+2, Flags=+3)
-        let oam_tile_addr = format!("_OAMRAM+{}", self.oam_index * 4 + 2);
-
-        // Calculate absolute tile indices from base + relative frame
-        // For 8x16 sprites, frames are spaced by 2 tiles (frame_step = 2)
-        let abs_start = self.base_tile + (self.start_frame * self.frame_step);
-        let abs_end = self.base_tile + (self.end_frame * self.frame_step);
+        let oam_tile_addr = self.oam_tile_addr();
+        let (abs_start, abs_end) = self.abs_frames();
 
         asm.ld_a_addr_def(&oam_tile_addr); // load current sprite tile index
 
         // Increment by frame_step (1 for 8x8, 2 for 8x16)
-        if self.frame_step == 1 {
-            asm.inc_label("a");
-        } else {
-            asm.add(Operand::Reg(Register::A), Operand::Imm(self.frame_step));
-        }
+        self.step_forward(&mut asm);
 
         // Check if tile index is within valid range [abs_start, abs_end]
         // If A < abs_start, reset (Carry set after cp means A < value)
@@ -57,6 +107,92 @@ impl Animation {
 
         asm.label(&label_store);
         asm.ld_addr_def_a(&oam_tile_addr); // store updated sprite tile index
+
+        asm.get_main_instrs()
+    }
+
+    /// Forward to the last frame, which stays (B10)
+    fn generate_once_func(&self) -> Vec<Instr> {
+        let mut asm = Asm::new();
+
+        let label_reset = format!(".reset_{}", self.name);
+        let label_store = format!(".store_{}", self.name);
+        let oam_tile_addr = self.oam_tile_addr();
+        let (abs_start, abs_end) = self.abs_frames();
+
+        asm.ld_a_addr_def(&oam_tile_addr);
+        asm.cp_imm(abs_start);
+        asm.jr_cond(Condition::C, &label_reset); // before the first frame: start
+        asm.cp_imm(abs_end);
+        asm.ret_cond(Condition::Z); // on the last frame: stay there
+        asm.jr_cond(Condition::NC, &label_reset); // past the last frame: start
+        self.step_forward(&mut asm);
+        asm.jr(&label_store);
+
+        asm.label(&label_reset);
+        asm.ld_a(abs_start);
+        asm.label(&label_store);
+        asm.ld_addr_def_a(&oam_tile_addr);
+
+        asm.get_main_instrs()
+    }
+
+    /// Forward to the last frame, backward to the first one, and again (B10)
+    ///
+    /// The direction is only followed between the two ends: the first frame always goes
+    /// forward and the last one backward, so the ends are shown once per turn and a
+    /// direction left over from another animation does no harm.
+    fn generate_ping_pong_func(&self, direction_var: &str) -> Vec<Instr> {
+        let mut asm = Asm::new();
+
+        let oam_tile_addr = self.oam_tile_addr();
+        let (abs_start, abs_end) = self.abs_frames();
+
+        if abs_start == abs_end {
+            // One frame: nowhere to go
+            asm.ld_a(abs_start);
+            asm.ld_addr_def_a(&oam_tile_addr);
+            return asm.get_main_instrs();
+        }
+
+        let label = |stem: &str| format!(".{}_{}", stem, self.name);
+        let (turn_forward, forward) = (label("turn_forward"), label("forward"));
+        let (turn_backward, backward) = (label("turn_backward"), label("backward"));
+        let (reset, store) = (label("reset"), label("store"));
+
+        asm.ld_a_addr_def(&oam_tile_addr);
+        asm.cp_imm(abs_start);
+        asm.jr_cond(Condition::C, &reset); // before the first frame: start
+        asm.jr_cond(Condition::Z, &turn_forward); // on the first frame: go forward
+        asm.cp_imm(abs_end);
+        asm.jr_cond(Condition::Z, &turn_backward); // on the last frame: go back
+        asm.jr_cond(Condition::NC, &reset); // past the last frame: start
+        // Between the two ends: keep going in the same direction
+        asm.ld_a_addr_def(direction_var);
+        asm.and(Operand::Reg(Register::A));
+        asm.jr_cond(Condition::NZ, &backward);
+        asm.jr(&forward);
+
+        asm.label(&turn_forward);
+        asm.ld_a(0);
+        asm.ld_addr_def_a(direction_var);
+        asm.label(&forward);
+        asm.ld_a_addr_def(&oam_tile_addr);
+        self.step_forward(&mut asm);
+        asm.jr(&store);
+
+        asm.label(&turn_backward);
+        asm.ld_a(1);
+        asm.ld_addr_def_a(direction_var);
+        asm.label(&backward);
+        asm.ld_a_addr_def(&oam_tile_addr);
+        self.step_backward(&mut asm);
+        asm.jr(&store);
+
+        asm.label(&reset);
+        asm.ld_a(abs_start);
+        asm.label(&store);
+        asm.ld_addr_def_a(&oam_tile_addr);
 
         asm.get_main_instrs()
     }

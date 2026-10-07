@@ -965,6 +965,7 @@ impl Emittable for IfCall {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gb_asm::test_cpu::TestCpu;
 
     #[test]
     fn test_emittable_vec() {
@@ -1098,65 +1099,11 @@ mod tests {
         assert_eq!(counter, 3);
     }
 
-    /// Runs the straight-line code emitted by `If` on a tiny CPU model
-    /// (registers A, B, C and the Z/C flags) and returns register C.
+    /// Runs the code emitted by `If` on the test CPU and returns register C
     fn run(instrs: &[Instr]) -> u8 {
-        let label_pos = |name: &str| {
-            instrs
-                .iter()
-                .position(|i| matches!(i, Instr::Label { name: n } if n == name))
-                .unwrap_or_else(|| panic!("label {} not found", name))
-        };
-        let (mut a, mut b, mut c) = (0u8, 0u8, 0u8);
-        let (mut zero, mut carry) = (false, false);
-        let mut pc = 0;
-        while pc < instrs.len() {
-            match &instrs[pc] {
-                Instr::Ld {
-                    dst: Operand::Reg(Register::A),
-                    src: Operand::Imm(v),
-                } => a = *v,
-                Instr::Ld {
-                    dst: Operand::Reg(Register::C),
-                    src: Operand::Imm(v),
-                } => c = *v,
-                Instr::Ld {
-                    dst: Operand::Reg(Register::B),
-                    src: Operand::Reg(Register::A),
-                } => b = a,
-                Instr::Cp {
-                    operand: Operand::Reg(Register::B),
-                } => {
-                    zero = a == b;
-                    carry = a < b;
-                }
-                Instr::Jp {
-                    target: JumpTarget::Label(label),
-                } => {
-                    pc = label_pos(label);
-                    continue;
-                }
-                Instr::JpCond {
-                    condition,
-                    target: JumpTarget::Label(label),
-                } => {
-                    let taken = match condition {
-                        AsmCondition::Z => zero,
-                        AsmCondition::NZ => !zero,
-                        AsmCondition::C => carry,
-                        AsmCondition::NC => !carry,
-                    };
-                    if taken {
-                        pc = label_pos(label);
-                        continue;
-                    }
-                }
-                Instr::Label { .. } => {}
-                other => panic!("instruction not supported by the test CPU: {}", other),
-            }
-            pc += 1;
-        }
-        c
+        let mut cpu = TestCpu::default();
+        cpu.run(instrs);
+        cpu.c
     }
 
     fn load_a(value: u8) -> Vec<Instr> {

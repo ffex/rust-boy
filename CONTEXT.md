@@ -44,9 +44,9 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 38 unit tests and the README examples as doctests pass (was: 8 type errors, fixed — [B1](#b1)) |
-| bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); sprites still render wrong until [B4](#b4) |
-| bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)) |
+| `cargo test` | ✅ 47 unit tests and the README examples as doctests pass (was: 8 type errors, fixed — [B1](#b1)) |
+| bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
+| bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ⚠️ assembles, but the 16×16 player collapses at screen edges ([B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
@@ -84,7 +84,7 @@ rgbfix -v -p 0xFF main.gb
 2. **Constants**: `DEF name EQU value` for each `define_const*`.
 3. **Init**: `EntryPoint:` → `call WaitVBlank` → LCD off → `Memcopy` every tile/tilemap blob to VRAM →
    clear OAM + write initial sprites (only if sprites exist) → **user `init()` code** → create animation
-   variables → **variable initialisation** → LCD on (`LCDCF_ON|BGON|OBJON|OBJ16`) → `rBGP`, `rOBP0` = `%11100100`.
+   variables → **variable initialisation** → LCD on (`LCDCF_ON|BGON|OBJON` + `OBJ8`, or `OBJ16` after `set_sprite_size(Size8x16)`) → `rBGP`, `rOBP0` = `%11100100`.
 4. **MainLoop**: `Main:` → `call WaitNotVBlank` → `call WaitVBlank` → animation dispatcher → user main-loop
    code (incl. `UpdateKeys` + key checks) → `jp Main`.
 5. **Main (legacy)**: whatever was written through `RustBoy::raw()` (unreachable unless labelled, [B15](#b15)).
@@ -108,8 +108,8 @@ The problems are where each layer reaches across the line:
    fail only in rgbasm. Instruction shapes are inconsistent (`And`/`Cp` take one operand, `Or`/`Xor`/`Sub` two;
    `AdcA` vs `Adc`).
 3. **Hardware facts are hardcoded in every layer.** `_OAMRAM+{id*4+1}` strings in both sprite managers,
-   `$9800` in three places, VRAM bases in `tiles.rs`, LCDC flags that disagree between layers
-   (OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) exist but are unused.
+   `$9800` in three places, VRAM bases in `tiles.rs`, LCDC flags written as strings in each layer
+   (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) exist but are unused.
 4. **L3 re-implements L2 instead of using it.** `src/rust_boy/functions.rs:152-311` duplicates Memcopy,
    WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel from `gb_std`, and they have already
    diverged ([B23](#b23)). L2 also contains its own `SpriteManager` that duplicates L3's.
@@ -177,6 +177,13 @@ initial value and section kept), a different type panics; the example no longer 
 8×8 sprites draw wrong: in `unbricked_rustboy` Paddle (tile 0) and Ball (tile 1) both draw tiles 0+1;
 `coin-anim`'s 8×8 frames show stacked pairs. *Fix:* sprite size in a `RustBoyConfig`; align tile indices
 to even numbers in 8×16 mode.
+**Status: fixed** on `refactor-p1-sprite-size`: `RustBoy::set_sprite_size(SpriteSize::{Size8x8, Size8x16})`,
+**8×8 by default** (the hardware default); `build()` writes `LCDCF_OBJ8` or `LCDCF_OBJ16`. The size is set
+once, before the first sprite (changing it later panics), so sizes are never mixed. In 8×16 mode every tile
+index is even by construction: allocation starts at 0, a sprite with an odd tile count panics, `add_animation`
+steps two tiles per frame and an odd `frame_step` panics (padding instead would draw a stray tile as the
+bottom half). `add_sprite_16x16` panics in 8×8 mode. `fosdem` opts into 8×16 (byte-identical asm);
+`unbricked_rustboy` and `coin-anim` now emit `LCDCF_OBJ8` (their only change), checked in an emulator.
 
 #### B5
 **Two-operand `If` comparisons are inverted.** `If::emit` (`src/gb_std/flow/flow_if.rs:287-327`) runs
@@ -413,7 +420,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | Everything in one `ROM0[$100]` section fails above 16 KB | Tile data is copied to VRAM anyway; ROM banking is a feature (Phase 3: MBC). |
 | `If` comparisons are unsigned while `i8` vars exist | Native `cp` semantics, documented in `flow_if.rs:8-15`; only a doc note ([B29](#b29)). |
 | `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20). |
-| 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes → part of [B4](#b4). |
+| 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
 | `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |
 
@@ -424,7 +431,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no shadow OAM/DMA, no scrolling, no window layer, no palette API/fades, 8×16 forced, no
+- **Graphics:** no shadow OAM/DMA, no scrolling, no window layer, no palette API/fades, no
   metasprites beyond 16×16, no text/numbers, no `$9C00` map.
 - **Animation:** only `Loop` works; global speed only; no events.
 - **Engine:** polling instead of VBlank interrupt + `halt`; no interrupts/timers, scenes, RNG, collision,

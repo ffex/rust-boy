@@ -38,10 +38,13 @@ A sprite that moves with the D-pad:
 
 ```rust
 use rust_boy::gb_std::inputs::PadButton;
-use rust_boy::rust_boy::{InputManager, RustBoy, TileSource};
+use rust_boy::rust_boy::{InputManager, RustBoy, SpriteSize, TileSource};
 
 fn main() {
     let mut gb = RustBoy::new();
+
+    // Sprites are 8x8 by default; choose 8x16 before adding any sprite
+    gb.set_sprite_size(SpriteSize::Size8x16);
 
     // An 8x16 sprite (two tiles from a .2bpp file) at screen position (80, 72)
     let player = gb.add_sprite("Player", TileSource::from_file("player.2bpp", 2), 80, 72, 0);
@@ -129,11 +132,12 @@ Open them in any Game Boy emulator.
   `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines.
   Not yet: `push`/`pop`, `halt`, `di`/`ei`, `reti`, `sbc`, `bit`/`set`/`res`, rotates and most shifts, `cpl`, …
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and a tilemap, WRAM variables
-  (`u8`/`i8`/`u16`/`i16`), OAM sprites and 16×16 composite sprites, looping animations, joypad bindings,
-  and builtin routines that are included only when used. The output is deterministic: things appear in the
-  order you created them.
-- **Known limits:** sprites are always 8×16, only looping animations work, there is no sound yet, and
-  everything lives in one ROM bank. The full list, with fixes planned, is in [CONTEXT.md](CONTEXT.md).
+  (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
+  (in 8×16 mode), looping animations, joypad bindings, and builtin routines that are included only when
+  used. The output is deterministic: things appear in the order you created them.
+- **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), only looping animations work,
+  there is no sound yet, and everything lives in one ROM bank. The full list, with fixes planned, is in
+  [CONTEXT.md](CONTEXT.md).
 
 ## Project structure
 

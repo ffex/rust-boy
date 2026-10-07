@@ -1,10 +1,12 @@
 //! A tiny model of the Game Boy CPU for unit tests.
 //!
 //! It runs the [`Instr`]s a routine emits, so a test can check what the generated code
-//! does rather than how it looks. It models the 8-bit registers, the Z and C flags and a
-//! memory addressed by symbol (`[wCurKeys]`, `[_OAMRAM+1]`, …). Jumps go to labels in the
-//! same instruction list, and execution ends when it runs past the last instruction.
-//! Anything it does not model panics, so a test never passes by skipping code.
+//! does rather than how it looks. It models the 8-bit registers, the Z and C flags, a
+//! memory addressed by symbol (`[wCurKeys]`, `[_OAMRAM+1]`, …) and symbolic constants
+//! (`PADF_LEFT`). Jumps go to labels in the same instruction list, and execution ends
+//! when it runs past the last instruction. Labels are matched by name only: RGBDS label
+//! scopes are checked by `label_check`. Anything it does not model panics, so a test
+//! never passes by skipping code.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +25,9 @@ pub(crate) struct TestCpu {
     pub carry: bool,
     /// Memory accessed through `[symbol]` operands; reading a symbol never written panics
     pub mem: BTreeMap<String, u8>,
+    /// Values of the symbols used as immediates (`and PADF_LEFT`); reading one that is
+    /// not set panics
+    pub consts: BTreeMap<String, u8>,
 }
 
 impl TestCpu {
@@ -75,6 +80,11 @@ impl TestCpu {
                 Instr::Cp { operand } => {
                     let value = self.read(operand);
                     self.compare(value);
+                }
+                Instr::And { operand } => {
+                    self.a &= self.read(operand);
+                    self.zero = self.a == 0;
+                    self.carry = false;
                 }
                 Instr::Jp { target: t } | Instr::Jr { target: t } => {
                     pc = target(t);
@@ -133,6 +143,10 @@ impl TestCpu {
                 .mem
                 .get(symbol)
                 .unwrap_or_else(|| panic!("read of [{}], which was never written", symbol)),
+            Operand::Label(symbol) => *self
+                .consts
+                .get(symbol)
+                .unwrap_or_else(|| panic!("constant {} not set in the test CPU", symbol)),
             other => panic!("operand {} not supported by the test CPU", other),
         }
     }

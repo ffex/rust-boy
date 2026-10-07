@@ -29,6 +29,12 @@ pub enum Chunk {
     Data,
 }
 
+impl Default for Asm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Asm {
     pub fn new() -> Self {
         Asm {
@@ -47,7 +53,7 @@ impl Asm {
     pub fn emit(&mut self, instr: Instr) -> &mut Self {
         self.chunks
             .entry(self.current_chunk)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(instr);
         self
     }
@@ -56,7 +62,7 @@ impl Asm {
     pub fn emit_all(&mut self, instrs: Vec<Instr>) -> &mut Self {
         self.chunks
             .entry(self.current_chunk)
-            .or_insert_with(Vec::new)
+            .or_default()
             .extend(instrs);
         self
     }

@@ -14,6 +14,7 @@ pub struct Animation {
     pub(crate) base_tile: u8,   // The sprite's base tile index in VRAM
     pub(crate) start_frame: u8, // Relative start frame (e.g., 0)
     pub(crate) end_frame: u8,   // Relative end frame (e.g., 6)
+    #[allow(dead_code)] // PingPong and Once are not implemented yet (B10)
     pub(crate) anim_type: AnimationType,
     pub(crate) index: u8, // Index of this animation within the sprite (0, 1, 2, ...)
     pub(crate) frame_step: u8, // Tile increment per frame (1 for 8x8, 2 for 8x16)

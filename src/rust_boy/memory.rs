@@ -32,12 +32,16 @@ impl MemoryRegion {
 }
 
 /// Allocator for tracking memory usage in a region
+///
+/// Not used yet: the tile/variable managers will allocate through it (Task.md Phase 2).
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MemoryAllocator {
     region: MemoryRegion,
     next_address: u16,
 }
 
+#[allow(dead_code)]
 impl MemoryAllocator {
     /// Create a new allocator for the given region
     pub fn new(region: MemoryRegion) -> Self {

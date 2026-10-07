@@ -43,7 +43,7 @@ rgbfix -v -p 0xFF main.gb
 
 | Check | Status |
 |---|---|
-| `cargo build --lib` | ✅ builds, 10 warnings |
+| `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
 | `cargo test` | ✅ 28 tests pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); sprites still render wrong until [B4](#b4) |
 | bin `unbricked_rustboy` | ❌ compiles, but rgbasm fails: "`wCurKeys` already defined" ([B3](#b3)), confirmed with RGBDS 1.0.4 |

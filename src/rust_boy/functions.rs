@@ -81,11 +81,6 @@ impl FunctionRegistry {
         self.used_builtins.insert(func);
     }
 
-    /// Check if a builtin function is used
-    pub fn is_used(&self, func: BuiltinFunction) -> bool {
-        self.used_builtins.contains(&func)
-    }
-
     /// Register a user-defined function
     ///
     /// Registering the same name again replaces the body and keeps its position.

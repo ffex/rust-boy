@@ -3,7 +3,7 @@
 #
 # Usage: scripts/assemble-examples.sh
 # Needs rgbasm, rgblink and rgbfix (RGBDS >= 0.9) on PATH.
-# Output: target/examples/<bin>/main.{asm,o,gb}
+# Output: target/examples/<bin>/main.{asm,o,gb} (under $CARGO_TARGET_DIR when it is set)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,7 +18,7 @@ examples=(
     "coin-anim:examples/coin-anim"
 )
 
-out_root="target/examples"
+out_root="${CARGO_TARGET_DIR:-target}/examples"
 failed=()
 
 cargo build --quiet --bins

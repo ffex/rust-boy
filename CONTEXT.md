@@ -323,6 +323,7 @@ clear message.
 `nop` + `jp EntryPoint` and no `ds $150 - @, 0` (`src/bin/basic_usage.rs:8`, `README.md:53`). Once the floating
 ROM0 section grows past 256 bytes, rgblink can place it at `$0104`, where `rgbfix` overwrites the cartridge
 header. (`RustBoy` itself is correct: `src/gb_std/utility.rs:5-7`.)
+**Status: fixed** on `refactor-p0-readme`: both now emit `ds $150 - @, 0`.
 
 #### B22
 **`get_pivot` silently clamps.** `u8::try_from(16 + y_offset).unwrap_or(0)` (`src/rust_boy/sprites.rs:570, 576`;
@@ -380,6 +381,9 @@ background-only program shows garbage objects on real hardware.
   no longer exists; "Current branch: `gbz80-std`" (`:153`) is stale; Basic Example lacks padding ([B21](#b21)).
 - `If*` comparisons are **unsigned** (native `cp` semantics) — correct, but worth documenting next to the
   `i8` variable API.
+
+**Status: fixed** on `refactor-p0-readme` (README rewritten and used as the crate docs, so its examples are
+compiled; `inputs.rs` comment and `RustBoy::call` example corrected; the `If` docs say "unsigned" since B5).
 
 #### B30
 **The `documentations` branch contradicts the code** (its `src/` is identical to `main`, so these are doc bugs):

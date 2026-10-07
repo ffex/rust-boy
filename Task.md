@@ -40,9 +40,10 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 - [x] Untrack the 12 committed `*.gb` / `*.o` files, extend `.gitignore`; keep the example `.asm` files as
       golden fixtures and keep `.2bpp` / `.png` / `.aseprite` assets (branch `refactor-p0-repo-hygiene`)
 - [x] Delete `examples/if_example.rs.old` (branch `refactor-p0-repo-hygiene`)
-- [ ] README refresh — [B29](CONTEXT.md#b29), [B21](CONTEXT.md#b21): bin list (6), `rust_boy` quick start, project tree,
+- [x] README refresh — [B29](CONTEXT.md#b29), [B21](CONTEXT.md#b21): bin list (6), `rust_boy` quick start, project tree,
       remove "complete instruction set" / "compile-time guarantees" claims, drop `rgbasm -L`, state the
-      RGBDS version, remove "Current branch: gbz80-std"
+      RGBDS version, remove "Current branch: gbz80-std" (branch `refactor-p0-readme`); the README is also the crate docs, so its
+      Rust examples are compiled as doctests
 - [x] Branch cleanup — the 7 branches marked *Delete* in [Branches](#branches) were deleted by the
       maintainer on 2026-10-07
 - [ ] *(optional)* Mirror this file into GitHub issues + milestones
@@ -76,7 +77,7 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] Sprite and tile counters can desync — [B18](CONTEXT.md#b18)
 - [ ] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19)
 - [ ] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20)
-- [ ] `basic_usage` + README header without `ds $150 - @, 0` — [B21](CONTEXT.md#b21)
+- [x] `basic_usage` + README header without `ds $150 - @, 0` — [B21](CONTEXT.md#b21) (branch `refactor-p0-readme`)
 - [ ] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22)
 - [ ] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
 - [ ] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
@@ -84,7 +85,7 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] Builtins reached through `Call`/`IfCall`/`define_function_from` not auto-included → link error — [B26](CONTEXT.md#b26)
 - [ ] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
 - [ ] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
-- [ ] Code-level doc errors (`inputs.rs` pressed bit, `RustBoy::call` example E0499, unsigned `If` note) — [B29](CONTEXT.md#b29)
+- [x] Code-level doc errors (`inputs.rs` pressed bit, `RustBoy::call` example E0499, unsigned `If` note) — [B29](CONTEXT.md#b29) (branch `refactor-p0-readme`)
 
 ## Phase 2 — Refactor the levels
 

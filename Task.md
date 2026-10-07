@@ -32,8 +32,9 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
       and **required** `rgbasm` + `rgblink` of every example's output. Pin the RGBDS version (≥ 0.9; the
       committed objects are RGBDS 1.0).
 - [x] One in-crate `hardware.inc` (v4.x) instead of the 6 copies under `examples/` — now `include/hardware.inc` (branch `refactor-p0-repo-hygiene`)
-- [ ] Fix the 10 compiler warnings (unused `MemoryAllocator`, `needs_special_handling`, `is_used`, unused
-      import `JumpTarget`, private `SpriteData` leaking through `SpriteManager::get`, dead fields)
+- [x] Fix the 10 compiler warnings (unused `MemoryAllocator`, `needs_special_handling`, `is_used`, unused
+      import `JumpTarget`, private `SpriteData` leaking through `SpriteManager::get`, dead fields), and
+      the clippy lints: `cargo clippy --all-targets -- -D warnings` passes (branch `refactor-p0-warnings`)
 - [x] `Cargo.toml`: `rust-version = "1.85"` (edition 2024), description, license, repository (branch `refactor-p0-repo-hygiene`)
 - [x] Untrack the 12 committed `*.gb` / `*.o` files, extend `.gitignore`; keep the example `.asm` files as
       golden fixtures and keep `.2bpp` / `.png` / `.aseprite` assets (branch `refactor-p0-repo-hygiene`)

@@ -2,5 +2,12 @@
 name = "rust-boy"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "A Rust DSL that generates Game Boy assembly for RGBDS"
+license = "MIT"
+repository = "https://github.com/ffex/rust-boy"
+readme = "README.md"
+keywords = ["gameboy", "gamedev", "assembly", "rgbds", "codegen"]
+categories = ["game-development", "development-tools"]
 
 [dependencies]

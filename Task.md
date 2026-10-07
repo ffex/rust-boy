@@ -31,13 +31,13 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 - [ ] CI (GitHub Actions): `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, build all bins,
       and **required** `rgbasm` + `rgblink` of every example's output. Pin the RGBDS version (≥ 0.9; the
       committed objects are RGBDS 1.0).
-- [ ] One in-crate `hardware.inc` (v4.x) instead of the 6 copies under `examples/`
+- [x] One in-crate `hardware.inc` (v4.x) instead of the 6 copies under `examples/` — now `include/hardware.inc` (branch `refactor-p0-repo-hygiene`)
 - [ ] Fix the 10 compiler warnings (unused `MemoryAllocator`, `needs_special_handling`, `is_used`, unused
       import `JumpTarget`, private `SpriteData` leaking through `SpriteManager::get`, dead fields)
-- [ ] `Cargo.toml`: `rust-version = "1.85"` (edition 2024), description, license, repository
-- [ ] Untrack the 12 committed `*.gb` / `*.o` files, extend `.gitignore`; keep the example `.asm` files as
-      golden fixtures and keep `.2bpp` / `.png` / `.aseprite` assets
-- [ ] Delete `examples/if_example.rs.old`
+- [x] `Cargo.toml`: `rust-version = "1.85"` (edition 2024), description, license, repository (branch `refactor-p0-repo-hygiene`)
+- [x] Untrack the 12 committed `*.gb` / `*.o` files, extend `.gitignore`; keep the example `.asm` files as
+      golden fixtures and keep `.2bpp` / `.png` / `.aseprite` assets (branch `refactor-p0-repo-hygiene`)
+- [x] Delete `examples/if_example.rs.old` (branch `refactor-p0-repo-hygiene`)
 - [ ] README refresh — [B29](CONTEXT.md#b29), [B21](CONTEXT.md#b21): bin list (6), `rust_boy` quick start, project tree,
       remove "complete instruction set" / "compile-time guarantees" claims, drop `rgbasm -L`, state the
       RGBDS version, remove "Current branch: gbz80-std"

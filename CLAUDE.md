@@ -31,11 +31,11 @@ cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbric
                                           #       unbricked_rustboy, fosdem, coin-anim
 ```
 
-Assembling generated output (RGBDS ≥ 0.9; `hardware.inc` v4.x and any `.2bpp` assets must be next to
-`main.asm` or on the include path with `-I`):
+Assembling generated output (RGBDS ≥ 0.9). `include/hardware.inc` (v4.x) and the example's `.2bpp` assets
+go on the include path with `-I`:
 
 ```bash
-rgbasm -o main.o main.asm      # note: no `-L`, it was removed in RGBDS 0.8
+rgbasm -I include -I examples/fosdem -o main.o main.asm   # no `-L`: it was removed in RGBDS 0.8
 rgblink -o main.gb main.o
 rgbfix -v -p 0xFF main.gb
 ```

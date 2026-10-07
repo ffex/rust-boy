@@ -50,7 +50,8 @@ fn main() {
     let player = gb.add_sprite("Player", TileSource::from_file("player.2bpp", 2), 80, 72, 0);
 
     // Move one pixel per frame while a direction is held.
-    // Limits are OAM coordinates: screen X + 8, screen Y + 16.
+    // Limits are OAM coordinates (screen X + 8, screen Y + 16) and are included: a move
+    // stops exactly on its limit, so here the sprite stays fully on screen.
     let mut inputs = InputManager::new();
     inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(player, 1, 8));
     inputs.on_press(PadButton::Right, gb.sprites.move_right_limit(player, 1, 160));

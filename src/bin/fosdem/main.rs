@@ -39,12 +39,13 @@ fn main() {
     gb.sprites
         .set_composite_initial_animation(player, ANIM_DISABLED);
 
-    // Input handling
+    // Input handling. Limits are OAM coordinates (screen x + 8, screen y + 16), included;
+    // the player moves as one block and its leading half stops on the limit
     let mut inputs = InputManager::new();
     inputs.on_press(
         PadButton::Left,
         [
-            gb.sprites.move_composite_left_limit(player, 1, 0),
+            gb.sprites.move_composite_left_limit(player, 1, 1),
             gb.sprites
                 .enable_composite_animation(player, anim_walk_left),
         ]
@@ -53,7 +54,7 @@ fn main() {
     inputs.on_press(
         PadButton::Right,
         [
-            gb.sprites.move_composite_right_limit(player, 1, 150),
+            gb.sprites.move_composite_right_limit(player, 1, 149),
             gb.sprites
                 .enable_composite_animation(player, anim_walk_right),
         ]
@@ -62,7 +63,7 @@ fn main() {
     inputs.on_press(
         PadButton::Up,
         [
-            gb.sprites.move_composite_up_limit(player, 1, 0),
+            gb.sprites.move_composite_up_limit(player, 1, 1),
             gb.sprites
                 .enable_composite_animation(player, anim_walk_back),
         ]
@@ -71,7 +72,7 @@ fn main() {
     inputs.on_press(
         PadButton::Down,
         [
-            gb.sprites.move_composite_down_limit(player, 1, 150),
+            gb.sprites.move_composite_down_limit(player, 1, 149),
             gb.sprites
                 .enable_composite_animation(player, anim_walk_front),
         ]

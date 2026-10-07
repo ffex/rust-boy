@@ -59,12 +59,14 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [x] Two-operand `If` compares right-vs-left; fix `If`, then both Unbricked examples (paddle bounce in
       `unbricked_std` never fires) — [B5](CONTEXT.md#b5) (branch `refactor-p1-if-semantics`; the left operand
       must not change `b`, now documented — a register-safe `If` is in Phase 2)
-- [ ] Composite 16×16 sprite collapses at screen edges (FOSDEM demo) — [B6](CONTEXT.md#b6)
+- [x] Composite 16×16 sprite collapses at screen edges (FOSDEM demo) — [B6](CONTEXT.md#b6)
+      (branch `refactor-p1-sprite-limits`: the leading sprite is tested, the others follow at their offsets)
 
 ### P1
 - [ ] Fixed global labels in reusable snippets (`check_key`, `move_*_limit`, gb_std `Sprite::move_*`) and
       global labels breaking `If` local-label scope — [B7](CONTEXT.md#b7)
-- [ ] `move_*_limit` stops only on exact equality → overshoot and wrap — [B8](CONTEXT.md#b8)
+- [x] `move_*_limit` stops only on exact equality → overshoot and wrap — [B8](CONTEXT.md#b8)
+      (branch `refactor-p1-sprite-limits`: carry compares; a move stops exactly on its limit, which is included)
 - [ ] `jr` out of range in the animation dispatcher (≥ 3 animated sprites) — [B9](CONTEXT.md#b9)
 - [ ] `AnimationType::PingPong` / `Once` silently behave as `Loop` — [B10](CONTEXT.md#b10)
 - [ ] `gb.init()` code overwritten by variable initialisation — [B11](CONTEXT.md#b11)

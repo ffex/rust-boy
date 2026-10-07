@@ -44,11 +44,11 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 47 unit tests and the README examples as doctests pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 51 unit tests and the README examples as doctests pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
-| bin `fosdem` | ⚠️ assembles, but the 16×16 player collapses at screen edges ([B6](#b6)) |
+| bin `fosdem` | ✅ assembles; the 16×16 player moves as one block and stops at its limits (it collapsed at screen edges, fixed — [B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4 |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
@@ -210,6 +210,12 @@ operand must not change `b` (documented; a register-safe `If` is planned in Phas
 going until it also reaches 1 → the character collapses to 8 px wide and stays so (visible in
 `examples/fosdem/main.asm:119-156`). *Fix:* test only the leading half and move all halves together (or
 offset each half's limit by its position in the composite).
+**Status: fixed** on `refactor-p1-sprite-limits`: a composite move tests only its leading sprite (the leftmost,
+rightmost, topmost or lowest one at creation; the first on a tie), clamps it as in [B8](#b8), then puts every
+other sprite at the offset from it that it was created with, so the composite moves as one block or not at all
+(and a split composite is put back together on the next move). `fosdem` keeps its stop positions (limits
+written as `1`/`149`, see B8); checked in an emulator (PyBoy): before, both halves ended at X 1, then 149;
+now the halves stay 8 px apart. Regression test `test_composite_moves_as_one_block`.
 
 ### P1
 
@@ -218,8 +224,9 @@ offset each half's limit by its position in the composite).
 - `check_key` → `CheckLeft` / `CheckLeftEnd` (`src/gb_std/inputs.rs:129-139`): two bindings on the same
   button → duplicate label.
 - `move_*_limit` → `Sprite{N}LeftLimitEnd` etc. (`src/rust_boy/sprites.rs:485, 505, 525, 545`): the same
-  move used twice (e.g. two buttons) → duplicate label.
-- `gb_std` `Sprite::move_*` → `Left`/`LeftEnd`, `LeftLimit`/`LeftLimitEnd`… with no sprite id
+  move used twice (e.g. two buttons) → duplicate label. Since [B8](#b8) each move also emits `…LimitStore`, and a
+  composite move uses its leading sprite's labels (the same as that sprite's own move).
+- `gb_std` `Sprite::move_*` → `Left`/`LeftEnd`, `LeftLimit`/`LeftLimitStore`/`LeftLimitEnd`… with no sprite id
   (`src/gb_std/graphics/sprites.rs:83-174`): two sprites → duplicate label.
 - Scope: a global label inside an `If` body (e.g. `If::eq(.., gb.sprites.move_left_limit(..))`) makes the
   `.end_if_N:` definition land under the new global scope while the `jp` referenced it under the old one →
@@ -232,6 +239,16 @@ offset each half's limit by its position in the composite).
 530, 550`; `src/gb_std/graphics/sprites.rs:132, 146, 160, 174`). With distance 2 from x=24 toward limit 15
 the sprite goes 22, 20, 18, 16, 14 … and wraps through 0/255. A start position already past the limit
 never stops. *Fix:* compare with carry (`jr c`/`jr nc`) and clamp.
+**Decision and status: fixed** on `refactor-p1-sprite-limits`. The limit is **included and the move clamps to
+it**: a step that would go past the limit stops exactly on it (so the sprite reaches the same edge at any
+speed), and a sprite already past the limit does not move in that direction (it is not pulled back either).
+The code is generated once, by `gb_std::graphics::sprites::move_coord_limit`, which both `Sprite::move_*_limit`
+(`gb_std`) and `SpriteManager::move_*_limit` (`rust_boy`) use: it works on `A = coord - limit` and tests the
+carry flag (`jp c`/`jp nc`), adding one label `…Store` next to `…End`. Before, the limit was the first position
+the sprite could not reach, so the examples' limits moved by one to keep their exact stop positions
+(Unbricked paddle `16`/`104`, was `15`/`105`; `fosdem` `1`/`149`, was `0`/`150`); the README quick-start limits
+were already written as included. Tests run the generated code on a CPU model (`gb_asm::test_cpu`, shared with
+the `If` test) for every start position.
 
 #### B9
 **`jr` out of range in the animation dispatcher.** `jr c, AnimEnd` (`src/rust_boy/sprites.rs:661`, label at

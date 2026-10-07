@@ -44,13 +44,14 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 79 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 98 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ✅ assembles; the 16×16 player moves as one block and stops at its limits (it collapsed at screen edges, fixed — [B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
 | Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
+| Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4 |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -283,12 +284,38 @@ the `If` test) for every start position.
 `:702`) jumps over the whole dispatch block: 5 bytes + 7 per animated sprite + 9 per animation. FOSDEM
 (2 sprites × 4 animations) = 91 bytes; **3 sprites × 4 animations = 134 bytes > 127** → rgbasm error.
 Two 16×16 animated characters are enough. *Fix:* `jp`, or a jump table.
+**Status: fixed** on `refactor-p1-animations`. Every jump whose distance grows with the number of sprites or
+animations is a `jp`: `jp c, AnimEnd`, a sprite's `jp z, .animEnd_{sprite}` (disabled) and `jp .animEnd_{sprite}`
+after each call (with 16 animations on one sprite these two were out of range too). The only `jr` left,
+`jr nz, .skip_{sprite}_{animation}`, always skips 6 bytes (`call` + `jp`). The dispatcher grows by 1 byte per
+`jp` (`fosdem` +11 bytes, `coin-anim` +3: their only change, same animation in an emulator). A jump table was not
+chosen: it needs `jp hl`, which the typed ISA does not have yet (Phase 2). Test
+`test_animation_dispatch_jumps_stay_in_range` checks every `jr` with `gb_asm::label_check::jr_range_errors`, which
+knows instruction sizes and agrees with RGBDS 1.0.4 (127 and -128 accepted, 128 and -129 rejected); with the old
+code it reports the offsets 285, 144 and 135 that rgblink reports for the same program.
 
 #### B10
 **`AnimationType::PingPong` and `::Once` are ignored.** `Animation.anim_type`
-(`src/rust_boy/animations.rs:17`) is never read; `generate_loop_func` (`:23-61`) always loops. Advertised in
+(`src/rust_boy/animations.rs:17` at `4601a5c`) was never read; `generate_loop_func` (`:23-61`) always looped. Advertised in
 the `add_animation` docs (`src/rust_boy/sprites.rs:118`) and in `docs/animations.md` (documentations branch).
 *Fix:* implement them (or remove the variants until implemented).
+**Status: fixed** on `refactor-p1-animations`, with the meaning `docs/animations.md` gives them. Each mode has its
+own function body (`Animation::generate_func`); `Loop` is unchanged.
+- `PingPong` plays forward, then backward, and repeats; the end frames are shown once per turn
+  (0 1 2 3 2 1 0 1 …). The direction is kept in a new WRAM variable `wAnim_{sprite}_Dir` (0 forward, 1 backward),
+  created only for a sprite that has a `PingPong` animation of two frames or more (so `fosdem` and `coin-anim` get none). The direction
+  is followed only between the two ends: the first frame always goes forward and the last one backward, so a
+  direction left over from another animation does no harm. A one-frame `PingPong` stays on its frame.
+- `Once` plays to the last frame and stays there (0 1 2 3 3 3 …), still enabled. Enabled again while the sprite
+  shows that last frame, it does not replay; after another animation it starts again from its first frame.
+  End-of-animation events stay in Phase 3.
+- As for `Loop`, a sprite that shows none of the animation's frames starts on the first one. `PingPong` and
+  `Once` compare with the last frame itself, so they do not have the `Loop` overflow of [B17](#b17).
+
+Tests run the dispatcher and the functions frame by frame on `gb_asm::test_cpu` (which now models `call`, `ret`,
+`ret cc`, `inc`/`dec` and the RGBDS scope of local labels) for every mode, in 8×8 and 8×16, starting outside or
+on the first frame, one-frame animations, switching between animations, the delay, and a composite whose two
+halves stay on the same frame; the ROM of a 3-sprite program was also checked in an emulator (PyBoy).
 
 #### B11
 **Code passed to `gb.init()` is overwritten.** `build()` emits user init code at
@@ -301,7 +328,7 @@ writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
 animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:445-612`,
-`src/rust_boy/animations.rs:28-58`; loop at `src/rust_boy/rustboy.rs:325-339`). OAM is only accessible in
+`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:325-339`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -348,8 +375,8 @@ works via `200u8 as i8`, but the API is awkward.) *Fix:* typed setters per `VarT
   (`src/rust_boy/sprites.rs:82`, overflows at exactly 256 tiles, e.g. two FOSDEM characters),
   `sprite.y + 16` / `sprite.x + 8` (`:425, :429`), `x + 8` (`src/rust_boy/rustboy.rs:487`),
   `tile_count() as u8` (`:443`), `oam_index * 4` (many sites).
-- `cp_imm(abs_end + self.frame_step)` (`src/rust_boy/animations.rs:50`) overflows when the last frame is tile
-  254/255 → in release `cp 0`, the animation freezes on its first frame.
+- `cp_imm(abs_end + self.frame_step)` (`src/rust_boy/animations.rs:104` since [B10](#b10), `:50` at `4601a5c`) overflows when the last frame is tile
+  254/255 → in release `cp 0`, the animation freezes on its first frame. (Since [B10](#b10) only `Loop` does this.)
 - `MemoryAllocator` (`src/rust_boy/memory.rs:36`) exists, with overflow checks, but nothing uses it.
 
 *Fix:* use the allocator, `u16` counters + `checked_add`, clear errors.
@@ -498,7 +525,7 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** no shadow OAM/DMA, no scrolling, no window layer, no palette API/fades, no
   metasprites beyond 16×16, no text/numbers, no `$9C00` map.
-- **Animation:** only `Loop` works; global speed only; no events.
+- **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** polling instead of VBlank interrupt + `halt`; no interrupts/timers, scenes, RNG, collision,
   16-bit math, loops/switch.
 - **ISA:** `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`, rotates/shifts, `cpl`, `ld [hl-]`…

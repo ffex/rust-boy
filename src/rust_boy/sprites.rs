@@ -27,6 +27,13 @@ fn animation_label(sprite: &str, animation: &str) -> String {
     format!("Anim_{}_{}", sprite, animation)
 }
 
+/// WRAM variable holding the direction of a sprite's `PingPong` animation
+/// (0 = forward, 1 = backward); only sprites with such an animation of two frames or
+/// more have one (B10)
+fn direction_var(sprite: &str) -> String {
+    format!("wAnim_{}_Dir", sprite)
+}
+
 /// Unique identifier for a sprite instance
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpriteId(pub(crate) usize);
@@ -819,7 +826,7 @@ impl SpriteManager {
                 let func_name = animation_label(&sprite.name, &animation.name);
 
                 asm.label(&func_name);
-                asm.emit_all(animation.generate_loop_func());
+                asm.emit_all(animation.generate_func(&direction_var(&sprite.name)));
                 asm.ret();
 
                 functions.push((func_name, asm.get_main_instrs()));
@@ -835,6 +842,10 @@ impl SpriteManager {
     /// - Only updates animations when counter >= delay
     /// - Resets counter after animation update
     /// - Checks wAnim_[sprite_name]_Current to call only the active animation
+    ///
+    /// The code grows with every animation, so each jump over a part whose size depends
+    /// on the number of sprites or animations is a `jp`: a `jr` reaches only 127 bytes
+    /// ahead (B9). The only `jr` left skips one `call` and one `jp`, 6 bytes.
     pub(crate) fn generate_animation_calls(&self, delay_value: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
 
@@ -845,7 +856,7 @@ impl SpriteManager {
 
         // Compare with delay value
         asm.cp_imm(delay_value);
-        asm.jr_cond(Condition::C, "AnimEnd"); // if counter < delay, skip animations
+        asm.jp_cond(Condition::C, "AnimEnd"); // if counter < delay, skip animations
 
         // Reset frame counter
         asm.ld_a(0);
@@ -865,20 +876,20 @@ impl SpriteManager {
 
             // Check if disabled (255)
             asm.cp_imm(ANIM_DISABLED);
-            asm.jr_cond(Condition::Z, &sprite_end_label);
+            asm.jp_cond(Condition::Z, &sprite_end_label);
 
             // For each animation, check if it's the current one
             for animation in &sprite.animations {
                 let func_name = animation_label(&sprite.name, &animation.name);
                 let skip_label = format!(".skip_{}_{}", sprite.name, animation.name);
 
-                // Check if this animation index is selected
+                // Check if this animation index is selected (the skip is 6 bytes)
                 asm.cp_imm(animation.index);
                 asm.jr_cond(Condition::NZ, &skip_label);
 
                 // Call this animation
                 asm.call(&func_name);
-                asm.jr(&sprite_end_label);
+                asm.jp(&sprite_end_label);
 
                 asm.label(&skip_label);
             }
@@ -893,7 +904,9 @@ impl SpriteManager {
 
     /// Get list of animation variable names (for auto-creating variables)
     /// Returns (name, initial_value) pairs
-    /// Creates one variable per sprite: wAnim_[sprite_name]_Current
+    /// Creates one variable per sprite: wAnim_[sprite_name]_Current, and
+    /// wAnim_[sprite_name]_Dir (0 = forward) if the sprite has a `PingPong` animation
+    /// of two frames or more
     pub(crate) fn get_animation_variables(&self) -> Vec<(String, u8)> {
         let mut vars = Vec::new();
 
@@ -901,6 +914,9 @@ impl SpriteManager {
             if !sprite.animations.is_empty() {
                 let var_name = format!("wAnim_{}_Current", sprite.name);
                 vars.push((var_name, sprite.initial_animation));
+            }
+            if sprite.animations.iter().any(|anim| anim.needs_direction()) {
+                vars.push((direction_var(&sprite.name), 0));
             }
         }
 
@@ -1126,5 +1142,312 @@ mod tests {
 
         assert_eq!(sm.get(paddle).unwrap().oam_index, 0);
         assert_eq!(sm.get(ball).unwrap().oam_index, 1);
+    }
+
+    // ==================== Animations (B9, B10) ====================
+
+    use crate::gb_asm::label_check::{assert_labels_ok, jr_range_errors};
+    use crate::rust_boy::AnimationType;
+
+    /// The animation code as the main loop runs it each frame: the dispatcher, a `ret`
+    /// that ends the frame on the test CPU, then every animation function
+    fn animation_program(sm: &SpriteManager, delay: u8) -> Vec<Instr> {
+        let mut code = sm.generate_animation_calls(delay);
+        code.push(Instr::Ret);
+        for (_, body) in sm.generate_animation_functions() {
+            code.extend(body);
+        }
+        code
+    }
+
+    /// A test CPU with each sprite on its initial tile and the animation variables
+    /// set as `build()` initialises them
+    fn animation_cpu(sm: &SpriteManager) -> TestCpu {
+        let mut cpu = TestCpu::default();
+        for sprite in sm.sprites.values() {
+            let tile = format!("_OAMRAM+{}", sprite.oam_index * 4 + 2);
+            cpu.mem.insert(tile, sprite.tile_index);
+        }
+        cpu.mem.insert("wFrameCounter".to_string(), 0);
+        for (name, value) in sm.get_animation_variables() {
+            cpu.mem.insert(name, value);
+        }
+        cpu
+    }
+
+    /// The frame `sprite` shows (its tile, counted in frames from its first tile)
+    fn shown_frame(sm: &SpriteManager, cpu: &TestCpu, sprite: SpriteId) -> u8 {
+        let data = sm.get(sprite).unwrap();
+        let tile = cpu.mem[&format!("_OAMRAM+{}", data.oam_index * 4 + 2)];
+        (tile - data.tile_index) / sm.size().tiles_per_sprite()
+    }
+
+    /// Run `frames` frames of the animation code, one update per frame, and return the
+    /// frame `sprite` shows after each one
+    fn play(sm: &SpriteManager, cpu: &mut TestCpu, sprite: SpriteId, frames: usize) -> Vec<u8> {
+        let code = animation_program(sm, 1);
+        (0..frames)
+            .map(|_| {
+                cpu.run(&code);
+                shown_frame(sm, cpu, sprite)
+            })
+            .collect()
+    }
+
+    /// A sprite after another one (so its tiles do not start at 0) with 6 frames, and
+    /// one animation of frames `start..=end`, enabled
+    fn animated_sprite(
+        size: SpriteSize,
+        anim_type: AnimationType,
+        start: u8,
+        end: u8,
+    ) -> (SpriteManager, SpriteId) {
+        let per_frame = size.tiles_per_sprite();
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        sm.set_size(size);
+        sm.add("Other", 0, 0, 0, per_frame);
+        let coin = sm.add("Coin", 16, 16, 0, 6 * per_frame);
+        let spin = sm.add_animation(coin, "Spin", start, end, anim_type);
+        sm.set_initial_animation(coin, spin);
+        (sm, coin)
+    }
+
+    const SIZES: [SpriteSize; 2] = [SpriteSize::Size8x8, SpriteSize::Size8x16];
+
+    #[test]
+    fn test_loop_animation_frames() {
+        for size in SIZES {
+            // The sprite starts on frame 0, outside the animation: it goes to frame 1
+            let (sm, coin) = animated_sprite(size, AnimationType::Loop, 1, 4);
+            let mut cpu = animation_cpu(&sm);
+            assert_eq!(
+                play(&sm, &mut cpu, coin, 10),
+                [1, 2, 3, 4, 1, 2, 3, 4, 1, 2],
+                "{:?}",
+                size
+            );
+        }
+    }
+
+    #[test]
+    fn test_ping_pong_animation_frames() {
+        // B10: PingPong played as a Loop (1 2 3 4 1 2 ...)
+        for size in SIZES {
+            let (sm, coin) = animated_sprite(size, AnimationType::PingPong, 1, 4);
+            let mut cpu = animation_cpu(&sm);
+            // Forward, then backward; the ends are not shown twice in a row
+            assert_eq!(
+                play(&sm, &mut cpu, coin, 13),
+                [1, 2, 3, 4, 3, 2, 1, 2, 3, 4, 3, 2, 1],
+                "{:?}",
+                size
+            );
+        }
+    }
+
+    #[test]
+    fn test_once_animation_frames() {
+        // B10: Once played as a Loop (1 2 3 4 1 2 ...)
+        for size in SIZES {
+            let (sm, coin) = animated_sprite(size, AnimationType::Once, 1, 4);
+            let mut cpu = animation_cpu(&sm);
+            // To the last frame, which stays
+            assert_eq!(
+                play(&sm, &mut cpu, coin, 8),
+                [1, 2, 3, 4, 4, 4, 4, 4],
+                "{:?}",
+                size
+            );
+        }
+    }
+
+    #[test]
+    fn test_animation_starting_on_its_first_frame() {
+        // The sprite's initial tile is the animation's first frame (0)
+        let expected: [(AnimationType, &[u8]); 3] = [
+            (AnimationType::Loop, &[1, 2, 3, 0, 1, 2, 3, 0]),
+            (AnimationType::PingPong, &[1, 2, 3, 2, 1, 0, 1, 2]),
+            (AnimationType::Once, &[1, 2, 3, 3, 3, 3, 3, 3]),
+        ];
+        for (anim_type, frames) in expected {
+            let (sm, coin) = animated_sprite(SpriteSize::Size8x8, anim_type.clone(), 0, 3);
+            let mut cpu = animation_cpu(&sm);
+            assert_eq!(play(&sm, &mut cpu, coin, 8), frames, "{:?}", anim_type);
+        }
+    }
+
+    #[test]
+    fn test_two_frame_ping_pong_alternates() {
+        for size in SIZES {
+            let (sm, coin) = animated_sprite(size, AnimationType::PingPong, 1, 2);
+            let mut cpu = animation_cpu(&sm);
+            assert_eq!(
+                play(&sm, &mut cpu, coin, 7),
+                [1, 2, 1, 2, 1, 2, 1],
+                "{:?}",
+                size
+            );
+        }
+    }
+
+    #[test]
+    fn test_one_frame_animation_stays_on_it() {
+        for anim_type in [
+            AnimationType::Loop,
+            AnimationType::PingPong,
+            AnimationType::Once,
+        ] {
+            let (sm, coin) = animated_sprite(SpriteSize::Size8x8, anim_type.clone(), 2, 2);
+            let mut cpu = animation_cpu(&sm);
+            assert_eq!(
+                play(&sm, &mut cpu, coin, 4),
+                [2, 2, 2, 2],
+                "{:?}",
+                anim_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_switching_between_ping_pong_animations() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let coin = sm.add("Coin", 16, 16, 0, 6);
+        let small = sm.add_animation(coin, "Small", 0, 2, AnimationType::PingPong);
+        let big = sm.add_animation(coin, "Big", 3, 5, AnimationType::PingPong);
+        sm.set_initial_animation(coin, small);
+        let mut cpu = animation_cpu(&sm);
+        let current = "wAnim_Coin_Current".to_string();
+
+        // Stop while going backward
+        assert_eq!(play(&sm, &mut cpu, coin, 3), [1, 2, 1]);
+        // The other animation starts on its first frame and goes forward
+        cpu.mem.insert(current.clone(), big);
+        assert_eq!(play(&sm, &mut cpu, coin, 6), [3, 4, 5, 4, 3, 4]);
+        // Disabled: the sprite keeps its frame
+        cpu.mem.insert(current.clone(), ANIM_DISABLED);
+        assert_eq!(play(&sm, &mut cpu, coin, 2), [4, 4]);
+        // Back to the first one, from its first frame
+        cpu.mem.insert(current, small);
+        assert_eq!(play(&sm, &mut cpu, coin, 5), [0, 1, 2, 1, 0]);
+    }
+
+    #[test]
+    fn test_once_after_another_animation_plays_again() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let coin = sm.add("Coin", 16, 16, 0, 6);
+        let jump = sm.add_animation(coin, "Jump", 0, 2, AnimationType::Once);
+        let idle = sm.add_animation(coin, "Idle", 3, 4, AnimationType::Loop);
+        sm.set_initial_animation(coin, jump);
+        let mut cpu = animation_cpu(&sm);
+        let current = "wAnim_Coin_Current".to_string();
+
+        assert_eq!(play(&sm, &mut cpu, coin, 4), [1, 2, 2, 2]);
+        cpu.mem.insert(current.clone(), idle);
+        assert_eq!(play(&sm, &mut cpu, coin, 3), [3, 4, 3]);
+        cpu.mem.insert(current, jump);
+        assert_eq!(play(&sm, &mut cpu, coin, 4), [0, 1, 2, 2]);
+    }
+
+    #[test]
+    fn test_animations_wait_for_the_delay() {
+        let (sm, coin) = animated_sprite(SpriteSize::Size8x8, AnimationType::PingPong, 0, 2);
+        let mut cpu = animation_cpu(&sm);
+        let code = animation_program(&sm, 3);
+        let frames: Vec<u8> = (0..12)
+            .map(|_| {
+                cpu.run(&code);
+                shown_frame(&sm, &cpu, coin)
+            })
+            .collect();
+        assert_eq!(frames, [0, 0, 1, 1, 1, 2, 2, 2, 1, 1, 1, 0]);
+    }
+
+    #[test]
+    fn test_ping_pong_composite_halves_stay_together() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let player = gb.add_sprite_16x16("Player", tiles(8), tiles(8), 80, 72, 0);
+        gb.sprites
+            .add_composite_animation(player, "Walk", 0, 3, AnimationType::PingPong);
+        gb.sprites.set_composite_initial_animation(player, 0);
+        let halves = gb.sprites.get_composite_sprites(player).unwrap().clone();
+
+        let sm = &gb.sprites;
+        let mut cpu = animation_cpu(sm);
+        let code = animation_program(sm, 1);
+        for want in [1, 2, 3, 2, 1, 0, 1] {
+            cpu.run(&code);
+            for &half in &halves {
+                assert_eq!(shown_frame(sm, &cpu, half), want);
+            }
+        }
+    }
+
+    #[test]
+    fn test_only_ping_pong_sprites_get_a_direction_variable() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let coin = sm.add("Coin", 0, 0, 0, 4);
+        sm.add_animation(coin, "Spin", 0, 3, AnimationType::Loop);
+        sm.add_animation(coin, "Fall", 0, 3, AnimationType::Once);
+        let gem = sm.add("Gem", 0, 0, 0, 4);
+        sm.add_animation(gem, "Spin", 0, 3, AnimationType::Loop);
+        sm.add_animation(gem, "Shine", 0, 3, AnimationType::PingPong);
+        // A one-frame PingPong never reads the direction: no variable
+        let star = sm.add("Star", 0, 0, 0, 4);
+        sm.add_animation(star, "Twinkle", 2, 2, AnimationType::PingPong);
+        // ... unless the sprite also has a longer one
+        let moon = sm.add("Moon", 0, 0, 0, 4);
+        sm.add_animation(moon, "Still", 1, 1, AnimationType::PingPong);
+        sm.add_animation(moon, "Wax", 0, 1, AnimationType::PingPong);
+        assert_eq!(
+            sm.get_animation_variables(),
+            [
+                ("wAnim_Coin_Current".to_string(), ANIM_DISABLED),
+                ("wAnim_Gem_Current".to_string(), ANIM_DISABLED),
+                ("wAnim_Gem_Dir".to_string(), 0),
+                ("wAnim_Star_Current".to_string(), ANIM_DISABLED),
+                ("wAnim_Moon_Current".to_string(), ANIM_DISABLED),
+                ("wAnim_Moon_Dir".to_string(), 0),
+            ]
+        );
+    }
+
+    /// `count` 8x8 sprite tiles
+    fn tiles(count: usize) -> TileSource {
+        TileSource::from_raw(&vec![["$FF"; 8]; count])
+    }
+
+    #[test]
+    fn test_animation_dispatch_jumps_stay_in_range() {
+        // B9: `jr c, AnimEnd` jumped over the whole dispatcher (5 bytes + 7 per animated
+        // sprite + 9 per animation): with 3 sprites of 4 animations it is 134 bytes away,
+        // and rgblink fails. A sprite's own jumps (disabled, and after the call) span its
+        // animations: with 16 of them they went out of range too.
+        let mut gb = RustBoy::new();
+        let anim_types = [
+            AnimationType::Loop,
+            AnimationType::PingPong,
+            AnimationType::Once,
+            AnimationType::Loop,
+        ];
+        for name in ["Alpha", "Bravo", "Charlie"] {
+            let sprite = gb.add_sprite(name, tiles(4), 16, 16, 0);
+            for (anim, anim_type) in ["Up", "Down", "Left", "Right"].iter().zip(&anim_types) {
+                gb.sprites
+                    .add_animation(sprite, anim, 0, 3, anim_type.clone());
+            }
+        }
+        let delta = gb.add_sprite("Delta", tiles(4), 32, 16, 0);
+        for i in 0..16 {
+            gb.sprites
+                .add_animation(delta, &format!("Pose{}", i), 0, 3, AnimationType::Loop);
+        }
+
+        let dispatch = gb.sprites.generate_animation_calls(8);
+        assert_eq!(jr_range_errors(&dispatch), Vec::<String>::new());
+        for (name, body) in gb.sprites.generate_animation_functions() {
+            assert_eq!(jr_range_errors(&body), Vec::<String>::new(), "{}", name);
+        }
+        assert_labels_ok(&gb.build());
     }
 }

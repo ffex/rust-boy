@@ -8,10 +8,13 @@
 //!   `Scope.name`; a reference to `.name` is looked up in the scope where it appears.
 //!
 //! Only the targets of `jp`, `jr` and `call` are checked as references.
+//!
+//! [`jr_range_errors`] also checks that each `jr` reaches its target, which rgbasm
+//! requires: it works on instructions, whose sizes it knows.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Asm, Instr};
+use super::{Asm, Instr, JumpTarget, Operand, Register};
 
 /// Every label problem in `asm`: a label defined twice, a local label outside any scope,
 /// or a `jp` / `jr` / `call` whose target is not defined (in its own scope, for a local
@@ -115,6 +118,114 @@ pub(crate) fn assert_code_labels_ok(code: &[Instr]) {
     assert_labels_ok(&asm.to_asm());
 }
 
+/// Size in bytes of `instr` once assembled; panics on what it does not know
+fn instr_size(instr: &Instr) -> usize {
+    use Operand::{Addr, AddrDef, AddrReg, AddrRegInc, Imm, Imm16, Label, Reg};
+    let wide = |reg: &Register| {
+        matches!(
+            reg,
+            Register::BC | Register::DE | Register::HL | Register::SP | Register::AF
+        )
+    };
+    // `op a, src` and `op src` (and, cp): register or [hl] 1 byte, immediate 2
+    let alu = |src: &Operand| match src {
+        Reg(_) | AddrReg(Register::HL) => 1,
+        Imm(_) | Label(_) => 2,
+        other => panic!("jr_range_errors: unknown size of an ALU operand {}", other),
+    };
+    match instr {
+        Instr::Label { .. } | Instr::Comment { .. } | Instr::Def { .. } => 0,
+        Instr::Ld { dst, src } => match (dst, src) {
+            (Reg(r), Imm16(_) | Label(_)) if wide(r) => 3,
+            (Reg(_), Reg(_)) => 1,
+            (Reg(_), Imm(_) | Label(_)) => 2,
+            (Reg(Register::A), Addr(_) | AddrDef(_)) | (Addr(_) | AddrDef(_), Reg(Register::A)) => {
+                3
+            }
+            (Reg(_), AddrReg(_) | AddrRegInc(_)) | (AddrReg(_) | AddrRegInc(_), Reg(_)) => 1,
+            (AddrReg(Register::HL), Imm(_) | Label(_)) => 2,
+            (dst, src) => panic!("jr_range_errors: unknown size of ld {}, {}", dst, src),
+        },
+        // `ldh a, [c]` / `ldh [c], a` 1 byte, `ldh a, [n8]` / `ldh [n8], a` 2
+        Instr::Ldh {
+            dst: AddrReg(Register::C),
+            ..
+        }
+        | Instr::Ldh {
+            src: AddrReg(Register::C),
+            ..
+        } => 1,
+        Instr::Ldh { .. } => 2,
+        // `add sp, e8` 2 bytes, `add hl, r16` 1
+        Instr::Add {
+            dst: Reg(Register::SP),
+            ..
+        } => 2,
+        Instr::Add { dst: Reg(r), .. } if wide(r) => 1,
+        Instr::Add { src, .. }
+        | Instr::Adc { src, .. }
+        | Instr::Sub { src, .. }
+        | Instr::Or { src, .. }
+        | Instr::Xor { src, .. } => alu(src),
+        Instr::AdcA { operand } | Instr::And { operand } | Instr::Cp { operand } => alu(operand),
+        Instr::Inc { .. } | Instr::Dec { .. } | Instr::Daa | Instr::Ret | Instr::RetCond { .. } => {
+            1
+        }
+        Instr::Srl { .. } | Instr::Swap { .. } => 2,
+        Instr::Jr { .. } | Instr::JrCond { .. } => 2,
+        Instr::Jp { .. } | Instr::JpCond { .. } | Instr::Call { .. } => 3,
+        other => panic!("jr_range_errors: unknown size of {}", other),
+    }
+}
+
+/// Every `jr` in `code` whose target, a label in `code`, is out of its reach: the
+/// offset from the end of the `jr` must be in -128..=127 (rgbasm rejects the others).
+/// A local label (`.name`) belongs to the last global label before it, as in RGBDS, so
+/// the same local name in two routines is two labels.
+pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
+    // Full name of a label used under the global label `scope` ("" before the first)
+    let full_name = |scope: &str, name: &str| {
+        if name.starts_with('.') {
+            format!("{}{}", scope, name)
+        } else {
+            name.to_string()
+        }
+    };
+    // Address and scope of each instruction, and every label by its full name
+    let mut places = Vec::with_capacity(code.len());
+    let mut labels = BTreeMap::new();
+    let mut scope = "";
+    let mut address = 0;
+    for instr in code {
+        if let Instr::Label { name } = instr {
+            if !name.starts_with('.') {
+                scope = name;
+            }
+            labels.insert(full_name(scope, name), address);
+        }
+        places.push((address, scope));
+        address += instr_size(instr);
+    }
+
+    let mut errors = Vec::new();
+    for (instr, (address, scope)) in code.iter().zip(places) {
+        if let Instr::Jr { target } | Instr::JrCond { target, .. } = instr {
+            let JumpTarget::Label(name) = target else {
+                continue;
+            };
+            let Some(&to) = labels.get(&full_name(scope, name)) else {
+                errors.push(format!("{}: target not found", instr));
+                continue;
+            };
+            let offset = to as isize - (address as isize + 2);
+            if !(-128..=127).contains(&offset) {
+                errors.push(format!("{}: offset {} is out of range", instr, offset));
+            }
+        }
+    }
+    errors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +298,113 @@ mod tests {
                 "line 4: jump to Missing, but Missing is not defined"
             ]
         );
+    }
+
+    /// `jr` to a label `gap` bytes after it (`nop`-sized `inc a`s in between), or
+    /// before it when `gap` is negative
+    fn jr_over(gap: isize) -> Vec<Instr> {
+        let filler = || Instr::Inc {
+            operand: Operand::Reg(Register::A),
+        };
+        let jr = Instr::Jr {
+            target: JumpTarget::Label(".target".to_string()),
+        };
+        let label = Instr::Label {
+            name: ".target".to_string(),
+        };
+        let mut code = Vec::new();
+        if gap >= 0 {
+            code.push(jr);
+            code.extend((0..gap).map(|_| filler()));
+            code.push(label);
+        } else {
+            // the offset counts from the end of the jr, which is 2 bytes long
+            code.push(label);
+            code.extend((0..(-gap - 2)).map(|_| filler()));
+            code.push(jr);
+        }
+        code
+    }
+
+    #[test]
+    fn test_jr_range_limits() {
+        // The limits RGBDS 1.0.4 applies to the same code, checked by hand: rgbasm
+        // rejects -129, rgblink 128 (a forward target is resolved when linking)
+        assert_eq!(jr_range_errors(&jr_over(127)), Vec::<String>::new());
+        assert_eq!(
+            jr_range_errors(&jr_over(128)),
+            vec!["jr .target: offset 128 is out of range"]
+        );
+        assert_eq!(jr_range_errors(&jr_over(-128)), Vec::<String>::new());
+        assert_eq!(
+            jr_range_errors(&jr_over(-129)),
+            vec!["jr .target: offset -129 is out of range"]
+        );
+    }
+
+    #[test]
+    fn test_jr_range_counts_instruction_sizes() {
+        // ld a, [n16] 3 + cp n8 2 + call 3 + jp 3 + ld a, n8 2 = 13 bytes
+        let mut asm = Asm::new();
+        asm.jr_cond(Condition::Z, ".end")
+            .ld_a_addr_def("wCount")
+            .cp_imm(1)
+            .call("Helper")
+            .jp("Main")
+            .ld_a(0)
+            .label(".end");
+        let code = asm.get_main_instrs();
+        let sizes: usize = code.iter().map(instr_size).sum();
+        assert_eq!(sizes, 2 + 13);
+        assert_eq!(jr_range_errors(&code), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_jr_range_resolves_local_labels_in_their_scope() {
+        // Two routines with their own `.end`: each `jr .end` reaches the `.end` of its
+        // routine, 2 bytes ahead, not the other one (which would be out of range)
+        let mut asm = Asm::new();
+        asm.label("First").jr(".end").ld_a(1).label(".end").ret();
+        for _ in 0..70 {
+            asm.ld_a(0); // 140 bytes
+        }
+        asm.label("Second").jr(".end").ld_a(2).label(".end").ret();
+        assert_eq!(
+            jr_range_errors(&asm.get_main_instrs()),
+            Vec::<String>::new()
+        );
+
+        // A local label of another scope is not found
+        let mut asm = Asm::new();
+        asm.label("First").label(".end").label("Second").jr(".end");
+        assert_eq!(
+            jr_range_errors(&asm.get_main_instrs()),
+            vec!["jr .end: target not found"]
+        );
+    }
+
+    #[test]
+    fn test_instr_size_of_ldh_and_add() {
+        let a = || Operand::Reg(Register::A);
+        let c = || Operand::AddrReg(Register::C);
+        let ldh = |dst, src| Instr::Ldh { dst, src };
+        let add = |dst, src| Instr::Add { dst, src };
+        // ldh a, [c] and ldh [c], a: 1 byte; ldh with an 8-bit address: 2
+        assert_eq!(instr_size(&ldh(a(), c())), 1);
+        assert_eq!(instr_size(&ldh(c(), a())), 1);
+        assert_eq!(
+            instr_size(&ldh(a(), Operand::AddrDef("rLY".to_string()))),
+            2
+        );
+        // add sp, e8: 2 bytes; add hl, r16: 1; add a, n8: 2
+        assert_eq!(
+            instr_size(&add(Operand::Reg(Register::SP), Operand::Imm(4))),
+            2
+        );
+        assert_eq!(
+            instr_size(&add(Operand::Reg(Register::HL), Operand::Reg(Register::DE))),
+            1
+        );
+        assert_eq!(instr_size(&add(a(), Operand::Imm(4))), 2);
     }
 }

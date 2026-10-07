@@ -3,9 +3,12 @@
 //! It runs the [`Instr`]s a routine emits, so a test can check what the generated code
 //! does rather than how it looks. It models the 8-bit registers, the Z and C flags, a
 //! memory addressed by symbol (`[wCurKeys]`, `[_OAMRAM+1]`, …) and symbolic constants
-//! (`PADF_LEFT`). Jumps go to labels in the same instruction list, and execution ends
-//! when it runs past the last instruction. Labels are matched by name only: RGBDS label
-//! scopes are checked by `label_check`. Anything it does not model panics, so a test
+//! (`PADF_LEFT`). Jumps and calls go to labels in the same instruction list, and
+//! execution ends when it runs past the last instruction or on a `ret` with no `call`
+//! to return to (so a routine can be run on its own, or a test can put its routines
+//! after a `ret`). A local label (`.name`) belongs to the last global label before
+//! it, as in RGBDS, so two routines can each have their own `.loop`; `label_check`
+//! checks the scopes of a whole program. Anything it does not model panics, so a test
 //! never passes by skipping code.
 
 use std::collections::BTreeMap;
@@ -31,27 +34,49 @@ pub(crate) struct TestCpu {
 }
 
 impl TestCpu {
-    /// Run `instrs` from the first instruction until execution runs past the last one
+    /// Run `instrs` from the first instruction until execution runs past the last one,
+    /// or returns from the code it started in
     pub fn run(&mut self, instrs: &[Instr]) {
+        // The global label each instruction is under ("" before the first one), and
+        // every label by its full name (`Scope.local` for a local label)
+        let mut scopes = Vec::with_capacity(instrs.len());
+        let mut scope = "";
         let mut labels = BTreeMap::new();
+        let full_name = |scope: &str, name: &str| {
+            if name.starts_with('.') {
+                format!("{}{}", scope, name)
+            } else {
+                name.to_string()
+            }
+        };
         for (pos, instr) in instrs.iter().enumerate() {
             if let Instr::Label { name } = instr {
+                if !name.starts_with('.') {
+                    scope = name;
+                }
+                let full = full_name(scope, name);
                 assert!(
-                    labels.insert(name.as_str(), pos).is_none(),
+                    labels.insert(full.clone(), pos).is_none(),
                     "label {} defined twice",
-                    name
+                    full
                 );
             }
+            scopes.push(scope);
         }
-        let target = |target: &JumpTarget| match target {
-            JumpTarget::Label(name) => *labels
-                .get(name.as_str())
-                .unwrap_or_else(|| panic!("label {} not found", name)),
+        let target = |pc: usize, target: &JumpTarget| match target {
+            JumpTarget::Label(name) => {
+                let full = full_name(scopes[pc], name);
+                *labels
+                    .get(&full)
+                    .unwrap_or_else(|| panic!("label {} not found", full))
+            }
             JumpTarget::Addr(addr) => panic!("jump to address ${:04X} not supported", addr),
         };
 
         let mut pc = 0;
         let mut steps = 0;
+        // Return addresses of the calls in progress
+        let mut stack = Vec::new();
         while pc < instrs.len() {
             steps += 1;
             assert!(steps <= 100_000, "the code does not terminate");
@@ -81,13 +106,27 @@ impl TestCpu {
                     let value = self.read(operand);
                     self.compare(value);
                 }
+                Instr::Inc {
+                    operand: Operand::Reg(reg),
+                } => {
+                    let value = self.reg(reg).wrapping_add(1);
+                    *self.reg(reg) = value;
+                    self.zero = value == 0; // carry unchanged
+                }
+                Instr::Dec {
+                    operand: Operand::Reg(reg),
+                } => {
+                    let value = self.reg(reg).wrapping_sub(1);
+                    *self.reg(reg) = value;
+                    self.zero = value == 0; // carry unchanged
+                }
                 Instr::And { operand } => {
                     self.a &= self.read(operand);
                     self.zero = self.a == 0;
                     self.carry = false;
                 }
                 Instr::Jp { target: t } | Instr::Jr { target: t } => {
-                    pc = target(t);
+                    pc = target(pc, t);
                     continue;
                 }
                 Instr::JpCond {
@@ -98,21 +137,48 @@ impl TestCpu {
                     condition,
                     target: t,
                 } => {
-                    let taken = match condition {
-                        Condition::Z => self.zero,
-                        Condition::NZ => !self.zero,
-                        Condition::C => self.carry,
-                        Condition::NC => !self.carry,
-                    };
-                    if taken {
-                        pc = target(t);
+                    if self.holds(condition) {
+                        pc = target(pc, t);
                         continue;
+                    }
+                }
+                Instr::Call { target: t } => {
+                    stack.push(pc + 1);
+                    pc = target(pc, t);
+                    continue;
+                }
+                Instr::Ret => match stack.pop() {
+                    Some(back) => {
+                        pc = back;
+                        continue;
+                    }
+                    None => return,
+                },
+                Instr::RetCond { condition } => {
+                    if self.holds(condition) {
+                        match stack.pop() {
+                            Some(back) => {
+                                pc = back;
+                                continue;
+                            }
+                            None => return,
+                        }
                     }
                 }
                 Instr::Label { .. } | Instr::Comment { .. } => {}
                 other => panic!("instruction not supported by the test CPU: {}", other),
             }
             pc += 1;
+        }
+    }
+
+    /// Whether `condition` holds with the current flags
+    fn holds(&self, condition: &Condition) -> bool {
+        match condition {
+            Condition::Z => self.zero,
+            Condition::NZ => !self.zero,
+            Condition::C => self.carry,
+            Condition::NC => !self.carry,
         }
     }
 
@@ -159,5 +225,71 @@ impl TestCpu {
             }
             other => panic!("cannot write to {} in the test CPU", other),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gb_asm::Asm;
+
+    #[test]
+    fn test_call_and_ret() {
+        let mut asm = Asm::new();
+        asm.call("Double")
+            .call("Double")
+            .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
+            .ret() // ends the run: no call to return to
+            .ld_a(99)
+            .label("Double")
+            .add(Operand::Reg(Register::A), Operand::Reg(Register::A))
+            .ret();
+        let mut cpu = TestCpu {
+            a: 3,
+            ..TestCpu::default()
+        };
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!((cpu.a, cpu.b), (12, 12));
+    }
+
+    #[test]
+    fn test_conditional_ret_and_inc_dec() {
+        let mut asm = Asm::new();
+        asm.dec(Operand::Reg(Register::A))
+            .ret_cond(Condition::Z)
+            .inc(Operand::Reg(Register::B));
+        let code = asm.get_main_instrs();
+        let mut cpu = TestCpu {
+            a: 1,
+            ..TestCpu::default()
+        };
+        cpu.run(&code);
+        assert_eq!((cpu.a, cpu.b, cpu.zero), (0, 0, true), "returned on zero");
+        cpu.run(&code);
+        assert_eq!((cpu.a, cpu.b, cpu.zero), (255, 1, false), "went on");
+    }
+
+    #[test]
+    fn test_local_labels_belong_to_their_global_label() {
+        // Each routine has its own .done; `jr .done` stays in its routine
+        let mut asm = Asm::new();
+        asm.call("SetOne")
+            .call("SetTwo")
+            .ret()
+            .label("SetOne")
+            .ld_b(1)
+            .jr(".done")
+            .ld_b(0)
+            .label(".done")
+            .ret()
+            .label("SetTwo")
+            .ld_c(2)
+            .jr(".done")
+            .ld_c(0)
+            .label(".done")
+            .ret();
+        let mut cpu = TestCpu::default();
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!((cpu.b, cpu.c), (1, 2));
     }
 }

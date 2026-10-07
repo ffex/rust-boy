@@ -177,7 +177,9 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
 - [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
-      [B25](CONTEXT.md#b25), without RGBDS keywords; tiles, variables, functions and constants are not)
+      [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
+      `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
+      functions and constants are not checked at all)
 
 ## Phase 4 — Documentation
 

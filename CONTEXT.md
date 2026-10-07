@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 78 unit tests and the doctests (README examples, `LabelAllocator`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 79 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -60,7 +60,7 @@ rgbfix -v -p 0xFF main.gb
 
 | Layer | Path | LOC | Role |
 |---|---|---|---|
-| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~815 | `Instr`/`Operand`/`Register` enums, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
+| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~930 | `Instr`/`Operand`/`Register` enums, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`, `Emittable`), a simple `SpriteManager`, `TileRef` |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
@@ -76,7 +76,8 @@ rgbfix -v -p 0xFF main.gb
 - **Snippet labels** (since [B7](#b7)): code that can be emitted more than once (key checks, limited
   moves) uses *local* labels numbered by a `gb_asm::LabelAllocator` (`.check_left_2`,
   `.sprite0_left_limit_0_end`). Clones of an allocator share one counter: `RustBoy` owns one and shares
-  it with its `SpriteManager`; `gb_std` callers pass one to `check_key` and `Sprite::move_*_limit`.
+  it with its `SpriteManager`; `gb_std` callers pass one to `check_key` and `Sprite::move_*_limit`
+  (in a `RustBoy` program, `gb.labels()`).
   Global labels are left to routines and functions (`Memcopy`, `Anim_{sprite}_{animation}`, user
   functions) and to the once-per-program `EntryPoint`, `ClearOam`, `Main`, `AnimEnd`.
 - **Chunks** (`src/gb_asm/asm.rs:10-30`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
@@ -252,9 +253,11 @@ move `.sprite{oam}_{dir}_limit_N_store` / `…_end`; the plain `gb_std` moves (`
 `LeftLimit:` markers jumped nowhere and are gone. `RustBoy` owns the allocator and shares it with its
 `SpriteManager` (the public move API is unchanged) and with `add_inputs`; `RustBoy::unique_label` uses it
 too. `gb_std` is stateless, so `check_key` and `Sprite::move_*_limit` now take a `&LabelAllocator`
-(breaking change for direct `gb_std` users; `unbricked_std` updated). Only label names change in the
-examples' asm: all 6 ROMs are byte-identical. Tests: the same check or move twice, on two buttons, from two
-`InputManager`s, inside an `If`/else and a function, for single and composite sprites; `gb_asm::label_check`
+(breaking change for direct `gb_std` users; `unbricked_std` updated); a `RustBoy` program that mixes them in
+passes `gb.labels()`, the program's own allocator (a new one would start again at 0 and repeat its labels).
+Only label names change in the examples' asm: all 6 ROMs are byte-identical. Tests: the same check or move
+twice, on two buttons, from two `InputManager`s, inside an `If`/else and a function, for single and composite
+sprites, and `gb_std` snippets mixed into a `RustBoy` program; `gb_asm::label_check`
 checks a whole program's labels with the RGBDS scope rules (it agrees with rgbasm/rgblink on all examples).
 `If` keeps its own counter (`.end_if_N`), and `ClearOam`/`AnimEnd` stay global (emitted once, outside user
 code); one allocator for everything is the Phase 2 item.
@@ -402,9 +405,13 @@ itself (`Anim_player_left_Walk`, `Anim_player_right_Walk`; the `_0`/`_1` suffix 
 and animation names must be valid RGBDS identifiers (a letter or `_`, then letters, digits, `_#$@`), sprite
 names must be unique, and so must animation names per sprite and per composite; a name that would give an
 existing animation label (`"Big_Coin"` + `"Spin"` vs `"Big"` + `"Coin_Spin"`) is rejected too. Each case
-panics with a message naming the sprite and the animation. RGBDS keywords (a sprite called `a`) are not
-checked; the other user names (tiles, variables, functions, constants) are the Phase 3 item "Validate
-user-supplied symbol names".
+panics with a message naming the sprite and the animation. Not checked, left to the Phase 3 item "Validate
+user-supplied symbol names":
+- RGBDS keywords (a sprite called `a`: its tile label `a:` fails);
+- a valid, unique sprite name that clashes with another global label: the tile labels `{name}` and
+  `{name}End` (sprites `"Coin"` and `"CoinEnd"` both define `CoinEnd`), or a fixed label such as `Main`,
+  `EntryPoint`, a routine (`Memcopy`) or a variable (both cases confirmed with rgbasm);
+- the other user names (tiles, variables, functions, constants).
 
 #### B26
 **Builtins reached through `Call`/`IfCall` are not auto-included.** `Call::emit`

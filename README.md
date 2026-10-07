@@ -102,7 +102,7 @@ rgblink -o main.gb main.o
 rgbfix -v -p 0xFF main.gb
 ```
 
-Or build every example at once into `target/examples/<bin>/main.gb`:
+Or build every example at once into `target/examples/<bin>/main.gb` (under `$CARGO_TARGET_DIR` if set):
 
 ```bash
 scripts/assemble-examples.sh
@@ -125,7 +125,7 @@ Open them in any Game Boy emulator.
 ## What is supported
 
 - **Instructions** (`gb_asm`): `ld`, `ldh`, `add`, `adc`, `sub`, `inc`, `dec`, `and`, `or`, `xor`, `cp`, `srl`,
-  `swap`, `daa`, `jp`, `jr`, `call`, `ret` (with the `z`/`nz`/`c`/`nc` conditions), plus the directives
+  `swap`, `daa`, `jp`, `jr`, `ret` (also with the `z`/`nz`/`c`/`nc` conditions), `call`, plus the directives
   `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines.
   Not yet: `push`/`pop`, `halt`, `di`/`ei`, `reti`, `sbc`, `bit`/`set`/`res`, rotates and most shifts, `cpl`, …
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and a tilemap, WRAM variables

@@ -23,7 +23,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ─�
 
 - Zero Rust dependencies, edition 2024.
 - The committed `.o` files are RGBDS object format `RGB9` (RGBDS 1.0). Generated code uses `0x05`-style
-  constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (shown in the README) was removed in RGBDS 0.8.
+  constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
   `examples/`); pass it with `rgbasm -I include`.
 
@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 28 tests pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 38 unit tests and the README examples as doctests pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); sprites still render wrong until [B4](#b4) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -310,7 +310,7 @@ tile indices. *Fix:* single source of truth.
 
 #### B19
 **Every tilemap goes to `$9800`.** `add_tilemap` hardcodes `vram_address: 0x9800`
-(`src/rust_boy/tiles.rs:160`); with two tilemaps, which one wins depends on HashMap order. No `$9C00`.
+(`src/rust_boy/tiles.rs:160`); with two tilemaps, the last one created wins (it was random before B13). No `$9C00`.
 
 #### B20
 **Silent failures.** Unknown `SpriteId`/`CompositeSpriteId` → empty `Vec` (move/get/enable methods in
@@ -431,7 +431,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   16-bit math, loops/switch.
 - **ISA:** `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`, rotates/shifts, `cpl`, `ld [hl-]`…
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
-- **Tooling:** no CI, no assembled-output tests, no one-command "build ROM and run".
+- **Tooling:** CI exists now (fmt, clippy, tests, assembling every example); still missing: snapshot tests of
+  the generated asm and a one-command "build ROM and run".
 
 ---
 

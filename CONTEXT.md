@@ -44,12 +44,13 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 51 unit tests and the README examples as doctests pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 78 unit tests and the doctests (README examples, `LabelAllocator`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ✅ assembles; the 16×16 player moves as one block and stops at its limits (it collapsed at screen edges, fixed — [B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
+| Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4 |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -59,7 +60,7 @@ rgbfix -v -p 0xFF main.gb
 
 | Layer | Path | LOC | Role |
 |---|---|---|---|
-| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`) | ~815 | `Instr`/`Operand`/`Register` enums, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text |
+| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~815 | `Instr`/`Operand`/`Register` enums, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`, `Emittable`), a simple `SpriteManager`, `TileRef` |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
@@ -72,6 +73,12 @@ rgbfix -v -p 0xFF main.gb
 - **`If` labels**: each `If*` takes a unique number from `RustBoy::if_counter` and emits *local*
   labels `.end_if_N`, `.else_N`, `.then_N`. RGBDS local labels are scoped to the **last global label**,
   so any global label emitted inside an `If` body breaks it ([B7](#b7)).
+- **Snippet labels** (since [B7](#b7)): code that can be emitted more than once (key checks, limited
+  moves) uses *local* labels numbered by a `gb_asm::LabelAllocator` (`.check_left_2`,
+  `.sprite0_left_limit_0_end`). Clones of an allocator share one counter: `RustBoy` owns one and shares
+  it with its `SpriteManager`; `gb_std` callers pass one to `check_key` and `Sprite::move_*_limit`.
+  Global labels are left to routines and functions (`Memcopy`, `Anim_{sprite}_{animation}`, user
+  functions) and to the once-per-program `EntryPoint`, `ClearOam`, `Main`, `AnimEnd`.
 - **Chunks** (`src/gb_asm/asm.rs:10-30`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
   Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`src/gb_asm/codegen.rs:18-28`).
 - **Scratch-`Asm` idiom**: most `gb_std`/`rust_boy` helpers create a fresh `Asm`, emit into its default
@@ -115,6 +122,9 @@ The problems are where each layer reaches across the line:
    diverged ([B23](#b23)). L2 also contains its own `SpriteManager` that duplicates L3's.
 5. **No layer owns labels.** `gb_std` hardcodes global labels (`Left`, `CheckLeft`, `ClearOam`), `rust_boy`
    builds them with `format!`, `If` uses local labels — they collide and break scoping ([B7](#b7), [B25](#b25)).
+   *Since B7/B25:* the asm layer has a `LabelAllocator` that numbers the local labels of snippets, and
+   animation labels are namespaced by sprite; `If` still numbers its labels with its own counter and
+   `ClearOam` stays a fixed global label (emitted once). Making the allocator the only source is Phase 2.
 
 ### Proposed target
 
@@ -220,19 +230,34 @@ now the halves stay 8 px apart. Regression test `test_composite_moves_as_one_blo
 ### P1
 
 #### B7
-**Reusable snippets emit fixed global labels.**
-- `check_key` → `CheckLeft` / `CheckLeftEnd` (`src/gb_std/inputs.rs:129-139`): two bindings on the same
+**Reusable snippets emit fixed global labels.** (Line numbers at `7b54900`, after [B8](#b8).)
+- `check_key` → `CheckLeft` / `CheckLeftEnd` (`src/gb_std/inputs.rs:129-140`): two bindings on the same
   button → duplicate label.
-- `move_*_limit` → `Sprite{N}LeftLimitEnd` etc. (`src/rust_boy/sprites.rs:485, 505, 525, 545`): the same
-  move used twice (e.g. two buttons) → duplicate label. Since [B8](#b8) each move also emits `…LimitStore`, and a
-  composite move uses its leading sprite's labels (the same as that sprite's own move).
-- `gb_std` `Sprite::move_*` → `Left`/`LeftEnd`, `LeftLimit`/`LeftLimitStore`/`LeftLimitEnd`… with no sprite id
-  (`src/gb_std/graphics/sprites.rs:83-174`): two sprites → duplicate label.
+- `move_*_limit` → `Sprite{N}LeftLimitStore` / `Sprite{N}LeftLimitEnd` etc., built at
+  `src/rust_boy/sprites.rs:668` (one sprite) and `:540` (a composite, which uses its leading sprite's labels,
+  the same as that sprite's own move), with the suffixes added by `move_coord_limit`
+  (`src/gb_std/graphics/sprites.rs:53-54`): the same move used twice (e.g. two buttons) → duplicate label.
+- `gb_std` `Sprite::move_*` → `Left`/`LeftEnd` (`src/gb_std/graphics/sprites.rs:169-211`) and
+  `LeftLimit`/`LeftLimitStore`/`LeftLimitEnd`… (`:216-279`, `:53-54`), with no sprite id: two sprites → duplicate label.
 - Scope: a global label inside an `If` body (e.g. `If::eq(.., gb.sprites.move_left_limit(..))`) makes the
   `.end_if_N:` definition land under the new global scope while the `jp` referenced it under the old one →
-  unresolved symbol.
+  unresolved symbol (rgblink: "Undefined symbol `Main.end_if_0`").
 
 *Fix:* a label allocator; generated labels local or uniquely numbered.
+**Status: fixed** on `refactor-p1-unique-labels`. `gb_asm::LabelAllocator` hands out numbered **local**
+labels (`.{stem}_{n}`); its clones share one counter, so every label of a program comes from one sequence,
+in call order (deterministic). Local labels never change the RGBDS scope, so a snippet inside an `If` body
+no longer hides the `If`'s `.end_if_N`. `check_key` emits `.check_left_N` / `.check_left_N_end`, a limited
+move `.sprite{oam}_{dir}_limit_N_store` / `…_end`; the plain `gb_std` moves (`Left:`/`LeftEnd:`) and the
+`LeftLimit:` markers jumped nowhere and are gone. `RustBoy` owns the allocator and shares it with its
+`SpriteManager` (the public move API is unchanged) and with `add_inputs`; `RustBoy::unique_label` uses it
+too. `gb_std` is stateless, so `check_key` and `Sprite::move_*_limit` now take a `&LabelAllocator`
+(breaking change for direct `gb_std` users; `unbricked_std` updated). Only label names change in the
+examples' asm: all 6 ROMs are byte-identical. Tests: the same check or move twice, on two buttons, from two
+`InputManager`s, inside an `If`/else and a function, for single and composite sprites; `gb_asm::label_check`
+checks a whole program's labels with the RGBDS scope rules (it agrees with rgbasm/rgblink on all examples).
+`If` keeps its own counter (`.end_if_N`), and `ClearOam`/`AnimEnd` stay global (emitted once, outside user
+code); one allocator for everything is the Phase 2 item.
 
 #### B8
 **`move_*_limit` only stops on exact equality.** `cp limit` + `jp z` (`src/rust_boy/sprites.rs:490, 510,
@@ -368,9 +393,18 @@ today would break linking, because calls made through `Call`/`IfCall` are not tr
 
 #### B25
 **Animation labels are not namespaced by sprite.** `Anim_{name}` and `.skip_{name}`
-(`src/rust_boy/sprites.rs:632, 685-686`): two sprites that both have a `"Spin"` animation, or two composites
-with `"Walk"`, emit duplicate labels. Names with `-` or spaces produce invalid labels. *Fix:* prefix with the
-sprite; validate names.
+(`src/rust_boy/sprites.rs:632, 685-686`; `:744, 797-798` at `7b54900`): two sprites that both have a `"Spin"`
+animation, or two composites with `"Walk"` (each half got `Walk_0` / `Walk_1`, `:386`), emit duplicate labels.
+Names with `-` or spaces produce invalid labels. *Fix:* prefix with the sprite; validate names.
+**Status: fixed** on `refactor-p1-unique-labels`: the function is `Anim_{sprite}_{animation}` and the
+dispatcher label `.skip_{sprite}_{animation}`; a composite gives each of its sprites the animation name
+itself (`Anim_player_left_Walk`, `Anim_player_right_Walk`; the `_0`/`_1` suffix is gone). Sprite, composite
+and animation names must be valid RGBDS identifiers (a letter or `_`, then letters, digits, `_#$@`), sprite
+names must be unique, and so must animation names per sprite and per composite; a name that would give an
+existing animation label (`"Big_Coin"` + `"Spin"` vs `"Big"` + `"Coin_Spin"`) is rejected too. Each case
+panics with a message naming the sprite and the animation. RGBDS keywords (a sprite called `a`) are not
+checked; the other user names (tiles, variables, functions, constants) are the Phase 3 item "Validate
+user-supplied symbol names".
 
 #### B26
 **Builtins reached through `Call`/`IfCall` are not auto-included.** `Call::emit`
@@ -422,6 +456,13 @@ compiled; `inputs.rs` comment and `RustBoy::call` example corrected; the `If` do
 - `docs/graphics.md:106`: "`build()` inserts … OAM DMA automatically" — there is no OAM DMA ([B12](#b12)).
 - `docs/variables.md:99`: HRAM variables via `create_in_section` "from `gb_std`" — it lives in `rust_boy` and
   always emits `WRAM0`.
+- Since [B8](#b8) a sprite **limit is included**: `docs/sprite-movement.md:40-43, 105` and
+  `docs/api-levels.md:93-94` use `15` / `105` (and `145`), the Unbricked values from when the limit was the
+  first position the sprite could not reach. With the same values a sprite now goes one pixel further on each
+  side: with a step of 1 it stops on OAM X 15 and 105 (before: 16 and 104). Write `16` / `104` (as the
+  Unbricked examples now do) to keep the old stop positions.
+- Since [B7](#b7), `gb_std` `check_key` and `Sprite::move_*_limit` take a `&LabelAllocator` first:
+  `docs/api-levels.md:65`, `docs/button-actions.md:97-98` and `docs/sprite-movement.md:105` call them without it.
 
 ---
 

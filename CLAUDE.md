@@ -29,6 +29,7 @@ cargo clippy --all-targets                # lint
 cargo fmt                                 # format
 cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbricked_std,
                                           #       unbricked_rustboy, fosdem, coin-anim
+scripts/assemble-examples.sh              # every example -> target/examples/<bin>/main.gb (needs RGBDS)
 ```
 
 Assembling generated output (RGBDS ≥ 0.9). `include/hardware.inc` (v4.x) and the example's `.2bpp` assets
@@ -68,8 +69,8 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 - If the work needs a PR that is not merged yet, branch from that PR's branch instead (stacked PR),
   still target `refactor`, and start the PR description with "Depends on #N".
 - Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
-- Before pushing: `cargo build`, `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check`
-  (once Phase 0 makes them pass), and assemble any example whose output changed.
+- Before pushing, run what CI runs (`.github/workflows/ci.yml`): `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `scripts/assemble-examples.sh`.
 - Push the branch and open a **PR into `refactor`** (never straight into `main`). When everything is done,
   `refactor` → `main` is a final PR.
 - Never force-push, rewrite published history or delete branches without asking first.

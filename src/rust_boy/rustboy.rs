@@ -5,7 +5,7 @@ use crate::gb_std::flow::Emittable;
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
-use super::sprites::SpriteManager;
+use super::sprites::{SpriteManager, SpriteSize};
 use super::tiles::TileManager;
 use super::variables::VariableManager;
 
@@ -85,6 +85,25 @@ impl RustBoy {
     pub fn set_animation_delay(&mut self, delay: u8) -> &mut Self {
         self.animation_delay = delay;
         self
+    }
+
+    /// Set the size of every sprite: [`SpriteSize::Size8x8`] (the default, as on the
+    /// hardware) or [`SpriteSize::Size8x16`]. `build()` writes it to LCDC.
+    ///
+    /// In 8x16 mode each sprite shows two stacked tiles, so every sprite needs an even
+    /// number of tiles and an animation frame is two tiles. [`RustBoy::add_sprite_16x16`]
+    /// needs 8x16 mode.
+    ///
+    /// # Panics
+    /// If sprites were already added with another size: call it before adding sprites.
+    pub fn set_sprite_size(&mut self, size: SpriteSize) -> &mut Self {
+        self.sprites.set_size(size);
+        self
+    }
+
+    /// The size of every sprite (see [`RustBoy::set_sprite_size`])
+    pub fn sprite_size(&self) -> SpriteSize {
+        self.sprites.size()
     }
 
     /// Define a constant value
@@ -311,8 +330,11 @@ impl RustBoy {
         // Emit variable initialization
         asm.emit_all(self.vars.generate_init_code());
 
-        // Turn on screen
-        asm.ld_a_label("LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16"); //TODO set in the struct
+        // Turn on screen, with the sprite size chosen by set_sprite_size
+        asm.ld_a_label(&format!(
+            "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
+            self.sprites.size().lcdc_flag()
+        ));
         asm.ld_addr_def_a("rLCDC");
 
         // Set default palettes
@@ -433,6 +455,9 @@ impl RustBoy {
 
     /// Add a sprite with its tile in one call
     /// Returns the sprite ID for later reference
+    ///
+    /// # Panics
+    /// In 8x16 mode, if `tile_source` has an odd number of tiles.
     pub fn add_sprite(
         &mut self,
         name: &str,
@@ -471,6 +496,10 @@ impl RustBoy {
     ///
     /// # Returns
     /// A `CompositeSpriteId` that can be used with composite sprite methods
+    ///
+    /// # Panics
+    /// In 8x8 mode (call `set_sprite_size(SpriteSize::Size8x16)` first), or if a half has
+    /// an odd number of tiles.
     pub fn add_sprite_16x16(
         &mut self,
         name: &str,
@@ -480,6 +509,14 @@ impl RustBoy {
         y: u8,
         flags: u8,
     ) -> super::sprites::CompositeSpriteId {
+        if self.sprites.size() != SpriteSize::Size8x16 {
+            panic!(
+                "add_sprite_16x16(\"{}\") needs 8x16 sprites: call \
+                 set_sprite_size(SpriteSize::Size8x16) before adding sprites",
+                name
+            );
+        }
+
         // Create the left sprite
         let left_name = format!("{}_left", name);
         let left_sprite = self.add_sprite(&left_name, left_tiles, x, y, flags);
@@ -692,5 +729,152 @@ mod tests {
         let mut gb = sample_rustboy();
         let first = gb.build();
         assert!(gb.build() == first, "a second build() changed the output");
+    }
+
+    // ==================== Sprite size (B4) ====================
+
+    use crate::rust_boy::{AnimationType, SpriteId, TileSource};
+
+    /// `count` sprite tiles
+    fn tiles(count: usize) -> TileSource {
+        TileSource::from_raw(&vec![["$FF"; 8]; count])
+    }
+
+    /// The instruction that turns the LCD on
+    fn lcdc_on(out: &str) -> &str {
+        out.lines()
+            .find(|line| line.contains("LCDCF_ON"))
+            .expect("the LCD is never turned on")
+            .trim()
+    }
+
+    /// The body of a generated function, from its label to its `ret`
+    fn function<'a>(out: &'a str, label: &str) -> &'a str {
+        let start = out
+            .find(&format!("{}:", label))
+            .unwrap_or_else(|| panic!("`{}` not found", label));
+        let len = out[start..].find("ret").expect("no ret");
+        &out[start..start + len]
+    }
+
+    /// OAM tile index of a sprite, and the VRAM address its tiles are copied to
+    fn tile_of(gb: &RustBoy, id: SpriteId) -> (u8, u16) {
+        let sprite = gb.sprites.get(id).expect("unknown sprite");
+        let addr = gb.tiles.get_address(sprite.tile_id).expect("no tiles");
+        (sprite.tile_index, addr)
+    }
+
+    #[test]
+    fn test_sprites_are_8x8_by_default() {
+        let mut gb = RustBoy::new();
+        assert_eq!(gb.sprite_size(), SpriteSize::Size8x8);
+        let paddle = gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
+        let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
+
+        let out = gb.build();
+        assert_eq!(
+            lcdc_on(&out),
+            "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8"
+        );
+        // One tile per sprite: Ball draws its own tile, not Paddle's bottom half
+        assert_eq!(tile_of(&gb, paddle), (0, 0x8000));
+        assert_eq!(tile_of(&gb, ball), (1, 0x8010));
+    }
+
+    #[test]
+    fn test_8x16_mode_sets_lcdc_obj16() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.add_sprite("Player", tiles(2), 80, 72, 0);
+        // Setting the same size again is fine
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        assert_eq!(gb.sprite_size(), SpriteSize::Size8x16);
+
+        let out = gb.build();
+        assert_eq!(
+            lcdc_on(&out),
+            "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16"
+        );
+    }
+
+    #[test]
+    fn test_8x16_tile_indices_are_even() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let a = gb.add_sprite("A", tiles(2), 0, 0, 0);
+        let b = gb.add_sprite("B", tiles(6), 0, 0, 0);
+        let c = gb.add_sprite_16x16("C", tiles(4), tiles(4), 0, 0, 0);
+        let d = gb.add_sprite("D", tiles(2), 0, 0, 0);
+        let halves = gb.sprites.get_composite_sprites(c).unwrap().clone();
+
+        assert_eq!(tile_of(&gb, a), (0, 0x8000));
+        assert_eq!(tile_of(&gb, b), (2, 0x8020));
+        assert_eq!(tile_of(&gb, halves[0]), (8, 0x8080));
+        assert_eq!(tile_of(&gb, halves[1]), (12, 0x80C0));
+        assert_eq!(tile_of(&gb, d), (16, 0x8100));
+    }
+
+    #[test]
+    fn test_8x16_animation_frame_is_two_tiles() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.add_sprite("Other", tiles(2), 0, 0, 0);
+        let walker = gb.add_sprite("Walker", tiles(8), 80, 72, 0);
+        gb.sprites
+            .add_animation(walker, "Walk", 1, 3, AnimationType::Loop);
+
+        let out = gb.build();
+        // Walker starts at tile 2; frames 1..=3 are tiles 4, 6 and 8, two apart
+        let walk = function(&out, "Anim_Walk");
+        assert!(walk.contains("add a, 2"), "{}", walk);
+        assert!(walk.contains("cp 4"), "{}", walk);
+        assert!(walk.contains("cp 10"), "{}", walk);
+        assert!(walk.contains("ld a, 4"), "{}", walk);
+    }
+
+    #[test]
+    fn test_8x8_animation_frame_is_one_tile() {
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(7), 80, 72, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 6, AnimationType::Loop);
+
+        let out = gb.build();
+        let spin = function(&out, "Anim_Spin");
+        assert!(spin.contains("inc a"), "{}", spin);
+        assert!(spin.contains("cp 7"), "{}", spin);
+    }
+
+    #[test]
+    #[should_panic(expected = "add_sprite_16x16(\"Player\") needs 8x16 sprites")]
+    fn test_16x16_sprite_needs_8x16_mode() {
+        let mut gb = RustBoy::new();
+        gb.add_sprite_16x16("Player", tiles(2), tiles(2), 80, 72, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "sprite \"Odd\" has 3 tiles")]
+    fn test_odd_tile_count_in_8x16_mode_panics() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.add_sprite("Odd", tiles(3), 0, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "animation \"Walk\": frame_step 1 is odd")]
+    fn test_odd_frame_step_in_8x16_mode_panics() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let walker = gb.add_sprite("Walker", tiles(8), 0, 0, 0);
+        gb.sprites
+            .add_animation_with_step(walker, "Walk", 0, 3, AnimationType::Loop, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "set_sprite_size(Size8x16) must be called before the first sprite")]
+    fn test_sprite_size_cannot_change_after_adding_sprites() {
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Ball", tiles(1), 0, 0, 0);
+        gb.set_sprite_size(SpriteSize::Size8x16);
     }
 }

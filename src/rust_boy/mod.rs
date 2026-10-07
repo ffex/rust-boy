@@ -17,6 +17,6 @@ pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
 pub use memory::MemoryRegion;
 pub use rustboy::RustBoy;
-pub use sprites::{ANIM_DISABLED, CompositeSpriteId, SpriteId, SpriteManager};
+pub use sprites::{ANIM_DISABLED, CompositeSpriteId, SpriteId, SpriteManager, SpriteSize};
 pub use tiles::{TileId, TileManager, TileSource};
 pub use variables::{VarId, VarType, VariableManager};

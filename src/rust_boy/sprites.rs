@@ -30,6 +30,38 @@ pub(crate) struct CompositeSpriteData {
 /// No animation active (255 = disabled)
 pub const ANIM_DISABLED: u8 = 255;
 
+/// Size of every hardware sprite (LCDC bit 2); one setting for all sprites.
+///
+/// In 8x16 mode a sprite shows two stacked tiles: the hardware ignores bit 0 of its
+/// tile index and draws tile `n & $FE` on top and `n | 1` below. So every sprite has an
+/// even number of tiles, starts on an even tile index, and one animation frame is two tiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpriteSize {
+    /// 8x8 pixels, one tile per sprite (the hardware default)
+    #[default]
+    Size8x8,
+    /// 8x16 pixels, two tiles per sprite: an even tile on top, the next one below
+    Size8x16,
+}
+
+impl SpriteSize {
+    /// Tiles one sprite (one animation frame) uses: 1 for 8x8, 2 for 8x16
+    pub fn tiles_per_sprite(self) -> u8 {
+        match self {
+            SpriteSize::Size8x8 => 1,
+            SpriteSize::Size8x16 => 2,
+        }
+    }
+
+    /// The `hardware.inc` LCDC flag that selects this size
+    pub(crate) fn lcdc_flag(self) -> &'static str {
+        match self {
+            SpriteSize::Size8x8 => "LCDCF_OBJ8",
+            SpriteSize::Size8x16 => "LCDCF_OBJ16",
+        }
+    }
+}
+
 /// Internal sprite data
 #[derive(Debug, Clone)]
 pub(crate) struct SpriteData {
@@ -54,6 +86,7 @@ pub struct SpriteManager {
     next_composite_id: usize,
     next_oam_index: u8,
     next_tile_index: u8,
+    size: SpriteSize,
 }
 
 impl SpriteManager {
@@ -65,13 +98,47 @@ impl SpriteManager {
             next_composite_id: 0,
             next_oam_index: 0,
             next_tile_index: 0,
+            size: SpriteSize::default(),
         }
+    }
+
+    /// Size of every sprite (see `RustBoy::set_sprite_size`)
+    pub(crate) fn size(&self) -> SpriteSize {
+        self.size
+    }
+
+    /// Set the size of every sprite (see `RustBoy::set_sprite_size`)
+    ///
+    /// # Panics
+    /// If sprites were already added with another size: their tile indices depend on it.
+    pub(crate) fn set_size(&mut self, size: SpriteSize) {
+        if size != self.size && !self.sprites.is_empty() {
+            panic!(
+                "set_sprite_size({:?}) must be called before the first sprite is added \
+                 (the sprites already added use {:?})",
+                size, self.size
+            );
+        }
+        self.size = size;
     }
 
     /// Add a new sprite with tile data and initial position
     /// Returns both the sprite ID and tile ID for reference
     /// `tile_count` is the number of tiles this sprite uses (for proper tile index allocation)
+    ///
+    /// # Panics
+    /// In 8x16 mode, if `tile_count` is odd: the bottom half of the last frame would be
+    /// the next tile in VRAM, which is not this sprite's.
     pub fn add(&mut self, name: &str, x: u8, y: u8, flags: u8, tile_count: u8) -> SpriteId {
+        if self.size == SpriteSize::Size8x16 && tile_count % 2 != 0 {
+            panic!(
+                "sprite \"{}\" has {} tiles, but in 8x16 mode every sprite frame is two tiles \
+                 (top and bottom), so the tile count must be even",
+                name, tile_count
+            );
+        }
+        // Tile indices start at 0 and every sprite takes whole frames, so in 8x16 mode
+        // each sprite starts on an even tile, as the hardware needs (it ignores bit 0)
         let tile_index = self.next_tile_index;
         let oam_index = self.next_oam_index;
 
@@ -114,7 +181,8 @@ impl SpriteManager {
         self.sprites.get(&id)
     }
 
-    /// Add an animation to a sprite (8x8 mode, frame_step=1)
+    /// Add an animation to a sprite; a frame is one sprite's worth of tiles
+    /// (1 tile in 8x8 mode, 2 tiles in 8x16 mode)
     /// - `name`: Animation name (used for label generation)
     /// - `start_frame`: Relative start frame index (e.g., 0)
     /// - `end_frame`: Relative end frame index (e.g., 6)
@@ -129,12 +197,22 @@ impl SpriteManager {
         end_frame: u8,
         anim_type: super::animations::AnimationType,
     ) -> u8 {
-        self.add_animation_with_step(sprite_id, name, start_frame, end_frame, anim_type, 1)
+        let frame_step = self.size.tiles_per_sprite();
+        self.add_animation_with_step(
+            sprite_id,
+            name,
+            start_frame,
+            end_frame,
+            anim_type,
+            frame_step,
+        )
     }
 
-    /// Add an animation to a sprite with custom frame step
-    /// Use frame_step=2 for 8x16 sprites
+    /// Add an animation to a sprite with custom frame step (tiles between two frames)
     /// Returns the animation index within this sprite
+    ///
+    /// # Panics
+    /// In 8x16 mode, if `frame_step` is odd: every frame must start on an even tile.
     pub fn add_animation_with_step(
         &mut self,
         sprite_id: SpriteId,
@@ -144,6 +222,13 @@ impl SpriteManager {
         anim_type: super::animations::AnimationType,
         frame_step: u8,
     ) -> u8 {
+        if self.size == SpriteSize::Size8x16 && frame_step % 2 != 0 {
+            panic!(
+                "animation \"{}\": frame_step {} is odd, but in 8x16 mode every frame is two \
+                 tiles, so frame_step must be even",
+                name, frame_step
+            );
+        }
         if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
             let index = sprite.animations.len() as u8;
             let animation = Animation {
@@ -254,7 +339,7 @@ impl SpriteManager {
 
     /// Add an animation to all sprites in a composite
     /// The animation name will be used as a prefix, with each sprite getting a unique suffix
-    /// Uses frame_step=2 for 8x16 sprite mode
+    /// Composites are made of 8x16 sprites, so a frame is two tiles
     /// Returns the animation index (same for all sprites in the composite)
     pub fn add_composite_animation(
         &mut self,
@@ -272,14 +357,12 @@ impl SpriteManager {
 
             for (i, sprite_id) in sprite_ids.iter().enumerate() {
                 let anim_name = format!("{}_{}", name, i);
-                // Use frame_step=2 for composite sprites (8x16 mode)
-                anim_index = self.add_animation_with_step(
+                anim_index = self.add_animation(
                     *sprite_id,
                     &anim_name,
                     start_frame,
                     end_frame,
                     anim_type.clone(),
-                    2,
                 );
             }
         }

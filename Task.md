@@ -54,7 +54,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 
 ### P0 — broken in shipped examples
 - [x] Duplicate `wCurKeys`/`wNewKeys` labels; variable names never deduplicated — [B3](CONTEXT.md#b3) (branch `refactor-p1-duplicate-vars`)
-- [ ] `LCDCF_OBJ16` forced → 8×8 sprites render wrong; add sprite-size config + even tile alignment in 8×16 — [B4](CONTEXT.md#b4)
+- [x] `LCDCF_OBJ16` forced → 8×8 sprites render wrong; add sprite-size config + even tile alignment in 8×16 — [B4](CONTEXT.md#b4)
+      (branch `refactor-p1-sprite-size`: `RustBoy::set_sprite_size`, 8×8 by default; `fosdem` opts into 8×16)
 - [x] Two-operand `If` compares right-vs-left; fix `If`, then both Unbricked examples (paddle bounce in
       `unbricked_std` never fires) — [B5](CONTEXT.md#b5) (branch `refactor-p1-if-semantics`; the left operand
       must not change `b`, now documented — a register-safe `If` is in Phase 2)
@@ -107,7 +108,8 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       (fixes B26) and a documented calling convention (which registers each routine clobbers)
 - [ ] One source of truth for builtins: `rust_boy` reuses `gb_std`; remove the duplicate `gb_std::graphics::sprites::SpriteManager`
 - [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s
-- [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins)
+- [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
+      as `RustBoy::set_sprite_size`
 - [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM
 - [ ] `If` that never clobbers user registers (or documents what it uses)
 - [ ] `prelude` module; avoid the `rust_boy::rust_boy` stutter (optional rename: `asm` / `std` / `engine`)
@@ -122,7 +124,7 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Window layer (`WX`/`WY`, `$9C00` map)
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
-- [ ] Choice of 8×8 or 8×16 sprites; metasprites of any size (generalise 16×16)
+- [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation

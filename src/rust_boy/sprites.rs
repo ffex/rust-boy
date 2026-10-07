@@ -85,6 +85,14 @@ enum Axis {
 }
 
 impl Axis {
+    /// The sprite's initial position on this axis (screen coordinates)
+    fn position(self, sprite: &SpriteData) -> u8 {
+        match self {
+            Axis::X => sprite.x,
+            Axis::Y => sprite.y,
+        }
+    }
+
     /// The address of the sprite's coordinate in OAM: Y is byte 0 of its entry, X byte 1
     fn oam_address(self, sprite: &SpriteData) -> String {
         let byte = match self {
@@ -435,76 +443,102 @@ impl SpriteManager {
         instrs
     }
 
-    /// Move all sprites in a composite left with limit
+    /// Move a composite sprite left by `distance` pixels, as one block: no sprite of the
+    /// composite goes left of `limit` (an OAM X, screen x + 8)
+    ///
+    /// The sprite that reaches the limit first (the leftmost one) is tested and stops
+    /// exactly on the limit, the others keep their offsets from it: the composite never
+    /// splits at a screen edge. See [`SpriteManager::move_left_limit`] for the limit rules.
     pub fn move_composite_left_limit(
         &self,
         id: CompositeSpriteId,
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        let mut instrs = Vec::new();
-
-        if let Some(composite) = self.composite_sprites.get(&id) {
-            for sprite_id in &composite.sprites {
-                instrs.extend(self.move_left_limit(*sprite_id, distance, limit));
-            }
-        }
-
-        instrs
+        self.move_composite_limit(id, Axis::X, MoveDir::Decrease, "Left", distance, limit)
     }
 
-    /// Move all sprites in a composite right with limit
+    /// Move a composite sprite right by `distance` pixels, as one block: no sprite of the
+    /// composite goes right of `limit` (an OAM X, screen x + 8); the rightmost one is tested,
+    /// see [`SpriteManager::move_composite_left_limit`]
     pub fn move_composite_right_limit(
         &self,
         id: CompositeSpriteId,
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        let mut instrs = Vec::new();
-
-        if let Some(composite) = self.composite_sprites.get(&id) {
-            for sprite_id in &composite.sprites {
-                instrs.extend(self.move_right_limit(*sprite_id, distance, limit));
-            }
-        }
-
-        instrs
+        self.move_composite_limit(id, Axis::X, MoveDir::Increase, "Right", distance, limit)
     }
 
-    /// Move all sprites in a composite up with limit
+    /// Move a composite sprite up by `distance` pixels, as one block: no sprite of the
+    /// composite goes above `limit` (an OAM Y, screen y + 16); the topmost one is tested,
+    /// see [`SpriteManager::move_composite_left_limit`]
     pub fn move_composite_up_limit(
         &self,
         id: CompositeSpriteId,
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        let mut instrs = Vec::new();
-
-        if let Some(composite) = self.composite_sprites.get(&id) {
-            for sprite_id in &composite.sprites {
-                instrs.extend(self.move_up_limit(*sprite_id, distance, limit));
-            }
-        }
-
-        instrs
+        self.move_composite_limit(id, Axis::Y, MoveDir::Decrease, "Up", distance, limit)
     }
 
-    /// Move all sprites in a composite down with limit
+    /// Move a composite sprite down by `distance` pixels, as one block: no sprite of the
+    /// composite goes below `limit` (an OAM Y, screen y + 16); the lowest one is tested,
+    /// see [`SpriteManager::move_composite_left_limit`]
     pub fn move_composite_down_limit(
         &self,
         id: CompositeSpriteId,
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        let mut instrs = Vec::new();
+        self.move_composite_limit(id, Axis::Y, MoveDir::Increase, "Down", distance, limit)
+    }
 
-        if let Some(composite) = self.composite_sprites.get(&id) {
-            for sprite_id in &composite.sprites {
-                instrs.extend(self.move_down_limit(*sprite_id, distance, limit));
-            }
-        }
+    /// Limited move of a composite (B6): the member that reaches the limit first leads,
+    /// the others follow at the offsets they were created with
+    fn move_composite_limit(
+        &self,
+        id: CompositeSpriteId,
+        axis: Axis,
+        dir: MoveDir,
+        name: &str,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        let Some(composite) = self.composite_sprites.get(&id) else {
+            return Vec::new();
+        };
+        let members: Vec<&SpriteData> = composite
+            .sprites
+            .iter()
+            .filter_map(|sprite_id| self.sprites.get(sprite_id))
+            .collect();
+        let pos = |sprite: &SpriteData| i16::from(axis.position(sprite));
 
-        instrs
+        // The leftmost / rightmost / topmost / lowest member; the first one on a tie
+        let Some(lead) = members.iter().copied().reduce(|lead, sprite| {
+            let ahead = match dir {
+                MoveDir::Decrease => pos(sprite) < pos(lead),
+                MoveDir::Increase => pos(sprite) > pos(lead),
+            };
+            if ahead { sprite } else { lead }
+        }) else {
+            return Vec::new();
+        };
+        let followers: Vec<(String, i16)> = members
+            .iter()
+            .filter(|sprite| sprite.oam_index != lead.oam_index)
+            .map(|sprite| (axis.oam_address(sprite), pos(sprite) - pos(lead)))
+            .collect();
+
+        move_coord_limit(
+            &axis.oam_address(lead),
+            &followers,
+            dir,
+            distance,
+            limit,
+            &format!("Sprite{}{}Limit", lead.oam_index, name),
+        )
     }
 
     /// Generate OAM initialization code
@@ -805,6 +839,7 @@ mod tests {
     use crate::gb_asm::test_cpu::TestCpu;
     use crate::gb_std::graphics::sprites::MoveDir;
     use crate::gb_std::graphics::sprites::tests::{DISTANCES, LIMITS, expected_move};
+    use crate::rust_boy::{RustBoy, TileSource};
 
     /// A test CPU whose OAM holds every sprite at its initial position
     fn cpu_with_oam(sm: &SpriteManager) -> TestCpu {
@@ -893,6 +928,105 @@ mod tests {
             assert!(x <= 100, "frame {}: X {} is past the limit 100", frame, x);
         }
         assert_eq!(cpu.mem["_OAMRAM+1"], 100);
+    }
+
+    type CompositeMove = fn(&SpriteManager, CompositeSpriteId, u8, u8) -> Vec<Instr>;
+
+    #[test]
+    fn test_composite_moves_as_one_block() {
+        // B6: each 8x16 half used to stop at the limit on its own, so at a screen edge
+        // the leading half stopped while the other kept going and the 16x16 collapsed
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let player = gb.add_sprite_16x16(
+            "player",
+            TileSource::from_file("left.2bpp", 2),
+            TileSource::from_file("right.2bpp", 2),
+            80,
+            72,
+            0,
+        );
+        // OAM entry 0 is the left half (Y 88, X 88), entry 1 the right half (Y 88, X 96)
+        let halves = |cpu: &TestCpu| {
+            let m = |n: u8| cpu.mem[&format!("_OAMRAM+{}", n)];
+            ((m(0), m(1)), (m(4), m(5)))
+        };
+        // (name, method, direction, axis byte in the OAM entry, limit) as in the fosdem example
+        let moves: [(&str, CompositeMove, MoveDir, u8, u8); 4] = [
+            (
+                "left",
+                SpriteManager::move_composite_left_limit,
+                MoveDir::Decrease,
+                1,
+                1,
+            ),
+            (
+                "right",
+                SpriteManager::move_composite_right_limit,
+                MoveDir::Increase,
+                1,
+                149,
+            ),
+            (
+                "up",
+                SpriteManager::move_composite_up_limit,
+                MoveDir::Decrease,
+                0,
+                1,
+            ),
+            (
+                "down",
+                SpriteManager::move_composite_down_limit,
+                MoveDir::Increase,
+                0,
+                149,
+            ),
+        ];
+
+        for (name, method, dir, byte, limit) in moves {
+            for distance in [1, 3, 8] {
+                let code = method(&gb.sprites, player, distance, limit);
+                let mut cpu = cpu_with_oam(&gb.sprites);
+                for frame in 0..300 {
+                    cpu.run(&code);
+                    let ((ly, lx), (ry, rx)) = halves(&cpu);
+                    let what = format!(
+                        "move_composite_{}_limit({}, {}), frame {}: left half at ({}, {}), right half at ({}, {})",
+                        name, distance, limit, frame, lx, ly, rx, ry
+                    );
+                    assert_eq!(
+                        (ry, rx),
+                        (ly, lx.wrapping_add(8)),
+                        "{}: the halves split",
+                        what
+                    );
+                    let coords = if byte == 1 { [lx, rx] } else { [ly, ry] };
+                    for coord in coords {
+                        match dir {
+                            MoveDir::Decrease => {
+                                assert!(coord >= limit, "{}: past the limit", what)
+                            }
+                            MoveDir::Increase => {
+                                assert!(coord <= limit, "{}: past the limit", what)
+                            }
+                        }
+                    }
+                }
+                // The leading half ends exactly on the limit
+                let ((ly, lx), (ry, rx)) = halves(&cpu);
+                let lead = match (byte, dir) {
+                    (1, MoveDir::Decrease) => lx,
+                    (1, MoveDir::Increase) => rx,
+                    (_, MoveDir::Decrease) => ly,
+                    (_, MoveDir::Increase) => ry,
+                };
+                assert_eq!(
+                    lead, limit,
+                    "move_composite_{}_limit({}, {})",
+                    name, distance, limit
+                );
+            }
+        }
     }
 
     #[test]

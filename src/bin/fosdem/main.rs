@@ -39,7 +39,8 @@ fn main() {
     gb.sprites
         .set_composite_initial_animation(player, ANIM_DISABLED);
 
-    // Input handling. Limits are OAM coordinates (screen x + 8, screen y + 16), included
+    // Input handling. Limits are OAM coordinates (screen x + 8, screen y + 16), included;
+    // the player moves as one block and its leading half stops on the limit
     let mut inputs = InputManager::new();
     inputs.on_press(
         PadButton::Left,

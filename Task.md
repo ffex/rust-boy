@@ -28,9 +28,10 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
       *Prerequisite for every snapshot test.* (branch `refactor-p0-deterministic-output`; output follows creation order)
 - [x] Decide the `If` semantics once: `If::lt(l, r)` means `l < r` (documented meaning) — decided 2026-10-07. Needed before
       fixing [B5](CONTEXT.md#b5), because the two Unbricked examples use opposite argument orders.
-- [ ] CI (GitHub Actions): `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, build all bins,
+- [x] CI (GitHub Actions): `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, build all bins,
       and **required** `rgbasm` + `rgblink` of every example's output. Pin the RGBDS version (≥ 0.9; the
-      committed objects are RGBDS 1.0).
+      committed objects are RGBDS 1.0). (branch `refactor-p0-ci`: `.github/workflows/ci.yml` +
+      `scripts/assemble-examples.sh`, RGBDS v1.0.4, a Rust 1.85 job for `rust-version`)
 - [x] One in-crate `hardware.inc` (v4.x) instead of the 6 copies under `examples/` — now `include/hardware.inc` (branch `refactor-p0-repo-hygiene`)
 - [x] Fix the 10 compiler warnings (unused `MemoryAllocator`, `needs_special_handling`, `is_used`, unused
       import `JumpTarget`, private `SpriteData` leaking through `SpriteManager::get`, dead fields), and

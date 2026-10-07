@@ -146,7 +146,21 @@ fn instr_size(instr: &Instr) -> usize {
             (AddrReg(Register::HL), Imm(_) | Label(_)) => 2,
             (dst, src) => panic!("jr_range_errors: unknown size of ld {}, {}", dst, src),
         },
+        // `ldh a, [c]` / `ldh [c], a` 1 byte, `ldh a, [n8]` / `ldh [n8], a` 2
+        Instr::Ldh {
+            dst: AddrReg(Register::C),
+            ..
+        }
+        | Instr::Ldh {
+            src: AddrReg(Register::C),
+            ..
+        } => 1,
         Instr::Ldh { .. } => 2,
+        // `add sp, e8` 2 bytes, `add hl, r16` 1
+        Instr::Add {
+            dst: Reg(Register::SP),
+            ..
+        } => 2,
         Instr::Add { dst: Reg(r), .. } if wide(r) => 1,
         Instr::Add { src, .. }
         | Instr::Adc { src, .. }
@@ -166,26 +180,40 @@ fn instr_size(instr: &Instr) -> usize {
 
 /// Every `jr` in `code` whose target, a label in `code`, is out of its reach: the
 /// offset from the end of the `jr` must be in -128..=127 (rgbasm rejects the others).
-/// Labels are matched by name; `label_errors` checks their scopes.
+/// A local label (`.name`) belongs to the last global label before it, as in RGBDS, so
+/// the same local name in two routines is two labels.
 pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
-    let mut addresses = Vec::with_capacity(code.len());
+    // Full name of a label used under the global label `scope` ("" before the first)
+    let full_name = |scope: &str, name: &str| {
+        if name.starts_with('.') {
+            format!("{}{}", scope, name)
+        } else {
+            name.to_string()
+        }
+    };
+    // Address and scope of each instruction, and every label by its full name
+    let mut places = Vec::with_capacity(code.len());
     let mut labels = BTreeMap::new();
+    let mut scope = "";
     let mut address = 0;
     for instr in code {
-        addresses.push(address);
         if let Instr::Label { name } = instr {
-            labels.insert(name.as_str(), address);
+            if !name.starts_with('.') {
+                scope = name;
+            }
+            labels.insert(full_name(scope, name), address);
         }
+        places.push((address, scope));
         address += instr_size(instr);
     }
 
     let mut errors = Vec::new();
-    for (instr, address) in code.iter().zip(addresses) {
+    for (instr, (address, scope)) in code.iter().zip(places) {
         if let Instr::Jr { target } | Instr::JrCond { target, .. } = instr {
             let JumpTarget::Label(name) = target else {
                 continue;
             };
-            let Some(&to) = labels.get(name.as_str()) else {
+            let Some(&to) = labels.get(&full_name(scope, name)) else {
                 errors.push(format!("{}: target not found", instr));
                 continue;
             };
@@ -329,5 +357,54 @@ mod tests {
         let sizes: usize = code.iter().map(instr_size).sum();
         assert_eq!(sizes, 2 + 13);
         assert_eq!(jr_range_errors(&code), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_jr_range_resolves_local_labels_in_their_scope() {
+        // Two routines with their own `.end`: each `jr .end` reaches the `.end` of its
+        // routine, 2 bytes ahead, not the other one (which would be out of range)
+        let mut asm = Asm::new();
+        asm.label("First").jr(".end").ld_a(1).label(".end").ret();
+        for _ in 0..70 {
+            asm.ld_a(0); // 140 bytes
+        }
+        asm.label("Second").jr(".end").ld_a(2).label(".end").ret();
+        assert_eq!(
+            jr_range_errors(&asm.get_main_instrs()),
+            Vec::<String>::new()
+        );
+
+        // A local label of another scope is not found
+        let mut asm = Asm::new();
+        asm.label("First").label(".end").label("Second").jr(".end");
+        assert_eq!(
+            jr_range_errors(&asm.get_main_instrs()),
+            vec!["jr .end: target not found"]
+        );
+    }
+
+    #[test]
+    fn test_instr_size_of_ldh_and_add() {
+        let a = || Operand::Reg(Register::A);
+        let c = || Operand::AddrReg(Register::C);
+        let ldh = |dst, src| Instr::Ldh { dst, src };
+        let add = |dst, src| Instr::Add { dst, src };
+        // ldh a, [c] and ldh [c], a: 1 byte; ldh with an 8-bit address: 2
+        assert_eq!(instr_size(&ldh(a(), c())), 1);
+        assert_eq!(instr_size(&ldh(c(), a())), 1);
+        assert_eq!(
+            instr_size(&ldh(a(), Operand::AddrDef("rLY".to_string()))),
+            2
+        );
+        // add sp, e8: 2 bytes; add hl, r16: 1; add a, n8: 2
+        assert_eq!(
+            instr_size(&add(Operand::Reg(Register::SP), Operand::Imm(4))),
+            2
+        );
+        assert_eq!(
+            instr_size(&add(Operand::Reg(Register::HL), Operand::Reg(Register::DE))),
+            1
+        );
+        assert_eq!(instr_size(&add(a(), Operand::Imm(4))), 2);
     }
 }

@@ -68,8 +68,10 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       numbered local labels from `gb_asm::LabelAllocator`; `gb_std` `check_key` / `Sprite::move_*_limit` take one)
 - [x] `move_*_limit` stops only on exact equality → overshoot and wrap — [B8](CONTEXT.md#b8)
       (branch `refactor-p1-sprite-limits`: carry compares; a move stops exactly on its limit, which is included)
-- [ ] `jr` out of range in the animation dispatcher (≥ 3 animated sprites) — [B9](CONTEXT.md#b9)
-- [ ] `AnimationType::PingPong` / `Once` silently behave as `Loop` — [B10](CONTEXT.md#b10)
+- [x] `jr` out of range in the animation dispatcher (≥ 3 animated sprites) — [B9](CONTEXT.md#b9)
+      (branch `refactor-p1-animations`: `jp` for every jump whose distance grows with the animations)
+- [x] `AnimationType::PingPong` / `Once` silently behave as `Loop` — [B10](CONTEXT.md#b10)
+      (branch `refactor-p1-animations`: both implemented; `PingPong` keeps its direction in `wAnim_{sprite}_Dir`)
 - [ ] `gb.init()` code overwritten by variable initialisation — [B11](CONTEXT.md#b11)
 - [ ] Direct OAM access from the main loop (no shadow OAM / DMA) — [B12](CONTEXT.md#b12) *(implementation in Phase 3 graphics)*
 
@@ -109,7 +111,8 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] First-class sections (type, bank, `ALIGN`, `ds n` without fill for RAM); move `Chunk` and the game
       layout out of `gb_asm` into the engine
 - [ ] Label allocator owned by the asm layer; automatic `jr` → `jp` when out of range
-      (`gb_asm::LabelAllocator` exists since [B7](CONTEXT.md#b7) for snippet labels; `If` still has its own counter)
+      (`gb_asm::LabelAllocator` exists since [B7](CONTEXT.md#b7) for snippet labels; `If` still has its own counter;
+      since [B9](CONTEXT.md#b9) tests can check that each `jr` reaches its target with `gb_asm::label_check::jr_range_errors`)
 - [ ] Routines as values: `Routine { name, body, deps, clobbers }` → automatic inclusion of dependencies
       (fixes B26) and a documented calling convention (which registers each routine clobbers)
 - [ ] One source of truth for builtins: `rust_boy` reuses `gb_std`; remove the duplicate `gb_std::graphics::sprites::SpriteManager`
@@ -137,7 +140,7 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
 
 ### Animation
-- [ ] `PingPong` and `Once` ([B10](CONTEXT.md#b10))
+- [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
 - [ ] Per-animation speed (today only a global delay)
 - [ ] End-of-animation events / callbacks
 

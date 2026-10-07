@@ -134,9 +134,9 @@ Open them in any Game Boy emulator.
   Not yet: `push`/`pop`, `halt`, `di`/`ei`, `reti`, `sbc`, `bit`/`set`/`res`, rotates and most shifts, `cpl`, …
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and a tilemap, WRAM variables
   (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
-  (in 8×16 mode), looping animations, joypad bindings, and builtin routines that are included only when
+  (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and builtin routines that are included only when
   used. The output is deterministic: things appear in the order you created them.
-- **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), only looping animations work,
+- **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
   there is no sound yet, and everything lives in one ROM bank. The full list, with fixes planned, is in
   [CONTEXT.md](CONTEXT.md).
 

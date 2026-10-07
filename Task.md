@@ -51,7 +51,7 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 Every fix comes with a test (unit or snapshot) whose generated asm **assembles** in CI.
 
 ### P0 — broken in shipped examples
-- [ ] Duplicate `wCurKeys`/`wNewKeys` labels; variable names never deduplicated — [B3](CONTEXT.md#b3)
+- [x] Duplicate `wCurKeys`/`wNewKeys` labels; variable names never deduplicated — [B3](CONTEXT.md#b3) (branch `refactor-p1-duplicate-vars`)
 - [ ] `LCDCF_OBJ16` forced → 8×8 sprites render wrong; add sprite-size config + even tile alignment in 8×16 — [B4](CONTEXT.md#b4)
 - [x] Two-operand `If` compares right-vs-left; fix `If`, then both Unbricked examples (paddle bounce in
       `unbricked_std` never fires) — [B5](CONTEXT.md#b5) (branch `refactor-p1-if-semantics`; the left operand
@@ -68,7 +68,7 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] Direct OAM access from the main loop (no shadow OAM / DMA) — [B12](CONTEXT.md#b12) *(implementation in Phase 3 graphics)*
 
 ### P2
-- [ ] `build()` not idempotent — [B14](CONTEXT.md#b14)
+- [x] `build()` not idempotent — [B14](CONTEXT.md#b14) (branch `refactor-p1-duplicate-vars`); `build(&self)` stays a Phase 2 item
 - [ ] `raw()` drops non-`Main` chunks; raw code is unreachable — [B15](CONTEXT.md#b15)
 - [ ] `Var::set`/`get` ignore 16-bit variables — [B16](CONTEXT.md#b16)
 - [ ] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)

@@ -1,4 +1,5 @@
-// Game Boy Assembly Generator Library
+#![doc = include_str!("../README.md")]
+
 pub mod gb_asm;
 pub mod gb_std;
 pub mod rust_boy;

@@ -22,6 +22,7 @@ pub struct VarId(pub(crate) usize);
 /// ```
 #[derive(Debug, Clone)]
 pub struct Var {
+    id: VarId,
     name: String,
     var_type: VarType,
 }
@@ -49,6 +50,11 @@ impl Var {
     /// Get the variable name/label
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Get the variable id (for `VariableManager` lookups)
+    pub fn id(&self) -> VarId {
+        self.id
     }
 }
 
@@ -165,6 +171,7 @@ impl VariableManager {
             .push(id);
 
         Var {
+            id,
             name: name.to_string(),
             var_type,
         }
@@ -277,7 +284,7 @@ mod tests {
     fn test_u8_variable() {
         let mut vm = VariableManager::new();
 
-        let id = vm.create_u8("wScore", 0);
+        let id = vm.create_u8("wScore", 0).id();
 
         assert_eq!(vm.get_label(id), Some("wScore"));
         assert_eq!(vm.get_address(id), Some(0xC000));
@@ -288,9 +295,9 @@ mod tests {
     fn test_multiple_variables() {
         let mut vm = VariableManager::new();
 
-        let id1 = vm.create_u8("wVar1", 0);
-        let id2 = vm.create_u16("wVar2", 0);
-        let id3 = vm.create_u8("wVar3", 0);
+        let id1 = vm.create_u8("wVar1", 0).id();
+        let id2 = vm.create_u16("wVar2", 0).id();
+        let id3 = vm.create_u8("wVar3", 0).id();
 
         assert_eq!(vm.get_address(id1), Some(0xC000));
         assert_eq!(vm.get_address(id2), Some(0xC001)); // After 1 byte
@@ -301,7 +308,7 @@ mod tests {
     fn test_i8_variable() {
         let mut vm = VariableManager::new();
 
-        let id = vm.create_i8("wMomentum", -1);
+        let id = vm.create_i8("wMomentum", -1).id();
 
         assert_eq!(vm.get_label(id), Some("wMomentum"));
         assert_eq!(vm.get_type(id), Some(VarType::I8));

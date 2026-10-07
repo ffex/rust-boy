@@ -60,6 +60,8 @@ rgbfix -v -p 0xFF main.gb
 - For each phase, or each major edit, create a branch from an up-to-date `refactor`:
   `refactor-<phase>-<topic>`, e.g. `refactor-p1-if-semantics`, `refactor-p2-typed-operands`.
   (Use a dash, not a slash: git cannot have both a `refactor` branch and `refactor/...` branches.)
+- If the work needs a PR that is not merged yet, branch from that PR's branch instead (stacked PR),
+  still target `refactor`, and start the PR description with "Depends on #N".
 - Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
 - Before pushing: `cargo build`, `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check`
   (once Phase 0 makes them pass), and assemble any example whose output changed.

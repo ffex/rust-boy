@@ -140,6 +140,25 @@ impl RustBoy {
         format!("{}_{}", prefix, self.next_label_counter())
     }
 
+    /// The allocator that numbers this program's generated local labels (key checks,
+    /// sprite moves)
+    ///
+    /// Pass it to the `gb_std` snippets you mix into a `RustBoy` program
+    /// (`check_key`, `Sprite::move_*_limit`): a separate allocator starts again at 0
+    /// and would repeat labels that `RustBoy` already emitted.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_std::inputs::{PadButton, check_key};
+    /// use rust_boy::rust_boy::RustBoy;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// gb.add_to_main_loop(check_key(gb.labels(), PadButton::A, Vec::new()));
+    /// ```
+    pub fn labels(&self) -> &LabelAllocator {
+        &self.labels
+    }
+
     /// Add initialization code (runs once at startup)
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
         let instrs = code.emit(&mut self.if_counter);
@@ -983,6 +1002,27 @@ mod tests {
         )
         .or_else(gb.sprites.move_left_limit(ball, 2, 16));
         gb.define_function_from("FollowPaddle", else_move);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_gb_std_snippets_share_the_program_labels() {
+        // gb_std snippets mixed into a RustBoy program take its allocator: one of their
+        // own would start again at 0 and repeat RustBoy's labels (rgbasm:
+        // `Main.check_left_0` already defined)
+        use crate::gb_std::graphics::sprites::Sprite;
+        use crate::gb_std::inputs::check_key;
+
+        let mut gb = RustBoy::new();
+        let (paddle, _) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 16));
+        gb.add_inputs(inputs);
+        // The same button and the same OAM entry, through gb_std
+        let mut oam_0 = Sprite::new(0, 16, 128, 0, 0);
+        let body = oam_0.move_left_limit(gb.labels(), 1, 16);
+        gb.add_to_main_loop(check_key(gb.labels(), PadButton::Left, body));
 
         assert_labels_ok(&gb.build());
     }

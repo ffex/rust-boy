@@ -40,6 +40,10 @@ rgblink -o main.gb main.o
 rgbfix -v -p 0xFF main.gb
 ```
 
+No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
+`git clone --depth 1 --branch v1.0.4 https://github.com/gbdev/rgbds` and run
+`make rgbasm rgblink rgbfix` in that directory (needs a C++ compiler, bison and libpng).
+
 ## Architecture rules
 
 - Layers: `gb_asm` (instructions) → `gb_std` (stateless routines, `If`/flow control) → `rust_boy`

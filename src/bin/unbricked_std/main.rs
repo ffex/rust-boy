@@ -2,7 +2,7 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, Operand, Register},
+    gb_asm::{Asm, LabelAllocator, Operand, Register},
     gb_std::{
         flow::{Emittable, If},
         graphics::{
@@ -189,20 +189,24 @@ fn main() {
 
     asm.call("UpdateKeys");
 
-    // Input handling: the paddle stays between the walls, at OAM X 16 to 104 (limits included)
+    // Input handling: the paddle stays between the walls, at OAM X 16 to 104 (limits included).
+    // Key checks and limited moves number their local labels with one allocator
+    let labels = LabelAllocator::new();
     let left_pressed = sprite_manager
         .get_sprite_mut(0)
         .unwrap()
-        .move_left_limit(1, 16);
+        .move_left_limit(&labels, 1, 16);
     let right_pressed = sprite_manager
         .get_sprite_mut(0)
         .unwrap()
-        .move_right_limit(1, 104);
+        .move_right_limit(&labels, 1, 104);
     asm.emit_all(check_key(
+        &labels,
         rust_boy::gb_std::inputs::PadButton::Left,
         left_pressed,
     ));
     asm.emit_all(check_key(
+        &labels,
         rust_boy::gb_std::inputs::PadButton::Right,
         right_pressed,
     ));

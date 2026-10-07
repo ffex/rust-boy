@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register};
 
 pub fn clear_objects_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
@@ -41,17 +41,20 @@ pub(crate) enum MoveDir {
 /// not at all. `coord` must then be the one that reaches the limit first (the smallest
 /// when decreasing, the largest when increasing).
 ///
-/// Uses A and the flags, and the labels `{labels}Store` and `{labels}End`.
+/// Uses A and the flags, and two local labels from `labels`, `.{stem}_N_store` and
+/// `.{stem}_N_end` (B7): the move can be emitted any number of times, and inside an `If`.
 pub(crate) fn move_coord_limit(
+    labels: &LabelAllocator,
+    stem: &str,
     coord: &str,
     followers: &[(String, i16)],
     dir: MoveDir,
     distance: u8,
     limit: u8,
-    labels: &str,
 ) -> Vec<Instr> {
-    let store = format!("{}Store", labels);
-    let end = format!("{}End", labels);
+    let label = labels.local(stem);
+    let store = format!("{}_store", label);
+    let end = format!("{}_end", label);
     let mut asm = Asm::new();
 
     // Work on the offset from the limit, A = coord - limit, so the limit is at 0 and
@@ -166,116 +169,112 @@ impl Sprite {
             .ld_hli_label("a");
         asm.get_main_instrs()
     }
+
+    /// Move the sprite left by `distance` pixels, with no limit
+    ///
+    /// The plain moves emit no labels, so they can be used any number of times and
+    /// inside an `If` (they used to emit the global labels `Left:` / `LeftEnd:`, B7).
     pub fn move_left(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.label("Left");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
             .sub(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
-
-        asm.label("LeftEnd");
         asm.get_main_instrs()
     }
 
+    /// Move the sprite right by `distance` pixels, with no limit; see [`Sprite::move_left`]
     pub fn move_right(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.label("Right");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
             .add(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
-
-        asm.label("RightEnd");
         asm.get_main_instrs()
     }
 
+    /// Move the sprite up by `distance` pixels, with no limit; see [`Sprite::move_left`]
     pub fn move_up(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.label("Up");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .sub(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
-
-        asm.label("UpEnd");
         asm.get_main_instrs()
     }
 
+    /// Move the sprite down by `distance` pixels, with no limit; see [`Sprite::move_left`]
     pub fn move_down(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.label("Down");
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .add(Operand::Reg(Register::A), Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
-
-        asm.label("DownEnd");
         asm.get_main_instrs()
     }
 
     /// Move the sprite left by `distance` pixels, but never left of `limit` (an OAM
     /// X, screen x + 8): a step that would go past the limit stops exactly on it, and a
     /// sprite already past the limit does not move
-    pub fn move_left_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
-        asm.label("LeftLimit");
-        asm.emit_all(move_coord_limit(
-            &format!("_OAMRAM+{}", self.id * 4 + 1),
-            &[],
-            MoveDir::Decrease,
-            distance,
-            limit,
-            "LeftLimit",
-        ));
-        asm.get_main_instrs()
+    ///
+    /// Its two local labels come from `labels` (`.sprite0_left_limit_3_store`, `…_end`).
+    pub fn move_left_limit(
+        &mut self,
+        labels: &LabelAllocator,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        self.move_limit(labels, "left", 1, MoveDir::Decrease, distance, limit)
     }
 
     /// Move the sprite right by `distance` pixels, but never right of `limit` (an OAM
-    /// X, screen x + 8): a step that would go past the limit stops exactly on it, and a
-    /// sprite already past the limit does not move
-    pub fn move_right_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
-        asm.label("RightLimit");
-        asm.emit_all(move_coord_limit(
-            &format!("_OAMRAM+{}", self.id * 4 + 1),
-            &[],
-            MoveDir::Increase,
-            distance,
-            limit,
-            "RightLimit",
-        ));
-        asm.get_main_instrs()
+    /// X, screen x + 8); see [`Sprite::move_left_limit`]
+    pub fn move_right_limit(
+        &mut self,
+        labels: &LabelAllocator,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        self.move_limit(labels, "right", 1, MoveDir::Increase, distance, limit)
     }
 
     /// Move the sprite up by `distance` pixels, but never above `limit` (an OAM
-    /// Y, screen y + 16): a step that would go past the limit stops exactly on it, and a
-    /// sprite already past the limit does not move
-    pub fn move_up_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
-        asm.label("UpLimit");
-        asm.emit_all(move_coord_limit(
-            &format!("_OAMRAM+{}", self.id * 4),
-            &[],
-            MoveDir::Decrease,
-            distance,
-            limit,
-            "UpLimit",
-        ));
-        asm.get_main_instrs()
+    /// Y, screen y + 16); see [`Sprite::move_left_limit`]
+    pub fn move_up_limit(
+        &mut self,
+        labels: &LabelAllocator,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        self.move_limit(labels, "up", 0, MoveDir::Decrease, distance, limit)
     }
 
     /// Move the sprite down by `distance` pixels, but never below `limit` (an OAM
-    /// Y, screen y + 16): a step that would go past the limit stops exactly on it, and a
-    /// sprite already past the limit does not move
-    pub fn move_down_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
-        asm.label("DownLimit");
-        asm.emit_all(move_coord_limit(
-            &format!("_OAMRAM+{}", self.id * 4),
+    /// Y, screen y + 16); see [`Sprite::move_left_limit`]
+    pub fn move_down_limit(
+        &mut self,
+        labels: &LabelAllocator,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        self.move_limit(labels, "down", 0, MoveDir::Increase, distance, limit)
+    }
+
+    /// Limited move of byte `byte` of the sprite's OAM entry (Y = 0, X = 1)
+    fn move_limit(
+        &self,
+        labels: &LabelAllocator,
+        name: &str,
+        byte: u8,
+        dir: MoveDir,
+        distance: u8,
+        limit: u8,
+    ) -> Vec<Instr> {
+        move_coord_limit(
+            labels,
+            &format!("sprite{}_{}_limit", self.id, name),
+            &format!("_OAMRAM+{}", self.id * 4 + byte),
             &[],
-            MoveDir::Increase,
+            dir,
             distance,
             limit,
-            "DownLimit",
-        ));
-        asm.get_main_instrs()
+        )
     }
 
     pub fn move_x_var(&mut self, var_name: &str) -> Vec<Instr> {
@@ -335,7 +334,9 @@ impl Sprite {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::gb_asm::label_check::assert_code_labels_ok;
     use crate::gb_asm::test_cpu::TestCpu;
+    use crate::gb_std::flow::{Emittable, If};
 
     /// What a limited move must do to a coordinate at `pos`: move it by `distance`, but
     /// stop exactly on `limit` instead of passing it; a coordinate already beyond the
@@ -353,10 +354,11 @@ pub(crate) mod tests {
     pub(crate) const DISTANCES: [u8; 7] = [0, 1, 2, 3, 8, 100, 255];
     pub(crate) const LIMITS: [u8; 10] = [0, 1, 8, 15, 16, 104, 149, 160, 254, 255];
 
-    type LimitMove = fn(&mut Sprite, u8, u8) -> Vec<Instr>;
+    type LimitMove = fn(&mut Sprite, &LabelAllocator, u8, u8) -> Vec<Instr>;
 
     #[test]
     fn test_limit_moves_stop_exactly_on_the_limit() {
+        let labels = LabelAllocator::new();
         // (name, method, byte of the OAM entry it moves (Y = 0, X = 1), direction)
         let moves: [(&str, LimitMove, u8, MoveDir); 4] = [
             ("left", Sprite::move_left_limit, 1, MoveDir::Decrease),
@@ -372,7 +374,7 @@ pub(crate) mod tests {
             let other = format!("_OAMRAM+{}", 4 + (1 - byte));
             for distance in DISTANCES {
                 for limit in LIMITS {
-                    let code = method(&mut sprite, distance, limit);
+                    let code = method(&mut sprite, &labels, distance, limit);
                     for pos in 0..=255 {
                         let mut cpu = TestCpu::default();
                         cpu.mem.insert(moved.clone(), pos);
@@ -396,5 +398,48 @@ pub(crate) mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_moves_can_be_emitted_many_times() {
+        // B7: every copy emitted the same global labels (LeftLimit, LeftLimitStore,
+        // LeftLimitEnd, Left, LeftEnd, ...), whatever the sprite
+        let labels = LabelAllocator::new();
+        let mut paddle = Sprite::new(0, 0, 0, 0, 0);
+        let mut ball = Sprite::new(1, 0, 0, 0, 0);
+        let mut code = Vec::new();
+        for _ in 0..3 {
+            code.extend(paddle.move_left_limit(&labels, 1, 16));
+            code.extend(ball.move_down_limit(&labels, 2, 144));
+            code.extend(ball.move_right(1));
+        }
+        assert_code_labels_ok(&code);
+
+        // Each copy jumps within itself: all three run
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert("_OAMRAM+1".to_string(), 18); // paddle X: 17, 16, then on the limit
+        cpu.mem.insert("_OAMRAM+4".to_string(), 100); // ball Y: 102, 104, 106
+        cpu.mem.insert("_OAMRAM+5".to_string(), 50); // ball X: 51, 52, 53
+        cpu.run(&code);
+        assert_eq!(cpu.mem["_OAMRAM+1"], 16);
+        assert_eq!(cpu.mem["_OAMRAM+4"], 106);
+        assert_eq!(cpu.mem["_OAMRAM+5"], 53);
+    }
+
+    #[test]
+    fn test_moves_inside_an_if() {
+        // B7: a global label inside the If body started a new label scope, so the If
+        // could not find its own .end_if_N / .else_N
+        let labels = LabelAllocator::new();
+        let mut sprite = Sprite::new(0, 0, 0, 0, 0);
+        let mut if_counter = 0;
+        let mut code = Vec::new();
+        for _ in 0..2 {
+            let then_move = sprite.move_up_limit(&labels, 1, 16);
+            let else_move = sprite.move_left(1);
+            let mut if_stmt = If::lt(sprite.get_y(), sprite.get_x(), then_move).or_else(else_move);
+            code.extend(if_stmt.emit(&mut if_counter));
+        }
+        assert_code_labels_ok(&code);
     }
 }

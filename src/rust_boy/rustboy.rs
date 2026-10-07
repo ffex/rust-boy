@@ -1,6 +1,6 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
-use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget};
+use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator};
 use crate::gb_std::flow::Emittable;
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
@@ -46,8 +46,9 @@ pub struct RustBoy {
     /// Counter for generating unique if-statement labels
     if_counter: usize,
 
-    /// Counter for generating unique general-purpose labels
-    label_counter: usize,
+    /// Numbers every other generated label (key checks, sprite moves, `unique_label`);
+    /// shared with the sprite manager, so they never clash (B7)
+    labels: LabelAllocator,
 
     /// Custom constants defined by the user
     constants: Vec<(String, String)>,
@@ -65,14 +66,15 @@ pub struct RustBoy {
 impl RustBoy {
     /// Create a new RustBoy instance
     pub fn new() -> Self {
+        let labels = LabelAllocator::new();
         Self {
             asm: Asm::new(),
             tiles: TileManager::new(),
             vars: VariableManager::new(),
-            sprites: SpriteManager::new(),
+            sprites: SpriteManager::new(labels.clone()),
             functions: FunctionRegistry::new(),
             if_counter: 0,
-            label_counter: 0,
+            labels,
             constants: Vec::new(),
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
@@ -127,11 +129,10 @@ impl RustBoy {
         c
     }
 
-    /// Get the next general-purpose label counter (auto-increments)
+    /// Get the next general-purpose label counter (auto-increments); the sequence is
+    /// shared with the labels of the generated key checks and sprite moves
     pub fn next_label_counter(&mut self) -> usize {
-        let c = self.label_counter;
-        self.label_counter += 1;
-        c
+        self.labels.next_id()
     }
 
     /// Generate a unique label with prefix
@@ -448,7 +449,8 @@ impl RustBoy {
         });
 
         // Add the input handling code
-        self.main_loop_code.extend(inputs.generate_code());
+        self.main_loop_code
+            .extend(inputs.generate_code(&self.labels));
 
         self
     }
@@ -876,5 +878,122 @@ mod tests {
         let mut gb = RustBoy::new();
         gb.add_sprite("Ball", tiles(1), 0, 0, 0);
         gb.set_sprite_size(SpriteSize::Size8x16);
+    }
+
+    // ==================== Labels (B7, B25) ====================
+
+    use crate::gb_asm::label_check::assert_labels_ok;
+    use crate::gb_std::flow::If;
+    use crate::gb_std::inputs::PadButton;
+    use crate::rust_boy::CompositeSpriteId;
+
+    /// A 8x8 paddle and ball
+    fn paddle_and_ball(gb: &mut RustBoy) -> (SpriteId, SpriteId) {
+        let paddle = gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
+        let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
+        (paddle, ball)
+    }
+
+    /// A 16x16 player, in 8x16 mode
+    fn player(gb: &mut RustBoy) -> CompositeSpriteId {
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.add_sprite_16x16("Player", tiles(2), tiles(2), 80, 72, 0)
+    }
+
+    #[test]
+    fn test_sample_game_labels_are_ok() {
+        assert_labels_ok(&sample_game());
+    }
+
+    #[test]
+    fn test_two_bindings_on_one_button() {
+        // B7: each binding emitted the global labels CheckLeft and CheckLeftEnd
+        let mut gb = RustBoy::new();
+        let (paddle, ball) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 16));
+        inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(ball, 1, 16));
+        gb.add_inputs(inputs);
+        // Bindings added later, through another InputManager
+        let mut more = InputManager::new();
+        more.on_press(PadButton::Left, gb.sprites.move_up_limit(ball, 1, 16));
+        gb.add_inputs(more);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_one_move_on_two_buttons() {
+        // B7: each copy of a move emitted the same Sprite0LeftLimitStore / ...End labels
+        let mut gb = RustBoy::new();
+        let (paddle, _) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        for button in [PadButton::Left, PadButton::B] {
+            inputs.on_press(button, gb.sprites.move_left_limit(paddle, 1, 16));
+            inputs.on_press(button, gb.sprites.move_down_limit(paddle, 2, 144));
+        }
+        gb.add_inputs(inputs);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_one_composite_move_on_two_buttons() {
+        // B7: a composite move used its leading sprite's labels, so it clashed with
+        // itself and with that sprite's own move
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        let left_half = gb.sprites.get_composite_sprites(player).unwrap()[0];
+        let mut inputs = InputManager::new();
+        for button in [PadButton::Left, PadButton::B] {
+            inputs.on_press(button, gb.sprites.move_composite_left_limit(player, 1, 8));
+        }
+        inputs.on_press(PadButton::A, gb.sprites.move_left_limit(left_half, 1, 8));
+        gb.add_inputs(inputs);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_moves_inside_an_if() {
+        // B7: the labels of a move were global, so inside an If body they started a new
+        // label scope and the If's jump to .end_if_N could not be resolved
+        let mut gb = RustBoy::new();
+        let (paddle, ball) = paddle_and_ball(&mut gb);
+        let moves = [
+            gb.sprites.move_left_limit(paddle, 1, 16),
+            gb.sprites.move_right_limit(paddle, 1, 104),
+            gb.sprites.move_up_limit(ball, 1, 16),
+            gb.sprites.move_down_limit(ball, 1, 144),
+        ];
+        for code in moves {
+            let if_ball_above = If::lt(gb.sprites.get_y(ball), gb.sprites.get_y(paddle), code);
+            gb.add_to_main_loop(if_ball_above);
+        }
+        // In the else branch, and in a function
+        let else_move = If::eq(
+            gb.sprites.get_x(ball),
+            gb.sprites.get_x(paddle),
+            Vec::<Instr>::new(),
+        )
+        .or_else(gb.sprites.move_left_limit(ball, 2, 16));
+        gb.define_function_from("FollowPaddle", else_move);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_composite_move_inside_an_if() {
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        let halves = gb.sprites.get_composite_sprites(player).unwrap().clone();
+        let move_left = If::ge(
+            gb.sprites.get_x(halves[0]),
+            gb.sprites.get_y(halves[0]),
+            gb.sprites.move_composite_left_limit(player, 1, 8),
+        );
+        gb.add_to_main_loop(move_left);
+
+        assert_labels_ok(&gb.build());
     }
 }

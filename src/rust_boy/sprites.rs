@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use super::tiles::TileId;
 use crate::{
-    gb_asm::{Asm, Condition, Instr, Operand, Register},
+    gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register},
     gb_std::graphics::sprites::{MoveDir, move_coord_limit},
     rust_boy::animations::Animation,
 };
@@ -114,10 +114,13 @@ pub struct SpriteManager {
     next_oam_index: u8,
     next_tile_index: u8,
     size: SpriteSize,
+    /// Numbers the local labels of the moves; shared with the rest of the program (B7)
+    labels: LabelAllocator,
 }
 
 impl SpriteManager {
-    pub(crate) fn new() -> Self {
+    /// A manager whose moves take their labels from `labels`
+    pub(crate) fn new(labels: LabelAllocator) -> Self {
         Self {
             sprites: BTreeMap::new(),
             composite_sprites: BTreeMap::new(),
@@ -126,6 +129,7 @@ impl SpriteManager {
             next_oam_index: 0,
             next_tile_index: 0,
             size: SpriteSize::default(),
+            labels,
         }
     }
 
@@ -455,7 +459,7 @@ impl SpriteManager {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_composite_limit(id, Axis::X, MoveDir::Decrease, "Left", distance, limit)
+        self.move_composite_limit(id, Axis::X, MoveDir::Decrease, "left", distance, limit)
     }
 
     /// Move a composite sprite right by `distance` pixels, as one block: no sprite of the
@@ -467,7 +471,7 @@ impl SpriteManager {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_composite_limit(id, Axis::X, MoveDir::Increase, "Right", distance, limit)
+        self.move_composite_limit(id, Axis::X, MoveDir::Increase, "right", distance, limit)
     }
 
     /// Move a composite sprite up by `distance` pixels, as one block: no sprite of the
@@ -479,7 +483,7 @@ impl SpriteManager {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_composite_limit(id, Axis::Y, MoveDir::Decrease, "Up", distance, limit)
+        self.move_composite_limit(id, Axis::Y, MoveDir::Decrease, "up", distance, limit)
     }
 
     /// Move a composite sprite down by `distance` pixels, as one block: no sprite of the
@@ -491,7 +495,7 @@ impl SpriteManager {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_composite_limit(id, Axis::Y, MoveDir::Increase, "Down", distance, limit)
+        self.move_composite_limit(id, Axis::Y, MoveDir::Increase, "down", distance, limit)
     }
 
     /// Limited move of a composite (B6): the member that reaches the limit first leads,
@@ -532,12 +536,13 @@ impl SpriteManager {
             .collect();
 
         move_coord_limit(
+            &self.labels,
+            &format!("sprite{}_{}_limit", lead.oam_index, name),
             &axis.oam_address(lead),
             &followers,
             dir,
             distance,
             limit,
-            &format!("Sprite{}{}Limit", lead.oam_index, name),
         )
     }
 
@@ -625,28 +630,29 @@ impl SpriteManager {
     /// - A sprite already past the limit does not move: the move never takes it further,
     ///   and does not pull it back either.
     pub fn move_left_limit(&self, id: SpriteId, distance: u8, limit: u8) -> Vec<Instr> {
-        self.move_limit(id, Axis::X, MoveDir::Decrease, "Left", distance, limit)
+        self.move_limit(id, Axis::X, MoveDir::Decrease, "left", distance, limit)
     }
 
     /// Move a sprite right by `distance` pixels, but never right of `limit` (an OAM X,
     /// screen x + 8); see [`SpriteManager::move_left_limit`] for the limit rules
     pub fn move_right_limit(&self, id: SpriteId, distance: u8, limit: u8) -> Vec<Instr> {
-        self.move_limit(id, Axis::X, MoveDir::Increase, "Right", distance, limit)
+        self.move_limit(id, Axis::X, MoveDir::Increase, "right", distance, limit)
     }
 
     /// Move a sprite up by `distance` pixels, but never above `limit` (an OAM Y,
     /// screen y + 16); see [`SpriteManager::move_left_limit`] for the limit rules
     pub fn move_up_limit(&self, id: SpriteId, distance: u8, limit: u8) -> Vec<Instr> {
-        self.move_limit(id, Axis::Y, MoveDir::Decrease, "Up", distance, limit)
+        self.move_limit(id, Axis::Y, MoveDir::Decrease, "up", distance, limit)
     }
 
     /// Move a sprite down by `distance` pixels, but never below `limit` (an OAM Y,
     /// screen y + 16); see [`SpriteManager::move_left_limit`] for the limit rules
     pub fn move_down_limit(&self, id: SpriteId, distance: u8, limit: u8) -> Vec<Instr> {
-        self.move_limit(id, Axis::Y, MoveDir::Increase, "Down", distance, limit)
+        self.move_limit(id, Axis::Y, MoveDir::Increase, "down", distance, limit)
     }
 
-    /// Limited move of one sprite (B8)
+    /// Limited move of one sprite (B8); its local labels are numbered by the shared
+    /// allocator, so the same move can be emitted many times, and inside an `If` (B7)
     fn move_limit(
         &self,
         id: SpriteId,
@@ -660,12 +666,13 @@ impl SpriteManager {
             return Vec::new();
         };
         move_coord_limit(
+            &self.labels,
+            &format!("sprite{}_{}_limit", sprite.oam_index, name),
             &axis.oam_address(sprite),
             &[],
             dir,
             distance,
             limit,
-            &format!("Sprite{}{}Limit", sprite.oam_index, name),
         )
     }
 
@@ -869,7 +876,7 @@ mod tests {
             ("up", SpriteManager::move_up_limit, 0, MoveDir::Decrease),
             ("down", SpriteManager::move_down_limit, 0, MoveDir::Increase),
         ];
-        let mut sm = SpriteManager::new();
+        let mut sm = SpriteManager::new(LabelAllocator::new());
         sm.add("Paddle", 16, 128, 0, 1);
         // OAM entry 1: Y at _OAMRAM+4, X at _OAMRAM+5
         let ball = sm.add("Ball", 32, 100, 0, 1);
@@ -901,7 +908,7 @@ mod tests {
     fn test_limit_move_never_passes_the_limit() {
         // B8: with a step of 2 from X 24 towards the limit 15, the sprite went
         // 22, 20, 18, 16, 14, ... and wrapped around through 0 / 255
-        let mut sm = SpriteManager::new();
+        let mut sm = SpriteManager::new(LabelAllocator::new());
         let ball = sm.add("Ball", 16, 100, 0, 1); // X 24 in OAM
         let left = sm.move_left_limit(ball, 2, 15);
         let mut cpu = cpu_with_oam(&sm);
@@ -1031,7 +1038,7 @@ mod tests {
 
     #[test]
     fn test_add_sprite() {
-        let mut sm = SpriteManager::new();
+        let mut sm = SpriteManager::new(LabelAllocator::new());
 
         let paddle = sm.add("Paddle", 16, 128, 0, 1);
         let ball = sm.add("Ball", 32, 100, 0, 1);
@@ -1044,7 +1051,7 @@ mod tests {
 
     #[test]
     fn test_oam_indices() {
-        let mut sm = SpriteManager::new();
+        let mut sm = SpriteManager::new(LabelAllocator::new());
 
         let paddle = sm.add("Paddle", 16, 128, 0, 1);
         let ball = sm.add("Ball", 32, 100, 0, 1);

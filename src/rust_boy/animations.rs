@@ -11,7 +11,8 @@ pub enum AnimationType {
     Loop,
     /// Play forward, then backward, and repeat; the first and last frames are shown
     /// once per turn: 0 1 2 3 2 1 0 1 2 ... The direction is kept in a WRAM variable
-    /// per sprite, `wAnim_{sprite name}_Dir` (0 = forward, 1 = backward).
+    /// per sprite, `wAnim_{sprite name}_Dir` (0 = forward, 1 = backward); a one-frame
+    /// `PingPong` needs none.
     PingPong,
     /// Play the frames once, then stay on the last one: 0 1 2 3 3 3 ...
     /// Enabling it again while the sprite shows its last frame does not replay it: the
@@ -32,9 +33,11 @@ pub struct Animation {
 }
 
 impl Animation {
-    /// Whether this animation needs the sprite's direction variable
+    /// Whether this animation needs the sprite's direction variable: a `PingPong` of
+    /// two frames or more (one frame has nowhere to go, so its code does not read it)
     pub(crate) fn needs_direction(&self) -> bool {
-        matches!(self.anim_type, AnimationType::PingPong)
+        let (abs_start, abs_end) = self.abs_frames();
+        matches!(self.anim_type, AnimationType::PingPong) && abs_start != abs_end
     }
 
     /// The body of the function that shows the next frame (without its label and `ret`)

@@ -28,7 +28,8 @@ fn animation_label(sprite: &str, animation: &str) -> String {
 }
 
 /// WRAM variable holding the direction of a sprite's `PingPong` animation
-/// (0 = forward, 1 = backward); only sprites with such an animation have one (B10)
+/// (0 = forward, 1 = backward); only sprites with such an animation of two frames or
+/// more have one (B10)
 fn direction_var(sprite: &str) -> String {
     format!("wAnim_{}_Dir", sprite)
 }
@@ -905,6 +906,7 @@ impl SpriteManager {
     /// Returns (name, initial_value) pairs
     /// Creates one variable per sprite: wAnim_[sprite_name]_Current, and
     /// wAnim_[sprite_name]_Dir (0 = forward) if the sprite has a `PingPong` animation
+    /// of two frames or more
     pub(crate) fn get_animation_variables(&self) -> Vec<(String, u8)> {
         let mut vars = Vec::new();
 
@@ -1275,6 +1277,20 @@ mod tests {
     }
 
     #[test]
+    fn test_two_frame_ping_pong_alternates() {
+        for size in SIZES {
+            let (sm, coin) = animated_sprite(size, AnimationType::PingPong, 1, 2);
+            let mut cpu = animation_cpu(&sm);
+            assert_eq!(
+                play(&sm, &mut cpu, coin, 7),
+                [1, 2, 1, 2, 1, 2, 1],
+                "{:?}",
+                size
+            );
+        }
+    }
+
+    #[test]
     fn test_one_frame_animation_stays_on_it() {
         for anim_type in [
             AnimationType::Loop,
@@ -1376,12 +1392,22 @@ mod tests {
         let gem = sm.add("Gem", 0, 0, 0, 4);
         sm.add_animation(gem, "Spin", 0, 3, AnimationType::Loop);
         sm.add_animation(gem, "Shine", 0, 3, AnimationType::PingPong);
+        // A one-frame PingPong never reads the direction: no variable
+        let star = sm.add("Star", 0, 0, 0, 4);
+        sm.add_animation(star, "Twinkle", 2, 2, AnimationType::PingPong);
+        // ... unless the sprite also has a longer one
+        let moon = sm.add("Moon", 0, 0, 0, 4);
+        sm.add_animation(moon, "Still", 1, 1, AnimationType::PingPong);
+        sm.add_animation(moon, "Wax", 0, 1, AnimationType::PingPong);
         assert_eq!(
             sm.get_animation_variables(),
             [
                 ("wAnim_Coin_Current".to_string(), ANIM_DISABLED),
                 ("wAnim_Gem_Current".to_string(), ANIM_DISABLED),
                 ("wAnim_Gem_Dir".to_string(), 0),
+                ("wAnim_Star_Current".to_string(), ANIM_DISABLED),
+                ("wAnim_Moon_Current".to_string(), ANIM_DISABLED),
+                ("wAnim_Moon_Dir".to_string(), 0),
             ]
         );
     }

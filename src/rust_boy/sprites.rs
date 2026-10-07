@@ -835,6 +835,10 @@ impl SpriteManager {
     /// - Only updates animations when counter >= delay
     /// - Resets counter after animation update
     /// - Checks wAnim_[sprite_name]_Current to call only the active animation
+    ///
+    /// The code grows with every animation, so each jump over a part whose size depends
+    /// on the number of sprites or animations is a `jp`: a `jr` reaches only 127 bytes
+    /// ahead (B9). The only `jr` left skips one `call` and one `jp`, 6 bytes.
     pub(crate) fn generate_animation_calls(&self, delay_value: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
 
@@ -845,7 +849,7 @@ impl SpriteManager {
 
         // Compare with delay value
         asm.cp_imm(delay_value);
-        asm.jr_cond(Condition::C, "AnimEnd"); // if counter < delay, skip animations
+        asm.jp_cond(Condition::C, "AnimEnd"); // if counter < delay, skip animations
 
         // Reset frame counter
         asm.ld_a(0);
@@ -865,20 +869,20 @@ impl SpriteManager {
 
             // Check if disabled (255)
             asm.cp_imm(ANIM_DISABLED);
-            asm.jr_cond(Condition::Z, &sprite_end_label);
+            asm.jp_cond(Condition::Z, &sprite_end_label);
 
             // For each animation, check if it's the current one
             for animation in &sprite.animations {
                 let func_name = animation_label(&sprite.name, &animation.name);
                 let skip_label = format!(".skip_{}_{}", sprite.name, animation.name);
 
-                // Check if this animation index is selected
+                // Check if this animation index is selected (the skip is 6 bytes)
                 asm.cp_imm(animation.index);
                 asm.jr_cond(Condition::NZ, &skip_label);
 
                 // Call this animation
                 asm.call(&func_name);
-                asm.jr(&sprite_end_label);
+                asm.jp(&sprite_end_label);
 
                 asm.label(&skip_label);
             }
@@ -1126,5 +1130,49 @@ mod tests {
 
         assert_eq!(sm.get(paddle).unwrap().oam_index, 0);
         assert_eq!(sm.get(ball).unwrap().oam_index, 1);
+    }
+
+    // ==================== Animations (B9) ====================
+
+    use crate::gb_asm::label_check::{assert_labels_ok, jr_range_errors};
+    use crate::rust_boy::AnimationType;
+
+    /// `count` 8x8 sprite tiles
+    fn tiles(count: usize) -> TileSource {
+        TileSource::from_raw(&vec![["$FF"; 8]; count])
+    }
+
+    #[test]
+    fn test_animation_dispatch_jumps_stay_in_range() {
+        // B9: `jr c, AnimEnd` jumped over the whole dispatcher (5 bytes + 7 per animated
+        // sprite + 9 per animation): with 3 sprites of 4 animations it is 134 bytes away,
+        // and rgblink fails. A sprite's own jumps (disabled, and after the call) span its
+        // animations: with 16 of them they went out of range too.
+        let mut gb = RustBoy::new();
+        let anim_types = [
+            AnimationType::Loop,
+            AnimationType::PingPong,
+            AnimationType::Once,
+            AnimationType::Loop,
+        ];
+        for name in ["Alpha", "Bravo", "Charlie"] {
+            let sprite = gb.add_sprite(name, tiles(4), 16, 16, 0);
+            for (anim, anim_type) in ["Up", "Down", "Left", "Right"].iter().zip(&anim_types) {
+                gb.sprites
+                    .add_animation(sprite, anim, 0, 3, anim_type.clone());
+            }
+        }
+        let delta = gb.add_sprite("Delta", tiles(4), 32, 16, 0);
+        for i in 0..16 {
+            gb.sprites
+                .add_animation(delta, &format!("Pose{}", i), 0, 3, AnimationType::Loop);
+        }
+
+        let dispatch = gb.sprites.generate_animation_calls(8);
+        assert_eq!(jr_range_errors(&dispatch), Vec::<String>::new());
+        for (name, body) in gb.sprites.generate_animation_functions() {
+            assert_eq!(jr_range_errors(&body), Vec::<String>::new(), "{}", name);
+        }
+        assert_labels_ok(&gb.build());
     }
 }

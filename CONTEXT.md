@@ -24,7 +24,8 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ─�
 - Zero Rust dependencies, edition 2024.
 - The committed `.o` files are RGBDS object format `RGB9` (RGBDS 1.0). Generated code uses `0x05`-style
   constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (shown in the README) was removed in RGBDS 0.8.
-- `hardware.inc` (v4.x) must be in the include path; today there are 6 identical copies under `examples/`.
+- `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
+  `examples/`); pass it with `rgbasm -I include`.
 
 ### Commands
 
@@ -33,7 +34,7 @@ cargo build                              # library + all bins
 cargo test                               # unit tests
 cargo run --bin fosdem > main.asm        # bins: basic_usage, unbricked, unbricked_std,
                                          #       unbricked_rustboy, fosdem, coin-anim
-rgbasm -o main.o main.asm                # hardware.inc + assets (.2bpp) next to main.asm
+rgbasm -I include -o main.o main.asm     # add -I <example dir> for its .2bpp assets
 rgblink -o main.gb main.o
 rgbfix -v -p 0xFF main.gb
 ```
@@ -49,7 +50,7 @@ rgbfix -v -p 0xFF main.gb
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ⚠️ assembles, but the 16×16 player collapses at screen edges ([B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
-| Committed build artifacts | 12 `*.gb` / `*.o` files tracked in `examples/` |
+| Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
 ---
 

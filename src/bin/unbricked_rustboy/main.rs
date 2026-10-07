@@ -46,9 +46,8 @@ fn main() {
     // ========================================
     // VARIABLES - Auto WRAM allocation!
     // ========================================
+    // wCurKeys/wNewKeys are created by gb.add_inputs()
     let _frame_counter = gb.vars.create_u8("wFrameCounter", 0);
-    let _cur_keys = gb.vars.create_u8("wCurKeys", 0);
-    let _new_keys = gb.vars.create_u8("wNewKeys", 0);
     let _ball_momentum_x = gb.vars.create_i8("wBallMomentumX", 1);
     let _ball_momentum_y = gb.vars.create_i8("wBallMomentumY", -1i8);
     let _score = gb.vars.create_u8("wScore", 0);

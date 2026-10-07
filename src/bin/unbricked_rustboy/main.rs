@@ -138,12 +138,12 @@ fn main() {
         lbl_debug.label("PaddleBounceEND");
         lbl_debug.get_main_instrs()
     });
-    // Input handling
+    // Input handling: the paddle stays between the walls, at OAM X 16 to 104 (limits included)
     let mut inputs = InputManager::new();
-    inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 15));
+    inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 16));
     inputs.on_press(
         PadButton::Right,
-        gb.sprites.move_right_limit(paddle, 1, 105),
+        gb.sprites.move_right_limit(paddle, 1, 104),
     );
     gb.add_inputs(inputs);
 

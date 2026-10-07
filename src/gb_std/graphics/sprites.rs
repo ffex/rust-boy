@@ -16,6 +16,88 @@ pub fn initialize_objects_screen() -> Vec<Instr> {
     asm.ld_a(0).ld_b(160).ld_hl_label("_OAMRAM");
     asm.get_main_instrs()
 }
+
+/// Which way a limited move changes a sprite coordinate
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MoveDir {
+    /// Left or up: the coordinate decreases, and the limit is the smallest value it may take
+    Decrease,
+    /// Right or down: the coordinate increases, and the limit is the largest value it may take
+    Increase,
+}
+
+/// Move a sprite coordinate by `distance` without ever going past `limit`
+///
+/// `coord` is the address of the coordinate, an OAM Y or X byte (e.g. `_OAMRAM+1`).
+/// The limit is included: it is the smallest value the coordinate may take when it
+/// decreases (left, up) and the largest when it increases (right, down).
+/// - A step that would go past the limit stops exactly on it, whatever the distance, so
+///   the sprite reaches the same edge at any speed and never wraps around 0 / 255.
+/// - A coordinate already beyond the limit does not move: the move never takes it
+///   further, and does not pull it back either.
+///
+/// `followers` are the other sprites of a composite: each `(address, offset)` is set to
+/// the new value of `coord` plus `offset`, so the whole composite moves as one block or
+/// not at all. `coord` must then be the one that reaches the limit first (the smallest
+/// when decreasing, the largest when increasing).
+///
+/// Uses A and the flags, and the labels `{labels}Store` and `{labels}End`.
+pub(crate) fn move_coord_limit(
+    coord: &str,
+    followers: &[(String, i16)],
+    dir: MoveDir,
+    distance: u8,
+    limit: u8,
+    labels: &str,
+) -> Vec<Instr> {
+    let store = format!("{}Store", labels);
+    let end = format!("{}End", labels);
+    let mut asm = Asm::new();
+
+    // Work on the offset from the limit, A = coord - limit, so the limit is at 0 and
+    // the carry flag of each step tells on which side of it the coordinate is
+    asm.ld_a_addr_def(coord)
+        .sub(Operand::Reg(Register::A), Operand::Imm(limit));
+    match dir {
+        MoveDir::Decrease => {
+            // Carry: coord < limit, already past the limit
+            asm.jp_cond(Condition::C, &end)
+                // Carry: the step goes past the limit
+                .sub(Operand::Reg(Register::A), Operand::Imm(distance));
+        }
+        MoveDir::Increase => {
+            // No carry: coord >= limit, on the limit or past it
+            asm.jp_cond(Condition::NC, &end)
+                // A is coord - limit + 256 here; carry: the step reaches the limit or goes past it
+                .add(Operand::Reg(Register::A), Operand::Imm(distance));
+        }
+    }
+    asm.jp_cond(Condition::NC, &store)
+        .ld_a(0) // stop exactly on the limit
+        .label(&store)
+        .add(Operand::Reg(Register::A), Operand::Imm(limit))
+        .ld_addr_def_a(coord);
+
+    // A holds the new coord; put each follower at its offset from it
+    let mut a_offset = 0i16;
+    for (follower, offset) in followers {
+        let step = offset - a_offset;
+        if step > 0 {
+            asm.add(Operand::Reg(Register::A), Operand::Imm(step as u8));
+        } else if step < 0 {
+            asm.sub(
+                Operand::Reg(Register::A),
+                Operand::Imm(step.unsigned_abs() as u8),
+            );
+        }
+        asm.ld_addr_def_a(follower);
+        a_offset = *offset;
+    }
+
+    asm.label(&end);
+    asm.get_main_instrs()
+}
+
 pub struct SpriteManager {
     sprites: Vec<Sprite>,
     current_sprite_index: u8,
@@ -128,59 +210,71 @@ impl Sprite {
         asm.get_main_instrs()
     }
 
+    /// Move the sprite left by `distance` pixels, but never left of `limit` (an OAM
+    /// X, screen x + 8): a step that would go past the limit stops exactly on it, and a
+    /// sprite already past the limit does not move
     pub fn move_left_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        let jump_label = "LeftLimitEnd";
         asm.label("LeftLimit");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
-            .cp(Operand::Imm(limit))
-            .jp_cond(Condition::Z, jump_label)
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
-
-        asm.label(jump_label);
+        asm.emit_all(move_coord_limit(
+            &format!("_OAMRAM+{}", self.id * 4 + 1),
+            &[],
+            MoveDir::Decrease,
+            distance,
+            limit,
+            "LeftLimit",
+        ));
         asm.get_main_instrs()
     }
 
+    /// Move the sprite right by `distance` pixels, but never right of `limit` (an OAM
+    /// X, screen x + 8): a step that would go past the limit stops exactly on it, and a
+    /// sprite already past the limit does not move
     pub fn move_right_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        let jump_label = "RightLimitEnd";
         asm.label("RightLimit");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .add(Operand::Reg(Register::A), Operand::Imm(distance))
-            .cp(Operand::Imm(limit))
-            .jp_cond(Condition::Z, jump_label)
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
-
-        asm.label(jump_label);
+        asm.emit_all(move_coord_limit(
+            &format!("_OAMRAM+{}", self.id * 4 + 1),
+            &[],
+            MoveDir::Increase,
+            distance,
+            limit,
+            "RightLimit",
+        ));
         asm.get_main_instrs()
     }
 
+    /// Move the sprite up by `distance` pixels, but never above `limit` (an OAM
+    /// Y, screen y + 16): a step that would go past the limit stops exactly on it, and a
+    /// sprite already past the limit does not move
     pub fn move_up_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        let jump_label = "UpLimitEnd";
         asm.label("UpLimit");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
-            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
-            .cp(Operand::Imm(limit))
-            .jp_cond(Condition::Z, jump_label)
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
-
-        asm.label(jump_label);
+        asm.emit_all(move_coord_limit(
+            &format!("_OAMRAM+{}", self.id * 4),
+            &[],
+            MoveDir::Decrease,
+            distance,
+            limit,
+            "UpLimit",
+        ));
         asm.get_main_instrs()
     }
 
+    /// Move the sprite down by `distance` pixels, but never below `limit` (an OAM
+    /// Y, screen y + 16): a step that would go past the limit stops exactly on it, and a
+    /// sprite already past the limit does not move
     pub fn move_down_limit(&mut self, distance: u8, limit: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        let jump_label = "DownLimitEnd";
         asm.label("DownLimit");
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
-            .add(Operand::Reg(Register::A), Operand::Imm(distance))
-            .cp(Operand::Imm(limit))
-            .jp_cond(Condition::Z, jump_label)
-            .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
-
-        asm.label(jump_label);
+        asm.emit_all(move_coord_limit(
+            &format!("_OAMRAM+{}", self.id * 4),
+            &[],
+            MoveDir::Increase,
+            distance,
+            limit,
+            "DownLimit",
+        ));
         asm.get_main_instrs()
     }
 
@@ -235,5 +329,72 @@ impl Sprite {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1));
         asm.get_main_instrs()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::gb_asm::test_cpu::TestCpu;
+
+    /// What a limited move must do to a coordinate at `pos`: move it by `distance`, but
+    /// stop exactly on `limit` instead of passing it; a coordinate already beyond the
+    /// limit stays where it is.
+    pub(crate) fn expected_move(dir: MoveDir, pos: u8, distance: u8, limit: u8) -> u8 {
+        match dir {
+            MoveDir::Decrease if pos < limit => pos,
+            MoveDir::Decrease => pos.saturating_sub(distance).max(limit),
+            MoveDir::Increase if pos > limit => pos,
+            MoveDir::Increase => pos.saturating_add(distance).min(limit),
+        }
+    }
+
+    /// Distances and limits the limited moves are tested with (every start position is)
+    pub(crate) const DISTANCES: [u8; 7] = [0, 1, 2, 3, 8, 100, 255];
+    pub(crate) const LIMITS: [u8; 10] = [0, 1, 8, 15, 16, 104, 149, 160, 254, 255];
+
+    type LimitMove = fn(&mut Sprite, u8, u8) -> Vec<Instr>;
+
+    #[test]
+    fn test_limit_moves_stop_exactly_on_the_limit() {
+        // (name, method, byte of the OAM entry it moves (Y = 0, X = 1), direction)
+        let moves: [(&str, LimitMove, u8, MoveDir); 4] = [
+            ("left", Sprite::move_left_limit, 1, MoveDir::Decrease),
+            ("right", Sprite::move_right_limit, 1, MoveDir::Increase),
+            ("up", Sprite::move_up_limit, 0, MoveDir::Decrease),
+            ("down", Sprite::move_down_limit, 0, MoveDir::Increase),
+        ];
+        // Sprite 1: its Y and X are at _OAMRAM+4 and _OAMRAM+5
+        let mut sprite = Sprite::new(1, 0, 0, 0, 0);
+
+        for (name, method, byte, dir) in moves {
+            let moved = format!("_OAMRAM+{}", 4 + byte);
+            let other = format!("_OAMRAM+{}", 4 + (1 - byte));
+            for distance in DISTANCES {
+                for limit in LIMITS {
+                    let code = method(&mut sprite, distance, limit);
+                    for pos in 0..=255 {
+                        let mut cpu = TestCpu::default();
+                        cpu.mem.insert(moved.clone(), pos);
+                        cpu.mem.insert(other.clone(), 42);
+                        cpu.run(&code);
+                        assert_eq!(
+                            cpu.mem[&moved],
+                            expected_move(dir, pos, distance, limit),
+                            "move_{}_limit({}, {}) from {}",
+                            name,
+                            distance,
+                            limit,
+                            pos
+                        );
+                        assert_eq!(
+                            cpu.mem[&other], 42,
+                            "move_{}_limit moved the other axis",
+                            name
+                        );
+                    }
+                }
+            }
+        }
     }
 }

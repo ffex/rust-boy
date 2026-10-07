@@ -189,15 +189,15 @@ fn main() {
 
     asm.call("UpdateKeys");
 
-    // Input handling
+    // Input handling: the paddle stays between the walls, at OAM X 16 to 104 (limits included)
     let left_pressed = sprite_manager
         .get_sprite_mut(0)
         .unwrap()
-        .move_left_limit(1, 15);
+        .move_left_limit(1, 16);
     let right_pressed = sprite_manager
         .get_sprite_mut(0)
         .unwrap()
-        .move_right_limit(1, 105);
+        .move_right_limit(1, 104);
     asm.emit_all(check_key(
         rust_boy::gb_std::inputs::PadButton::Left,
         left_pressed,

@@ -29,7 +29,8 @@ cargo clippy --all-targets                # lint
 cargo fmt                                 # format
 cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbricked_std,
                                           #       unbricked_rustboy, fosdem, coin-anim
-scripts/assemble-examples.sh              # every example -> target/examples/<bin>/main.gb (needs RGBDS)
+scripts/assemble-examples.sh              # every example -> target/examples/<bin>/main.gb (needs RGBDS;
+                                          # under $CARGO_TARGET_DIR when it is set)
 ```
 
 Assembling generated output (RGBDS ≥ 0.9). `include/hardware.inc` (v4.x) and the example's `.2bpp` assets
@@ -113,6 +114,9 @@ Why this change: the problem and the outcome, in 2–4 sentences.
 
 ## Risks and follow-ups
 - Breaking changes, open questions, what is left for a later PR.
+
+## Independent review
+- What the context-free reviewer found and which commit fixed each finding (or why not), or "no findings".
 
 ## How to review
 - Suggested reading order / what to focus on.

@@ -51,7 +51,7 @@ impl PadButton {
 /// @requires rP1: Joypad register
 ///
 /// # Key States
-/// - wCurKeys: Bitmap of currently pressed keys (0 = pressed, 1 = not pressed)
+/// - wCurKeys: Bitmap of currently pressed keys (1 = pressed, 0 = not pressed)
 /// - wNewKeys: Bitmap of keys that just transitioned to pressed this frame
 pub fn update_keys() -> Vec<Instr> {
     let mut asm = Asm::new();

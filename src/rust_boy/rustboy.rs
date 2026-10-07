@@ -199,11 +199,13 @@ impl RustBoy {
     /// # Example
     /// ```ignore
     /// // Automatically registers GetTileByPixel as used
-    /// gb.add_to_main_loop(gb.call("GetTileByPixel"));
+    /// let call = gb.call("GetTileByPixel");
+    /// gb.add_to_main_loop(call);
     ///
     /// // Works with user-defined functions too
     /// gb.define_function("IsWallTile", ...);
-    /// gb.add_to_main_loop(gb.call("IsWallTile"));
+    /// let call = gb.call("IsWallTile");
+    /// gb.add_to_main_loop(call);
     /// ```
     pub fn call(&mut self, name: &str) -> Vec<Instr> {
         if !self.functions.call_function(name) {

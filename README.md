@@ -1,46 +1,67 @@
 # rust-boy
 
-A Game Boy assembly code generator library written in Rust. Build Game Boy programs using a high-level, idiomatic Rust API that generates clean, valid Game Boy assembly code compatible with RGBDS (Rednex Game Boy Developers Suite).
+A Rust DSL that generates Game Boy assembly for [RGBDS](https://rgbds.gbdev.io/). You describe the game
+in Rust, `cargo run` prints a `.asm` file, and RGBDS turns it into a ROM.
 
-## What is rust-boy?
+```text
+your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix──▶ main.gb
+```
 
-rust-boy is a Domain-Specific Language (DSL) and code generation framework that allows you to write Game Boy programs in Rust instead of writing assembly directly. The library provides:
+> **Status:** experimental, and being refactored. The plan is in [Task.md](Task.md); the design notes and
+> the list of known bugs are in [CONTEXT.md](CONTEXT.md).
 
-- **High-level abstractions** for Game Boy assembly instructions
-- **Standard library** for common game development tasks (graphics, sprites, variables, control flow)
-- **Fluent API** with method chaining for clean, readable code
-- **Type-safe** instruction generation with compile-time guarantees
-- **Zero dependencies** - uses only Rust standard library
+## Three levels
 
-## Features
+| Module | Level | What it gives you |
+|---|---|---|
+| `rust_boy::rust_boy` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
+| `rust_boy::gb_std` | routines | Ready-made routines (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
+| `rust_boy::gb_asm` | assembly | `Asm`: one method per instruction or directive, printed in RGBDS syntax. |
 
-### Core Assembly Generation (`gb_asm`)
+Each level is built on the one below it, and you can mix them.
 
-- Complete support for Game Boy Z80-based CPU instruction set
-- All standard instructions: `ld`, `add`, `sub`, `inc`, `dec`, `and`, `or`, `xor`, `cp`, etc.
-- Jump and call instructions with conditional flags (Z, NZ, C, NC)
-- Bit manipulation: `srl`, `swap`, and more
-- Assembler directives: `section`, `def`, `db`, `dw`, `ds`, `incbin`, `include`
-- Organized code chunks: Main, Functions, Data, Tiles, Tilemap
+## Requirements
 
-### Game Boy Standard Library (`gb_std`)
+- Rust 1.85 or newer (edition 2024). No other Rust dependencies.
+- [RGBDS](https://rgbds.gbdev.io/) 0.9 or newer to build ROMs (CI uses 1.0.4).
 
-- **Variables and Constants**: Helper functions for memory management
-- **Control Flow**: High-level if/else statements with comparison operators (==, !=, <, >, <=, >=)
-- **Sprite System**: OAM manipulation with movement helpers
-- **Graphics Utilities**: Tile and tilemap loading, screen control, VBlank waiting
-- **Memory Operations**: Fast memory copy routines
-
-## Quick Start
-
-Add rust-boy to your project:
+To use it in your own project:
 
 ```toml
 [dependencies]
-rust-boy = { path = "path/to/rust-boy" }
+rust-boy = { git = "https://github.com/ffex/rust-boy" }
 ```
 
-### Basic Example
+## Quick start (`RustBoy`)
+
+A sprite that moves with the D-pad:
+
+```rust
+use rust_boy::gb_std::inputs::PadButton;
+use rust_boy::rust_boy::{InputManager, RustBoy, TileSource};
+
+fn main() {
+    let mut gb = RustBoy::new();
+
+    // An 8x16 sprite (two tiles from a .2bpp file) at screen position (80, 72)
+    let player = gb.add_sprite("Player", TileSource::from_file("player.2bpp", 2), 80, 72, 0);
+
+    // Move one pixel per frame while a direction is held.
+    // Limits are OAM coordinates: screen X + 8, screen Y + 16.
+    let mut inputs = InputManager::new();
+    inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(player, 1, 8));
+    inputs.on_press(PadButton::Right, gb.sprites.move_right_limit(player, 1, 160));
+    inputs.on_press(PadButton::Up, gb.sprites.move_up_limit(player, 1, 16));
+    inputs.on_press(PadButton::Down, gb.sprites.move_down_limit(player, 1, 144));
+    gb.add_inputs(inputs);
+
+    println!("{}", gb.build());
+}
+```
+
+## Low level (`gb_asm`)
+
+The same building blocks the engine uses, one instruction at a time:
 
 ```rust
 use rust_boy::gb_asm::{Asm, Chunk, Condition};
@@ -48,120 +69,99 @@ use rust_boy::gb_asm::{Asm, Chunk, Condition};
 fn main() {
     let mut asm = Asm::new();
 
-    // Hardware setup
+    // Cartridge header at $100-$14F: rgbfix fills in the logo and checksums
     asm.include_hardware()
         .section("Header", "ROM0[$100]")
         .raw("nop")
-        .raw("jp EntryPoint");
+        .raw("jp EntryPoint")
+        .ds("$150 - @", "0");
 
-    // Main code
     asm.section("Main", "ROM0")
         .label("EntryPoint")
-        .comment("Initialize display")
-        .ld_a(0x91)
-        .ldh_label("[$FF40]", "a");
-
-    // Main game loop
-    asm.label("MainLoop")
-        .ld_bc(160)
+        .label("MainLoop")
         .call("WaitVBlank")
         .jp("MainLoop");
 
-    // VBlank function
     asm.chunk(Chunk::Functions)
         .label("WaitVBlank")
-        .comment("Wait for vertical blank")
-        .ld_a_label("[$FF44]")
+        .ld_a_addr_def("rLY")
         .cp_imm(144)
         .jr_cond(Condition::NZ, "WaitVBlank")
         .ret();
 
-    // Generate assembly
     println!("{}", asm.to_asm());
 }
 ```
 
-### Running Examples
-
-The project includes two example programs:
+## Building a ROM
 
 ```bash
-# Basic usage example
-cargo run --bin basic_usage
-
-# Complete breakout game (Unbricked)
-cargo run --bin unbricked
+cargo run --bin fosdem > main.asm
+rgbasm -I include -I examples/fosdem -o main.o main.asm   # include/: hardware.inc, examples/fosdem: .2bpp assets
+rgblink -o main.gb main.o
+rgbfix -v -p 0xFF main.gb
 ```
 
-## Project Structure
+Or build every example at once into `target/examples/<bin>/main.gb` (under `$CARGO_TARGET_DIR` if set):
 
+```bash
+scripts/assemble-examples.sh
 ```
+
+CI does the same on every pull request and keeps the ROMs as a downloadable artifact (`example-roms`).
+Open them in any Game Boy emulator.
+
+## Examples
+
+| Binary | Level | What it shows |
+|---|---|---|
+| `basic_usage` | `gb_asm` | A minimal program: header, main loop, VBlank wait |
+| `unbricked` | `gb_asm` | The [gbdev.io](https://gbdev.io/gb-asm-tutorial/) "Unbricked" tutorial, written instruction by instruction |
+| `unbricked_std` | `gb_std` | The same game with `gb_std` routines and `If` |
+| `unbricked_rustboy` | `rust_boy` | The same game with `RustBoy` |
+| `fosdem` | `rust_boy` | A 16×16 walking character with four animations (FOSDEM demo) |
+| `coin-anim` | `rust_boy` | An animated coin: A starts the animation, B stops it |
+
+## What is supported
+
+- **Instructions** (`gb_asm`): `ld`, `ldh`, `add`, `adc`, `sub`, `inc`, `dec`, `and`, `or`, `xor`, `cp`, `srl`,
+  `swap`, `daa`, `jp`, `jr`, `ret` (also with the `z`/`nz`/`c`/`nc` conditions), `call`, plus the directives
+  `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines.
+  Not yet: `push`/`pop`, `halt`, `di`/`ei`, `reti`, `sbc`, `bit`/`set`/`res`, rotates and most shifts, `cpl`, …
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and a tilemap, WRAM variables
+  (`u8`/`i8`/`u16`/`i16`), OAM sprites and 16×16 composite sprites, looping animations, joypad bindings,
+  and builtin routines that are included only when used. The output is deterministic: things appear in the
+  order you created them.
+- **Known limits:** sprites are always 8×16, only looping animations work, there is no sound yet, and
+  everything lives in one ROM bank. The full list, with fixes planned, is in [CONTEXT.md](CONTEXT.md).
+
+## Project structure
+
+```text
 src/
-├── gb_asm/          # Core assembly generation
-│   ├── asm.rs       # Main Asm struct and API
-│   ├── instr.rs     # Instruction definitions
-│   └── codegen.rs   # Code generation logic
-│
-├── gb_std/          # Game Boy standard library
-│   ├── variables.rs # Variable and constant helpers
-│   ├── flow/        # Control flow abstractions
-│   └── graphics/    # Sprite and graphics utilities
-│
-└── bin/             # Example programs
-    ├── basic_usage.rs
-    └── unbricked.rs
+├── gb_asm/        # Instr/Operand types, the Asm builder, RGBDS output
+├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
+├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
+├── bin/           # the example programs
+└── lib.rs
+include/hardware.inc          # hardware definitions for RGBDS (v4.x)
+examples/                     # example assets (.2bpp, .png, .aseprite) and reference .asm files
+scripts/assemble-examples.sh  # build every example into a ROM
+Task.md, CONTEXT.md, CLAUDE.md
 ```
 
-## Architecture
+## Development
 
-rust-boy uses a fluent builder pattern to construct assembly programs:
-
-1. **Instruction Enumeration**: All Game Boy instructions are represented as Rust enums
-2. **Code Generation**: Instructions are converted to assembly strings via Display trait
-3. **Chunk Organization**: Code is organized into logical sections (Main, Functions, Data, Tiles, Tilemap)
-4. **Method Chaining**: Fluent API allows natural, readable code construction
-
-## Game Boy Hardware
-
-The generated assembly targets the Game Boy's Sharp LR35902 processor (Z80-like instruction set) and is compatible with:
-
-- Original Game Boy (DMG)
-- Game Boy Pocket
-- Game Boy Color (backward compatible mode)
-- Modern emulators and flash cartridges
-
-## Building for Game Boy
-
-The library generates assembly code in RGBDS format. To compile for actual hardware:
-
-1. Generate assembly with rust-boy
-2. Assemble with RGBDS (`rgbasm`)
-3. Link with RGBDS (`rgblink`)
-4. Fix ROM header (`rgbfix`)
-5. Test in emulator or on hardware
+Run the same checks as CI before pushing:
 
 ```bash
-# Example workflow
-cargo run --bin your_game > game.asm
-rgbasm -L -o game.o game.asm
-rgblink -o game.gb game.o
-rgbfix -v -p 0xFF game.gb
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+scripts/assemble-examples.sh
 ```
 
-## Development Status
-
-rust-boy is under active development. Current branch: `gbz80-std`
-
-Recent additions:
-- Movement system implementation
-- Variable and flow control support
-- Sprite handling
-- Advanced if/else conditionals
-- Binary include support (`incbin`)
-
-## Requirements
-
-- RGBDS toolchain (for assembling generated code)
+Work happens on branches merged through pull requests into `refactor`; see [CLAUDE.md](CLAUDE.md).
 
 ## Inspirational Projects
 
@@ -177,3 +177,7 @@ This project was inspired by and builds upon the excellent work of the Game Boy 
 - **[retroshield-z80-workbench](https://github.com/ajokela/retroshield-z80-workbench)** - Z80 development workbench, showing alternative approaches to retro development
 
 Special thanks to all the developers who have contributed to Game Boy homebrew tooling and documentation over the years.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

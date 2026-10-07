@@ -23,7 +23,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ─�
 
 - Zero Rust dependencies, edition 2024.
 - The committed `.o` files are RGBDS object format `RGB9` (RGBDS 1.0). Generated code uses `0x05`-style
-  constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (shown in the README) was removed in RGBDS 0.8.
+  constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
   `examples/`); pass it with `rgbasm -I include`.
 
@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 28 tests pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 38 unit tests and the README examples as doctests pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); sprites still render wrong until [B4](#b4) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -310,7 +310,7 @@ tile indices. *Fix:* single source of truth.
 
 #### B19
 **Every tilemap goes to `$9800`.** `add_tilemap` hardcodes `vram_address: 0x9800`
-(`src/rust_boy/tiles.rs:160`); with two tilemaps, which one wins depends on HashMap order. No `$9C00`.
+(`src/rust_boy/tiles.rs:160`); with two tilemaps, the last one created wins (it was random before B13). No `$9C00`.
 
 #### B20
 **Silent failures.** Unknown `SpriteId`/`CompositeSpriteId` → empty `Vec` (move/get/enable methods in
@@ -323,6 +323,7 @@ clear message.
 `nop` + `jp EntryPoint` and no `ds $150 - @, 0` (`src/bin/basic_usage.rs:8`, `README.md:53`). Once the floating
 ROM0 section grows past 256 bytes, rgblink can place it at `$0104`, where `rgbfix` overwrites the cartridge
 header. (`RustBoy` itself is correct: `src/gb_std/utility.rs:5-7`.)
+**Status: fixed** on `refactor-p0-readme`: both now emit `ds $150 - @, 0`.
 
 #### B22
 **`get_pivot` silently clamps.** `u8::try_from(16 + y_offset).unwrap_or(0)` (`src/rust_boy/sprites.rs:570, 576`;
@@ -381,6 +382,9 @@ background-only program shows garbage objects on real hardware.
 - `If*` comparisons are **unsigned** (native `cp` semantics) — correct, but worth documenting next to the
   `i8` variable API.
 
+**Status: fixed** on `refactor-p0-readme` (README rewritten and used as the crate docs, so its examples are
+compiled; `inputs.rs` comment and `RustBoy::call` example corrected; the `If` docs say "unsigned" since B5).
+
 #### B30
 **The `documentations` branch contradicts the code** (its `src/` is identical to `main`, so these are doc bugs):
 - `docs/sprite-movement.md:79-81`: `get_pivot(ball, 0, 1)` is "1 px below" and `(-1, 0)` "1 px left", and it
@@ -427,7 +431,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   16-bit math, loops/switch.
 - **ISA:** `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`, rotates/shifts, `cpl`, `ld [hl-]`…
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
-- **Tooling:** no CI, no assembled-output tests, no one-command "build ROM and run".
+- **Tooling:** CI exists now (fmt, clippy, tests, assembling every example); still missing: snapshot tests of
+  the generated asm and a one-command "build ROM and run".
 
 ---
 

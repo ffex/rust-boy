@@ -6,7 +6,7 @@ use rust_boy::{
     gb_std::{
         flow::{Emittable, If},
         graphics::{
-            sprites::{clear_objects_screen, initialize_objects_screen, SpriteManager},
+            sprites::{SpriteManager, clear_objects_screen, initialize_objects_screen},
             utility::{
                 add_tilemap, add_tiles, cp_in_memory, get_tile_by_pixel, is_specific_tile, memcopy,
                 turn_off_screen, turn_on_screen, wait_not_vblank, wait_vblank,
@@ -159,7 +159,7 @@ fn main() {
         let paddle_x_plus_16 = {
             let mut a = Asm::new();
             a.emit_all(paddle.get_x());
-            a.add(Operand::Reg(Register::A), Operand::Imm(8 + 16));
+            a.add(Operand::Reg(Register::A), Operand::Imm(16));
             a.get_main_instrs()
         };
 

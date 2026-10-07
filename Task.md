@@ -26,7 +26,7 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 - [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)
 - [ ] Deterministic output: replace `HashMap`/`HashSet` iteration with `BTreeMap`/ordered `Vec` — [B13](CONTEXT.md#b13).
       *Prerequisite for every snapshot test.*
-- [ ] Decide the `If` semantics once: `If::lt(l, r)` means `l < r` (documented meaning). Needed before
+- [x] Decide the `If` semantics once: `If::lt(l, r)` means `l < r` (documented meaning) — decided 2026-10-07. Needed before
       fixing [B5](CONTEXT.md#b5), because the two Unbricked examples use opposite argument orders.
 - [ ] CI (GitHub Actions): `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, build all bins,
       and **required** `rgbasm` + `rgblink` of every example's output. Pin the RGBDS version (≥ 0.9; the
@@ -54,8 +54,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 ### P0 — broken in shipped examples
 - [ ] Duplicate `wCurKeys`/`wNewKeys` labels; variable names never deduplicated — [B3](CONTEXT.md#b3)
 - [ ] `LCDCF_OBJ16` forced → 8×8 sprites render wrong; add sprite-size config + even tile alignment in 8×16 — [B4](CONTEXT.md#b4)
-- [ ] Two-operand `If` compares right-vs-left; fix `If`, then both Unbricked examples (paddle bounce in
-      `unbricked_std` never fires); stop clobbering `b` — [B5](CONTEXT.md#b5)
+- [x] Two-operand `If` compares right-vs-left; fix `If`, then both Unbricked examples (paddle bounce in
+      `unbricked_std` never fires) — [B5](CONTEXT.md#b5) (branch `refactor-p1-if-semantics`; the left operand
+      must not change `b`, now documented — a register-safe `If` is in Phase 2)
 - [ ] Composite 16×16 sprite collapses at screen edges (FOSDEM demo) — [B6](CONTEXT.md#b6)
 
 ### P1

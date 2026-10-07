@@ -6,7 +6,7 @@ use super::emittable::Emittable;
 ///
 /// IMPORTANT NOTE about LE and GT:
 /// The Game Boy CPU only has Z (zero) and C (carry) flags after a compare.
-/// After `cp B` (comparing A with B):
+/// After `cp B` (comparing A with B; in `If`, A = left and B = right):
 /// - E  (A == B): Z flag set
 /// - NE (A != B): Z flag clear
 /// - LT (A < B):  C flag set
@@ -46,10 +46,13 @@ impl ComparisonOp {
 
 /// High-level If statement that hides register management.
 ///
+/// `If::lt(left, right, body)` runs `body` when `left < right` (unsigned compare);
+/// every operator reads the same way.
+///
 /// The If statement automatically handles:
-/// - Loading left value into A, saving to B
-/// - Loading right value into A
-/// - Comparing A with B
+/// - Loading right value into A, saving to B
+/// - Loading left value into A (the left code must not change B)
+/// - Comparing A (left) with B (right)
 /// - Conditional jumps and label generation
 ///
 /// # Example
@@ -276,10 +279,10 @@ impl Emittable for If {
     ///
     /// Generated pattern:
     /// ```asm
-    /// ; left instructions (result in A)
-    /// ld B, A              ; save left to B
     /// ; right instructions (result in A)
-    /// cp B                 ; compare A (right) with B (left)
+    /// ld B, A              ; save right to B
+    /// ; left instructions (result in A)
+    /// cp B                 ; compare A (left) with B (right)
     /// jp <condition>, .end_if_N
     /// ; then branch
     /// .end_if_N:
@@ -295,16 +298,16 @@ impl Emittable for If {
         let else_label = format!(".else_{}", my_counter);
         let then_label = format!(".then_{}", my_counter);
 
-        // Step 1: Execute left instructions (result in A)
-        asm.emit_all(self.left.emit(counter));
-
-        // Step 2: Save left value to B
-        asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-
-        // Step 3: Execute right instructions (result in A)
+        // Step 1: Execute right instructions (result in A)
         asm.emit_all(self.right.emit(counter));
 
-        // Step 4: Compare A (right) with B (left)
+        // Step 2: Save right value to B
+        asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+
+        // Step 3: Execute left instructions (result in A)
+        asm.emit_all(self.left.emit(counter));
+
+        // Step 4: Compare A (left) with B (right): the flags describe left - right
         asm.cp(Operand::Reg(Register::B));
 
         // Step 5: Handle conditional jumps based on operator type
@@ -1098,5 +1101,114 @@ mod tests {
         let mut if3 = make_if();
         if3.emit(&mut counter);
         assert_eq!(counter, 3);
+    }
+
+    /// Runs the straight-line code emitted by `If` on a tiny CPU model
+    /// (registers A, B, C and the Z/C flags) and returns register C.
+    fn run(instrs: &[Instr]) -> u8 {
+        let label_pos = |name: &str| {
+            instrs
+                .iter()
+                .position(|i| matches!(i, Instr::Label { name: n } if n == name))
+                .unwrap_or_else(|| panic!("label {} not found", name))
+        };
+        let (mut a, mut b, mut c) = (0u8, 0u8, 0u8);
+        let (mut zero, mut carry) = (false, false);
+        let mut pc = 0;
+        while pc < instrs.len() {
+            match &instrs[pc] {
+                Instr::Ld {
+                    dst: Operand::Reg(Register::A),
+                    src: Operand::Imm(v),
+                } => a = *v,
+                Instr::Ld {
+                    dst: Operand::Reg(Register::C),
+                    src: Operand::Imm(v),
+                } => c = *v,
+                Instr::Ld {
+                    dst: Operand::Reg(Register::B),
+                    src: Operand::Reg(Register::A),
+                } => b = a,
+                Instr::Cp {
+                    operand: Operand::Reg(Register::B),
+                } => {
+                    zero = a == b;
+                    carry = a < b;
+                }
+                Instr::Jp {
+                    target: JumpTarget::Label(label),
+                } => {
+                    pc = label_pos(label);
+                    continue;
+                }
+                Instr::JpCond {
+                    condition,
+                    target: JumpTarget::Label(label),
+                } => {
+                    let taken = match condition {
+                        AsmCondition::Z => zero,
+                        AsmCondition::NZ => !zero,
+                        AsmCondition::C => carry,
+                        AsmCondition::NC => !carry,
+                    };
+                    if taken {
+                        pc = label_pos(label);
+                        continue;
+                    }
+                }
+                Instr::Label { .. } => {}
+                other => panic!("instruction not supported by the test CPU: {}", other),
+            }
+            pc += 1;
+        }
+        c
+    }
+
+    fn load_a(value: u8) -> Vec<Instr> {
+        vec![Instr::Ld {
+            dst: Operand::Reg(Register::A),
+            src: Operand::Imm(value),
+        }]
+    }
+
+    fn set_c(value: u8) -> Vec<Instr> {
+        vec![Instr::Ld {
+            dst: Operand::Reg(Register::C),
+            src: Operand::Imm(value),
+        }]
+    }
+
+    type MakeIf = fn(Vec<Instr>, Vec<Instr>, Vec<Instr>) -> If;
+
+    #[test]
+    fn test_if_compares_left_with_right() {
+        let cases: [(&str, MakeIf, fn(u8, u8) -> bool); 6] = [
+            ("eq", |l, r, t| If::eq(l, r, t), |l, r| l == r),
+            ("ne", |l, r, t| If::ne(l, r, t), |l, r| l != r),
+            ("lt", |l, r, t| If::lt(l, r, t), |l, r| l < r),
+            ("ge", |l, r, t| If::ge(l, r, t), |l, r| l >= r),
+            ("le", |l, r, t| If::le(l, r, t), |l, r| l <= r),
+            ("gt", |l, r, t| If::gt(l, r, t), |l, r| l > r),
+        ];
+        let values = [0u8, 1, 5, 10, 127, 128, 254, 255];
+
+        for (name, make, expected) in cases {
+            for l in values {
+                for r in values {
+                    let want = expected(l, r);
+
+                    // Without else: C becomes 1 only when the condition holds
+                    let mut if_stmt = make(load_a(l), load_a(r), set_c(1));
+                    let ran_then = run(&if_stmt.emit(&mut 0)) == 1;
+                    assert_eq!(ran_then, want, "If::{}({}, {})", name, l, r);
+
+                    // With else: C becomes 1 (then) or 2 (else)
+                    let mut if_stmt = make(load_a(l), load_a(r), set_c(1)).or_else(set_c(2));
+                    let branch = run(&if_stmt.emit(&mut 0));
+                    let want_branch = if want { 1 } else { 2 };
+                    assert_eq!(branch, want_branch, "If::{}({}, {}) with else", name, l, r);
+                }
+            }
+        }
     }
 }

@@ -120,14 +120,14 @@ fn main() {
         lbl_debug.label("PaddleBounce");
         lbl_debug.get_main_instrs()
     });
-    // Paddle bounce
+    // Paddle bounce: ball_y + 5 == paddle_y and paddle_x - 8 < ball_x <= paddle_x + 16
     let paddle_bounce = If::eq(
-        gb.sprites.get_y(paddle),
         gb.sprites.get_y(ball).plus(5),
+        gb.sprites.get_y(paddle),
         If::lt(
-            gb.sprites.get_x(ball),
             gb.sprites.get_x(paddle).minus(8),
-            If::ge(gb.sprites.get_x(ball), gb.sprites.get_x(paddle).plus(16), {
+            gb.sprites.get_x(ball),
+            If::ge(gb.sprites.get_x(paddle).plus(16), gb.sprites.get_x(ball), {
                 _ball_momentum_y.set(-1)
             }),
         ),

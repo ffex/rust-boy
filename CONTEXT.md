@@ -45,8 +45,8 @@ rgbfix -v -p 0xFF main.gb
 | `cargo build --lib` | ✅ builds, 10 warnings |
 | `cargo test` | ✅ 28 tests pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); sprites still render wrong until [B4](#b4) |
-| bin `unbricked_rustboy` | ⚠️ compiles, but the generated asm has duplicate labels → rgbasm fails ([B3](#b3)) |
-| bin `unbricked_std` | ⚠️ assembles, but the paddle bounce never fires ([B5](#b5)) |
+| bin `unbricked_rustboy` | ❌ compiles, but rgbasm fails: "`wCurKeys` already defined" ([B3](#b3)), confirmed with RGBDS 1.0.4 |
+| bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ⚠️ assembles, but the 16×16 player collapses at screen edges ([B6](#b6)) |
 | Output determinism | ❌ `fosdem` and `unbricked_rustboy` print different `.asm` on every run ([B13](#b13)) |
 | Committed build artifacts | 12 `*.gb` / `*.o` files tracked in `examples/` |
@@ -186,6 +186,11 @@ left → `ld b, a` (`:302`), right → `a`, then `cp b` (`:308`), so the flags d
 
 *Fix:* evaluate right first into `b`, then left into `a`, `cp b` (or swap via another register); then fix
 both examples to the documented meaning. Decide the semantics once (see Task.md Phase 0).
+**Decision (2026-10-07):** `If::lt(l, r)` means `l < r`. **Status: fixed** on `refactor-p1-if-semantics`:
+right is evaluated first into `b`, left into `a`, then `cp b`; `unbricked_rustboy` is written in natural
+order again (byte-identical asm), `unbricked_std` now bounces and its right edge is `+16` (was `+24`).
+Regression test `test_if_compares_left_with_right` runs the emitted code for every operator. The left
+operand must not change `b` (documented; a register-safe `If` is planned in Phase 2).
 
 #### B6
 **Composite (16×16) sprites split apart at screen edges.** `move_composite_{left,right}_limit`

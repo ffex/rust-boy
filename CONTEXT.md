@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 95 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 98 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -296,14 +296,14 @@ code it reports the offsets 285, 144 and 135 that rgblink reports for the same p
 
 #### B10
 **`AnimationType::PingPong` and `::Once` are ignored.** `Animation.anim_type`
-(`src/rust_boy/animations.rs:17`) is never read; `generate_loop_func` (`:23-61`) always loops. Advertised in
+(`src/rust_boy/animations.rs:17` at `4601a5c`) was never read; `generate_loop_func` (`:23-61`) always looped. Advertised in
 the `add_animation` docs (`src/rust_boy/sprites.rs:118`) and in `docs/animations.md` (documentations branch).
 *Fix:* implement them (or remove the variants until implemented).
 **Status: fixed** on `refactor-p1-animations`, with the meaning `docs/animations.md` gives them. Each mode has its
 own function body (`Animation::generate_func`); `Loop` is unchanged.
 - `PingPong` plays forward, then backward, and repeats; the end frames are shown once per turn
   (0 1 2 3 2 1 0 1 …). The direction is kept in a new WRAM variable `wAnim_{sprite}_Dir` (0 forward, 1 backward),
-  created only for a sprite that has a `PingPong` animation (so `fosdem` and `coin-anim` get none). The direction
+  created only for a sprite that has a `PingPong` animation of two frames or more (so `fosdem` and `coin-anim` get none). The direction
   is followed only between the two ends: the first frame always goes forward and the last one backward, so a
   direction left over from another animation does no harm. A one-frame `PingPong` stays on its frame.
 - `Once` plays to the last frame and stays there (0 1 2 3 3 3 …), still enabled. Enabled again while the sprite
@@ -328,7 +328,7 @@ writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
 animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:445-612`,
-`src/rust_boy/animations.rs:28-58`; loop at `src/rust_boy/rustboy.rs:325-339`). OAM is only accessible in
+`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:325-339`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -375,7 +375,7 @@ works via `200u8 as i8`, but the API is awkward.) *Fix:* typed setters per `VarT
   (`src/rust_boy/sprites.rs:82`, overflows at exactly 256 tiles, e.g. two FOSDEM characters),
   `sprite.y + 16` / `sprite.x + 8` (`:425, :429`), `x + 8` (`src/rust_boy/rustboy.rs:487`),
   `tile_count() as u8` (`:443`), `oam_index * 4` (many sites).
-- `cp_imm(abs_end + self.frame_step)` (`src/rust_boy/animations.rs:50`) overflows when the last frame is tile
+- `cp_imm(abs_end + self.frame_step)` (`src/rust_boy/animations.rs:104` since [B10](#b10), `:50` at `4601a5c`) overflows when the last frame is tile
   254/255 → in release `cp 0`, the animation freezes on its first frame. (Since [B10](#b10) only `Loop` does this.)
 - `MemoryAllocator` (`src/rust_boy/memory.rs:36`) exists, with overflow checks, but nothing uses it.
 

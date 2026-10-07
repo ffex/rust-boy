@@ -553,7 +553,7 @@ mod tests {
     }
 
     /// One program that uses every manager whose output order matters
-    fn sample_game() -> String {
+    fn sample_rustboy() -> RustBoy {
         use crate::gb_std::inputs::PadButton;
         use crate::rust_boy::{AnimationType, TileSource, VarType};
 
@@ -588,7 +588,11 @@ mod tests {
         inputs.on_press(PadButton::A, Vec::new());
         gb.add_inputs(inputs);
 
-        gb.build()
+        gb
+    }
+
+    fn sample_game() -> String {
+        sample_rustboy().build()
     }
 
     #[test]
@@ -662,5 +666,29 @@ mod tests {
             "FuncB:",
             "FuncA:",
         ]);
+    }
+
+    #[test]
+    fn test_variables_created_twice_are_emitted_once() {
+        use crate::gb_std::inputs::PadButton;
+
+        let mut gb = RustBoy::new();
+        // add_inputs creates wCurKeys/wNewKeys too
+        gb.vars.create_u8("wCurKeys", 0);
+        gb.vars.create_u8("wNewKeys", 0);
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::A, Vec::new());
+        gb.add_inputs(inputs);
+
+        let out = gb.build();
+        assert_eq!(out.matches("wCurKeys: db").count(), 1);
+        assert_eq!(out.matches("wNewKeys: db").count(), 1);
+    }
+
+    #[test]
+    fn test_build_twice_gives_the_same_output() {
+        let mut gb = sample_rustboy();
+        let first = gb.build();
+        assert!(gb.build() == first, "a second build() changed the output");
     }
 }

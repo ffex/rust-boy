@@ -48,7 +48,7 @@ rgbfix -v -p 0xFF main.gb
 | bin `unbricked_rustboy` | ❌ compiles, but rgbasm fails: "`wCurKeys` already defined" ([B3](#b3)), confirmed with RGBDS 1.0.4 |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ⚠️ assembles, but the 16×16 player collapses at screen edges ([B6](#b6)) |
-| Output determinism | ❌ `fosdem` and `unbricked_rustboy` print different `.asm` on every run ([B13](#b13)) |
+| Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
 | Committed build artifacts | 12 `*.gb` / `*.o` files tracked in `examples/` |
 
 ---
@@ -259,6 +259,10 @@ loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Gro
 `src/gb_std/variables.rs:21, 41`. Reproduced: 3 runs of `fosdem` / `unbricked_rustboy` → 3 different files.
 No behavioural impact today, but it makes diffs and snapshot tests impossible (must be fixed before them).
 *Fix:* `BTreeMap` / insertion-ordered `Vec`.
+**Status: fixed** on `refactor-p0-deterministic-output`: id-keyed managers use `BTreeMap` (ids are
+sequential, so creation order), name-keyed lists (user functions, variable sections, `gb_std`
+`VariableSection`) use a `Vec` in declaration order, builtins come in enum order. `Asm.chunks` stays a
+`HashMap` because `to_asm` reads it in a fixed order.
 
 #### B14
 **`build()` is not idempotent.** `build(&mut self)` (`src/rust_boy/rustboy.rs:258`) creates `wFrameCounter`
@@ -437,7 +441,6 @@ Compared with `origin/main` (`git rev-list --count`):
 
 Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historical milestones.
 
-**Status (2026-10-07):** the maintainer approved deleting the 7 *Delete* branches. The Claude session
-could not delete them (GitHub answered HTTP 403 to the delete push), so they stay until the maintainer
-removes them. To restore a deleted branch: `git push origin <last commit>:refs/heads/<branch>`; only
-`unbricked-example` has commits that are not in `main`, so restore it before GitHub garbage-collects them.
+**Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
+`git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
+`main`, so it can only be restored while GitHub still keeps those commits.

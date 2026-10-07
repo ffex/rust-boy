@@ -551,4 +551,116 @@ mod tests {
         assert!(output.contains("Main:"));
         assert!(output.contains("WaitVBlank:"));
     }
+
+    /// One program that uses every manager whose output order matters
+    fn sample_game() -> String {
+        use crate::gb_std::inputs::PadButton;
+        use crate::rust_boy::{AnimationType, TileSource, VarType};
+
+        let mut gb = RustBoy::new();
+
+        gb.tiles
+            .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
+        gb.tiles.add_tilemap("Map", &[[0u8; 32]]);
+
+        let frames: [[&str; 8]; 2] = [["$FF"; 8], ["$00"; 8]];
+        for name in ["Alpha", "Bravo", "Charlie"] {
+            let sprite = gb.add_sprite(name, TileSource::from_raw(&frames), 16, 16, 0);
+            let anim_name = format!("{}Spin", name);
+            gb.sprites
+                .add_animation(sprite, &anim_name, 0, 1, AnimationType::Loop);
+        }
+
+        gb.vars.create_u8("wZulu", 1);
+        gb.vars.create_u8("wYankee", 2);
+        gb.vars.create_in_section("wHigh", VarType::U8, 3, "Other");
+        gb.vars.create_u8("wXray", 4);
+
+        for name in ["FuncB", "FuncA"] {
+            let mut body = Asm::new();
+            body.label(name).ret();
+            gb.define_function(name, body.get_main_instrs());
+        }
+        gb.use_function(BuiltinFunction::Delay);
+        gb.use_function(BuiltinFunction::GetTileByPixel);
+
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::A, Vec::new());
+        gb.add_inputs(inputs);
+
+        gb.build()
+    }
+
+    #[test]
+    fn test_build_is_deterministic() {
+        let first = sample_game();
+        for _ in 0..10 {
+            assert!(
+                sample_game() == first,
+                "two builds of the same program differ"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_follows_creation_order() {
+        let out = sample_game();
+        let pos = |needle: &str| {
+            out.find(needle)
+                .unwrap_or_else(|| panic!("`{}` not found in the output", needle))
+        };
+        let in_order = |needles: &[&str]| {
+            for pair in needles.windows(2) {
+                assert!(
+                    pos(pair[0]) < pos(pair[1]),
+                    "`{}` should come before `{}`",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        };
+
+        // Variable sections in first-use order, variables in creation order
+        in_order(&[
+            "SECTION \"Variables\"",
+            "wZulu: db",
+            "wYankee: db",
+            "wXray: db",
+            "SECTION \"Other\"",
+            "wHigh: db",
+        ]);
+        // Variable initialisation in creation order
+        in_order(&[
+            "ld [wZulu], a",
+            "ld [wYankee], a",
+            "ld [wHigh], a",
+            "ld [wXray], a",
+        ]);
+        // Tile data copied to VRAM in creation order
+        in_order(&[
+            "ld de, BgTiles",
+            "ld de, Map",
+            "ld de, Alpha",
+            "ld de, Bravo",
+            "ld de, Charlie",
+        ]);
+        // Animation dispatch and functions in sprite order
+        in_order(&[
+            "call Anim_AlphaSpin",
+            "call Anim_BravoSpin",
+            "call Anim_CharlieSpin",
+        ]);
+        in_order(&["Anim_AlphaSpin:", "Anim_BravoSpin:", "Anim_CharlieSpin:"]);
+        // Builtins in a fixed order, then user functions in registration order
+        in_order(&[
+            "Memcopy:",
+            "WaitVBlank:",
+            "WaitNotVBlank:",
+            "UpdateKeys:",
+            "GetTileByPixel:",
+            "Delay:",
+            "FuncB:",
+            "FuncA:",
+        ]);
+    }
 }

@@ -1,6 +1,6 @@
 //! Sprite management with automatic tile allocation and OAM handling
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use super::tiles::TileId;
 use crate::{
@@ -9,11 +9,11 @@ use crate::{
 };
 
 /// Unique identifier for a sprite instance
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpriteId(pub(crate) usize);
 
 /// Unique identifier for a composite sprite (group of sprites that move together)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CompositeSpriteId(pub(crate) usize);
 
 /// A composite sprite made of multiple hardware sprites that move together
@@ -46,8 +46,9 @@ pub(crate) struct SpriteData {
 /// Manages sprites with automatic tile allocation and OAM handling
 #[derive(Debug)]
 pub struct SpriteManager {
-    sprites: HashMap<SpriteId, SpriteData>,
-    composite_sprites: HashMap<CompositeSpriteId, CompositeSpriteData>,
+    /// Sprites by id; ids are sequential, so iteration follows creation order
+    sprites: BTreeMap<SpriteId, SpriteData>,
+    composite_sprites: BTreeMap<CompositeSpriteId, CompositeSpriteData>,
     next_id: usize,
     next_composite_id: usize,
     next_oam_index: u8,
@@ -57,8 +58,8 @@ pub struct SpriteManager {
 impl SpriteManager {
     pub(crate) fn new() -> Self {
         Self {
-            sprites: HashMap::new(),
-            composite_sprites: HashMap::new(),
+            sprites: BTreeMap::new(),
+            composite_sprites: BTreeMap::new(),
             next_id: 0,
             next_composite_id: 0,
             next_oam_index: 0,

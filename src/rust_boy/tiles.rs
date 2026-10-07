@@ -1,11 +1,11 @@
 //! Tile management with automatic VRAM allocation
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::gb_asm::Instr;
 
 /// Unique identifier for a tile or tileset
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TileId(pub(crate) usize);
 
 /// Source data for tiles
@@ -69,7 +69,8 @@ pub(crate) struct TileData {
 /// Manages tiles with automatic VRAM allocation
 #[derive(Debug)]
 pub struct TileManager {
-    tiles: HashMap<TileId, TileData>,
+    /// Tiles by id; ids are sequential, so iteration follows creation order
+    tiles: BTreeMap<TileId, TileData>,
     next_id: usize,
     // Sprite tiles: $8000-$8FFF
     next_sprite_addr: u16,
@@ -80,7 +81,7 @@ pub struct TileManager {
 impl TileManager {
     pub(crate) fn new() -> Self {
         Self {
-            tiles: HashMap::new(),
+            tiles: BTreeMap::new(),
             next_id: 0,
             next_sprite_addr: 0x8000,
             next_bg_addr: 0x9000,

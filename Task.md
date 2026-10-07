@@ -24,8 +24,8 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 - [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
 - [x] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1) (branch `refactor-p0-fix-build`)
 - [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)
-- [ ] Deterministic output: replace `HashMap`/`HashSet` iteration with `BTreeMap`/ordered `Vec` — [B13](CONTEXT.md#b13).
-      *Prerequisite for every snapshot test.*
+- [x] Deterministic output: replace `HashMap`/`HashSet` iteration with `BTreeMap`/ordered `Vec` — [B13](CONTEXT.md#b13).
+      *Prerequisite for every snapshot test.* (branch `refactor-p0-deterministic-output`; output follows creation order)
 - [x] Decide the `If` semantics once: `If::lt(l, r)` means `l < r` (documented meaning) — decided 2026-10-07. Needed before
       fixing [B5](CONTEXT.md#b5), because the two Unbricked examples use opposite argument orders.
 - [ ] CI (GitHub Actions): `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, build all bins,
@@ -41,10 +41,8 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 - [ ] README refresh — [B29](CONTEXT.md#b29), [B21](CONTEXT.md#b21): bin list (6), `rust_boy` quick start, project tree,
       remove "complete instruction set" / "compile-time guarantees" claims, drop `rgbasm -L`, state the
       RGBDS version, remove "Current branch: gbz80-std"
-- [ ] Branch cleanup — **approved** by the maintainer on 2026-10-07 (the 7 branches marked *Delete* in
-      [Branches](#branches)). The Claude session cannot delete branches (GitHub answered HTTP 403), so the
-      maintainer deletes them, on GitHub → Branches or with:
-      `git push origin --delete unbricked-example fosdem-example test-animation rust-boy-implementation gbz80-std gbz80-workbench-more-idiomatic gbz80-workbench`
+- [x] Branch cleanup — the 7 branches marked *Delete* in [Branches](#branches) were deleted by the
+      maintainer on 2026-10-07
 - [ ] *(optional)* Mirror this file into GitHub issues + milestones
 
 ## Phase 1 — Bug fixes
@@ -191,9 +189,8 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 
 ## Branches
 
-Verified with `git rev-list --count` against `origin/main`. Deletion of the 7 *Delete* branches was
-approved on 2026-10-07 and is waiting for the maintainer (see Phase 0). A deleted branch can be restored
-with `git push origin <last commit>:refs/heads/<branch>`.
+Verified with `git rev-list --count` against `origin/main`. The 7 *Delete* branches were deleted on
+2026-10-07. A deleted branch can be restored with `git push origin <last commit>:refs/heads/<branch>`.
 
 | Branch | Last commit | Ahead / behind | Action |
 |---|---|---|---|

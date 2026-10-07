@@ -2,7 +2,7 @@
 //!
 //! Provides a high-level API for binding button presses to actions.
 
-use crate::gb_asm::Instr;
+use crate::gb_asm::{Instr, LabelAllocator};
 use crate::gb_std::inputs::{PadButton, check_key};
 
 /// A registered input binding
@@ -52,15 +52,15 @@ impl InputManager {
         self.bindings.is_empty()
     }
 
-    /// Generate the input handling code
+    /// Generate the input handling code, with local labels numbered by `labels`
     ///
     /// This does NOT include the UpdateKeys call - that is handled by RustBoy
     /// to ensure the function is properly registered as used.
-    pub(crate) fn generate_code(&self) -> Vec<Instr> {
+    pub(crate) fn generate_code(&self, labels: &LabelAllocator) -> Vec<Instr> {
         let mut instrs = Vec::new();
 
         for binding in &self.bindings {
-            instrs.extend(check_key(binding.button, binding.action.clone()));
+            instrs.extend(check_key(labels, binding.button, binding.action.clone()));
         }
 
         instrs
@@ -95,7 +95,7 @@ mod tests {
         asm.ret();
 
         inputs.on_press(PadButton::A, asm.get_main_instrs());
-        let code = inputs.generate_code();
+        let code = inputs.generate_code(&LabelAllocator::new());
 
         // Should contain check_key generated code
         assert!(!code.is_empty());

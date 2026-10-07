@@ -63,8 +63,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       (branch `refactor-p1-sprite-limits`: the leading sprite is tested, the others follow at their offsets)
 
 ### P1
-- [ ] Fixed global labels in reusable snippets (`check_key`, `move_*_limit`, gb_std `Sprite::move_*`) and
-      global labels breaking `If` local-label scope — [B7](CONTEXT.md#b7)
+- [x] Fixed global labels in reusable snippets (`check_key`, `move_*_limit`, gb_std `Sprite::move_*`) and
+      global labels breaking `If` local-label scope — [B7](CONTEXT.md#b7) (branch `refactor-p1-unique-labels`:
+      numbered local labels from `gb_asm::LabelAllocator`; `gb_std` `check_key` / `Sprite::move_*_limit` take one)
 - [x] `move_*_limit` stops only on exact equality → overshoot and wrap — [B8](CONTEXT.md#b8)
       (branch `refactor-p1-sprite-limits`: carry compares; a move stops exactly on its limit, which is included)
 - [ ] `jr` out of range in the animation dispatcher (≥ 3 animated sprites) — [B9](CONTEXT.md#b9)
@@ -84,7 +85,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22)
 - [ ] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
 - [ ] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
-- [ ] Animation labels not namespaced by sprite; validate label names — [B25](CONTEXT.md#b25)
+- [x] Animation labels not namespaced by sprite; validate label names — [B25](CONTEXT.md#b25)
+      (branch `refactor-p1-unique-labels`: `Anim_{sprite}_{animation}`; sprite, composite and animation names
+      must be unique RGBDS identifiers)
 - [ ] Builtins reached through `Call`/`IfCall`/`define_function_from` not auto-included → link error — [B26](CONTEXT.md#b26)
 - [ ] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
 - [ ] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
@@ -106,6 +109,7 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] First-class sections (type, bank, `ALIGN`, `ds n` without fill for RAM); move `Chunk` and the game
       layout out of `gb_asm` into the engine
 - [ ] Label allocator owned by the asm layer; automatic `jr` → `jp` when out of range
+      (`gb_asm::LabelAllocator` exists since [B7](CONTEXT.md#b7) for snippet labels; `If` still has its own counter)
 - [ ] Routines as values: `Routine { name, body, deps, clobbers }` → automatic inclusion of dependencies
       (fixes B26) and a documented calling convention (which registers each routine clobbers)
 - [ ] One source of truth for builtins: `rust_boy` reuses `gb_std`; remove the duplicate `gb_std::graphics::sprites::SpriteManager`
@@ -172,7 +176,10 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
-- [ ] Validate user-supplied symbol names
+- [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
+      [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
+      `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
+      functions and constants are not checked at all)
 
 ## Phase 4 — Documentation
 

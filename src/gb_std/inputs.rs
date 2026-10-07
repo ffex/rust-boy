@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register};
 
 /// Enum for joypad buttons that can return constant names and values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,16 +27,18 @@ impl PadButton {
             PadButton::A => "PADF_A",
         }
     }
+    /// Stem of the local labels [`check_key`] emits for this button, which a
+    /// [`LabelAllocator`] numbers: "check_left" gives `.check_left_3`
     pub fn label(self) -> &'static str {
         match self {
-            PadButton::Down => "CheckDown",
-            PadButton::Up => "CheckUp",
-            PadButton::Left => "CheckLeft",
-            PadButton::Right => "CheckRight",
-            PadButton::Start => "CheckStart",
-            PadButton::Select => "CheckSelect",
-            PadButton::B => "CheckB",
-            PadButton::A => "CheckA",
+            PadButton::Down => "check_down",
+            PadButton::Up => "check_up",
+            PadButton::Left => "check_left",
+            PadButton::Right => "check_right",
+            PadButton::Start => "check_start",
+            PadButton::Select => "check_select",
+            PadButton::B => "check_b",
+            PadButton::A => "check_a",
         }
     }
 }
@@ -124,18 +126,99 @@ pub fn update_keys() -> Vec<Instr> {
 
     asm.get_main_instrs()
 }
+/// Run `pressed_func` while `button` is held (its bit is set in `wCurKeys`)
+///
+/// The labels are local and numbered by `labels` (`.check_left_3`, `.check_left_3_end`),
+/// so the same check can be emitted any number of times, and inside an `If` body. Like
+/// any code with local labels, it must come after a global label, and `pressed_func`
+/// must not define a global label (it would start a new label scope). Uses A and the flags.
 //TODO check if it is ok, or we have to implement a big scope "check all keys"
 // and one is pressed we jump at the end of the block
-pub fn check_key(button: PadButton, pressed_func: Vec<Instr>) -> Vec<Instr> {
+pub fn check_key(
+    labels: &LabelAllocator,
+    button: PadButton,
+    pressed_func: Vec<Instr>,
+) -> Vec<Instr> {
+    let start = labels.local(button.label());
+    let end = format!("{}_end", start);
     let mut asm = Asm::new();
-    asm.label(button.label());
+    asm.label(&start);
     asm.ld(
         Operand::Reg(Register::A),
         Operand::AddrDef("wCurKeys".to_string()),
     );
     asm.and(Operand::Label(button.name().to_string()));
-    asm.jp_cond(Condition::Z, &format!("{}End", button.label()));
+    asm.jp_cond(Condition::Z, &end);
     asm.emit_all(pressed_func);
-    asm.label(&format!("{}End", button.label()));
+    asm.label(&end);
     asm.get_main_instrs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gb_asm::label_check::assert_code_labels_ok;
+    use crate::gb_asm::test_cpu::TestCpu;
+    use crate::gb_std::flow::{Emittable, If};
+
+    /// Code that sets `var` to 1, to see which bodies ran
+    fn mark(var: &str) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.ld_a(1).ld_addr_def_a(var);
+        asm.get_main_instrs()
+    }
+
+    /// Runs `code` with `keys` held; returns which of `vars` were marked
+    fn run(code: &[Instr], keys: u8, vars: &[&str]) -> Vec<bool> {
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert("wCurKeys".to_string(), keys);
+        for var in vars {
+            cpu.mem.insert(var.to_string(), 0);
+        }
+        cpu.consts.insert("PADF_LEFT".to_string(), 0x20);
+        cpu.consts.insert("PADF_A".to_string(), 0x01);
+        cpu.run(code);
+        vars.iter().map(|var| cpu.mem[*var] == 1).collect()
+    }
+
+    #[test]
+    fn test_check_key_twice_on_one_button() {
+        // B7: both checks emitted the global labels CheckLeft and CheckLeftEnd
+        let labels = LabelAllocator::new();
+        let code = [
+            check_key(&labels, PadButton::Left, mark("wFirst")),
+            check_key(&labels, PadButton::Left, mark("wSecond")),
+            check_key(&labels, PadButton::A, mark("wThird")),
+        ]
+        .concat();
+        assert_code_labels_ok(&code);
+
+        let vars = ["wFirst", "wSecond", "wThird"];
+        assert_eq!(run(&code, 0x00, &vars), [false, false, false]);
+        assert_eq!(run(&code, 0x20, &vars), [true, true, false]);
+        assert_eq!(run(&code, 0x01, &vars), [false, false, true]);
+        assert_eq!(run(&code, 0x21, &vars), [true, true, true]);
+    }
+
+    #[test]
+    fn test_check_key_inside_an_if() {
+        // B7: the global label CheckLeft inside the If body started a new label scope,
+        // so the If's jump to .end_if_0 could not be resolved
+        let labels = LabelAllocator::new();
+        let load_keys = || {
+            let mut asm = Asm::new();
+            asm.ld_a_addr_def("wCurKeys");
+            asm.get_main_instrs()
+        };
+        let body = check_key(&labels, PadButton::Left, mark("wLeft"));
+        let code = If::ne(load_keys(), load_keys(), body)
+            .or_else(check_key(&labels, PadButton::Left, mark("wElse")))
+            .emit(&mut 0);
+        assert_code_labels_ok(&code);
+
+        // The keys always equal themselves: the else branch runs, and checks Left
+        let vars = ["wLeft", "wElse"];
+        assert_eq!(run(&code, 0x20, &vars), [false, true]);
+        assert_eq!(run(&code, 0x01, &vars), [false, false]);
+    }
 }

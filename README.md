@@ -144,7 +144,7 @@ Open them in any Game Boy emulator.
 
 ```text
 src/
-├── gb_asm/        # Instr/Operand types, the Asm builder, RGBDS output
+├── gb_asm/        # Instr/Operand types, the Asm builder, unique labels, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
 ├── bin/           # the example programs

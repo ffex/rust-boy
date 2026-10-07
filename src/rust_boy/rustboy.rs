@@ -1,11 +1,11 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
-use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget};
+use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator};
 use crate::gb_std::flow::Emittable;
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
-use super::sprites::{SpriteManager, SpriteSize};
+use super::sprites::{SpriteManager, SpriteSize, check_name};
 use super::tiles::TileManager;
 use super::variables::VariableManager;
 
@@ -46,8 +46,9 @@ pub struct RustBoy {
     /// Counter for generating unique if-statement labels
     if_counter: usize,
 
-    /// Counter for generating unique general-purpose labels
-    label_counter: usize,
+    /// Numbers every other generated label (key checks, sprite moves, `unique_label`);
+    /// shared with the sprite manager, so they never clash (B7)
+    labels: LabelAllocator,
 
     /// Custom constants defined by the user
     constants: Vec<(String, String)>,
@@ -65,14 +66,15 @@ pub struct RustBoy {
 impl RustBoy {
     /// Create a new RustBoy instance
     pub fn new() -> Self {
+        let labels = LabelAllocator::new();
         Self {
             asm: Asm::new(),
             tiles: TileManager::new(),
             vars: VariableManager::new(),
-            sprites: SpriteManager::new(),
+            sprites: SpriteManager::new(labels.clone()),
             functions: FunctionRegistry::new(),
             if_counter: 0,
-            label_counter: 0,
+            labels,
             constants: Vec::new(),
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
@@ -127,16 +129,34 @@ impl RustBoy {
         c
     }
 
-    /// Get the next general-purpose label counter (auto-increments)
+    /// Get the next general-purpose label counter (auto-increments); the sequence is
+    /// shared with the labels of the generated key checks and sprite moves
     pub fn next_label_counter(&mut self) -> usize {
-        let c = self.label_counter;
-        self.label_counter += 1;
-        c
+        self.labels.next_id()
     }
 
     /// Generate a unique label with prefix
     pub fn unique_label(&mut self, prefix: &str) -> String {
         format!("{}_{}", prefix, self.next_label_counter())
+    }
+
+    /// The allocator that numbers this program's generated local labels (key checks,
+    /// sprite moves)
+    ///
+    /// Pass it to the `gb_std` snippets you mix into a `RustBoy` program
+    /// (`check_key`, `Sprite::move_*_limit`): a separate allocator starts again at 0
+    /// and would repeat labels that `RustBoy` already emitted.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_std::inputs::{PadButton, check_key};
+    /// use rust_boy::rust_boy::RustBoy;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// gb.add_to_main_loop(check_key(gb.labels(), PadButton::A, Vec::new()));
+    /// ```
+    pub fn labels(&self) -> &LabelAllocator {
+        &self.labels
     }
 
     /// Add initialization code (runs once at startup)
@@ -448,7 +468,8 @@ impl RustBoy {
         });
 
         // Add the input handling code
-        self.main_loop_code.extend(inputs.generate_code());
+        self.main_loop_code
+            .extend(inputs.generate_code(&self.labels));
 
         self
     }
@@ -457,7 +478,9 @@ impl RustBoy {
     /// Returns the sprite ID for later reference
     ///
     /// # Panics
-    /// In 8x16 mode, if `tile_source` has an odd number of tiles.
+    /// - If `name` is not a valid RGBDS identifier, or another sprite has it: the name
+    ///   becomes part of labels.
+    /// - In 8x16 mode, if `tile_source` has an odd number of tiles.
     pub fn add_sprite(
         &mut self,
         name: &str,
@@ -498,8 +521,10 @@ impl RustBoy {
     /// A `CompositeSpriteId` that can be used with composite sprite methods
     ///
     /// # Panics
-    /// In 8x8 mode (call `set_sprite_size(SpriteSize::Size8x16)` first), or if a half has
-    /// an odd number of tiles.
+    /// - If `name` is not a valid RGBDS identifier, or a sprite already has the name of a
+    ///   half (`{name}_left`, `{name}_right`): the names become labels.
+    /// - In 8x8 mode (call `set_sprite_size(SpriteSize::Size8x16)` first), or if a half has
+    ///   an odd number of tiles.
     pub fn add_sprite_16x16(
         &mut self,
         name: &str,
@@ -509,6 +534,7 @@ impl RustBoy {
         y: u8,
         flags: u8,
     ) -> super::sprites::CompositeSpriteId {
+        check_name("composite sprite", name);
         if self.sprites.size() != SpriteSize::Size8x16 {
             panic!(
                 "add_sprite_16x16(\"{}\") needs 8x16 sprites: call \
@@ -603,11 +629,11 @@ mod tests {
         gb.tiles.add_tilemap("Map", &[[0u8; 32]]);
 
         let frames: [[&str; 8]; 2] = [["$FF"; 8], ["$00"; 8]];
+        // The same animation name on every sprite (B25)
         for name in ["Alpha", "Bravo", "Charlie"] {
             let sprite = gb.add_sprite(name, TileSource::from_raw(&frames), 16, 16, 0);
-            let anim_name = format!("{}Spin", name);
             gb.sprites
-                .add_animation(sprite, &anim_name, 0, 1, AnimationType::Loop);
+                .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
         }
 
         gb.vars.create_u8("wZulu", 1);
@@ -689,11 +715,11 @@ mod tests {
         ]);
         // Animation dispatch and functions in sprite order
         in_order(&[
-            "call Anim_AlphaSpin",
-            "call Anim_BravoSpin",
-            "call Anim_CharlieSpin",
+            "call Anim_Alpha_Spin",
+            "call Anim_Bravo_Spin",
+            "call Anim_Charlie_Spin",
         ]);
-        in_order(&["Anim_AlphaSpin:", "Anim_BravoSpin:", "Anim_CharlieSpin:"]);
+        in_order(&["Anim_Alpha_Spin:", "Anim_Bravo_Spin:", "Anim_Charlie_Spin:"]);
         // Builtins in a fixed order, then user functions in registration order
         in_order(&[
             "Memcopy:",
@@ -825,7 +851,7 @@ mod tests {
 
         let out = gb.build();
         // Walker starts at tile 2; frames 1..=3 are tiles 4, 6 and 8, two apart
-        let walk = function(&out, "Anim_Walk");
+        let walk = function(&out, "Anim_Walker_Walk");
         assert!(walk.contains("add a, 2"), "{}", walk);
         assert!(walk.contains("cp 4"), "{}", walk);
         assert!(walk.contains("cp 10"), "{}", walk);
@@ -840,7 +866,7 @@ mod tests {
             .add_animation(coin, "Spin", 0, 6, AnimationType::Loop);
 
         let out = gb.build();
-        let spin = function(&out, "Anim_Spin");
+        let spin = function(&out, "Anim_Coin_Spin");
         assert!(spin.contains("inc a"), "{}", spin);
         assert!(spin.contains("cp 7"), "{}", spin);
     }
@@ -876,5 +902,255 @@ mod tests {
         let mut gb = RustBoy::new();
         gb.add_sprite("Ball", tiles(1), 0, 0, 0);
         gb.set_sprite_size(SpriteSize::Size8x16);
+    }
+
+    // ==================== Labels (B7, B25) ====================
+
+    use crate::gb_asm::label_check::assert_labels_ok;
+    use crate::gb_std::flow::If;
+    use crate::gb_std::inputs::PadButton;
+    use crate::rust_boy::CompositeSpriteId;
+
+    /// A 8x8 paddle and ball
+    fn paddle_and_ball(gb: &mut RustBoy) -> (SpriteId, SpriteId) {
+        let paddle = gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
+        let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
+        (paddle, ball)
+    }
+
+    /// A 16x16 player, in 8x16 mode
+    fn player(gb: &mut RustBoy) -> CompositeSpriteId {
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.add_sprite_16x16("Player", tiles(2), tiles(2), 80, 72, 0)
+    }
+
+    #[test]
+    fn test_sample_game_labels_are_ok() {
+        assert_labels_ok(&sample_game());
+    }
+
+    #[test]
+    fn test_two_bindings_on_one_button() {
+        // B7: each binding emitted the global labels CheckLeft and CheckLeftEnd
+        let mut gb = RustBoy::new();
+        let (paddle, ball) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 16));
+        inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(ball, 1, 16));
+        gb.add_inputs(inputs);
+        // Bindings added later, through another InputManager
+        let mut more = InputManager::new();
+        more.on_press(PadButton::Left, gb.sprites.move_up_limit(ball, 1, 16));
+        gb.add_inputs(more);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_one_move_on_two_buttons() {
+        // B7: each copy of a move emitted the same Sprite0LeftLimitStore / ...End labels
+        let mut gb = RustBoy::new();
+        let (paddle, _) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        for button in [PadButton::Left, PadButton::B] {
+            inputs.on_press(button, gb.sprites.move_left_limit(paddle, 1, 16));
+            inputs.on_press(button, gb.sprites.move_down_limit(paddle, 2, 144));
+        }
+        gb.add_inputs(inputs);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_one_composite_move_on_two_buttons() {
+        // B7: a composite move used its leading sprite's labels, so it clashed with
+        // itself and with that sprite's own move
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        let left_half = gb.sprites.get_composite_sprites(player).unwrap()[0];
+        let mut inputs = InputManager::new();
+        for button in [PadButton::Left, PadButton::B] {
+            inputs.on_press(button, gb.sprites.move_composite_left_limit(player, 1, 8));
+        }
+        inputs.on_press(PadButton::A, gb.sprites.move_left_limit(left_half, 1, 8));
+        gb.add_inputs(inputs);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_moves_inside_an_if() {
+        // B7: the labels of a move were global, so inside an If body they started a new
+        // label scope and the If's jump to .end_if_N could not be resolved
+        let mut gb = RustBoy::new();
+        let (paddle, ball) = paddle_and_ball(&mut gb);
+        let moves = [
+            gb.sprites.move_left_limit(paddle, 1, 16),
+            gb.sprites.move_right_limit(paddle, 1, 104),
+            gb.sprites.move_up_limit(ball, 1, 16),
+            gb.sprites.move_down_limit(ball, 1, 144),
+        ];
+        for code in moves {
+            let if_ball_above = If::lt(gb.sprites.get_y(ball), gb.sprites.get_y(paddle), code);
+            gb.add_to_main_loop(if_ball_above);
+        }
+        // In the else branch, and in a function
+        let else_move = If::eq(
+            gb.sprites.get_x(ball),
+            gb.sprites.get_x(paddle),
+            Vec::<Instr>::new(),
+        )
+        .or_else(gb.sprites.move_left_limit(ball, 2, 16));
+        gb.define_function_from("FollowPaddle", else_move);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_gb_std_snippets_share_the_program_labels() {
+        // gb_std snippets mixed into a RustBoy program take its allocator: one of their
+        // own would start again at 0 and repeat RustBoy's labels (rgbasm:
+        // `Main.check_left_0` already defined)
+        use crate::gb_std::graphics::sprites::Sprite;
+        use crate::gb_std::inputs::check_key;
+
+        let mut gb = RustBoy::new();
+        let (paddle, _) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 16));
+        gb.add_inputs(inputs);
+        // The same button and the same OAM entry, through gb_std
+        let mut oam_0 = Sprite::new(0, 16, 128, 0, 0);
+        let body = oam_0.move_left_limit(gb.labels(), 1, 16);
+        gb.add_to_main_loop(check_key(gb.labels(), PadButton::Left, body));
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_composite_move_inside_an_if() {
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        let halves = gb.sprites.get_composite_sprites(player).unwrap().clone();
+        let move_left = If::ge(
+            gb.sprites.get_x(halves[0]),
+            gb.sprites.get_y(halves[0]),
+            gb.sprites.move_composite_left_limit(player, 1, 8),
+        );
+        gb.add_to_main_loop(move_left);
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_two_sprites_with_the_same_animation_name() {
+        // B25: both sprites emitted Anim_Spin, and the dispatcher .skip_Spin twice
+        let mut gb = RustBoy::new();
+        for name in ["Coin", "Gem"] {
+            let sprite = gb.add_sprite(name, tiles(4), 16, 16, 0);
+            gb.sprites
+                .add_animation(sprite, "Spin", 0, 3, AnimationType::Loop);
+        }
+
+        let out = gb.build();
+        assert_labels_ok(&out);
+        // Each sprite runs its own animation, on its own tiles
+        assert!(out.contains("call Anim_Coin_Spin"), "{}", out);
+        assert!(out.contains("call Anim_Gem_Spin"), "{}", out);
+        assert!(function(&out, "Anim_Coin_Spin").contains("_OAMRAM+2"));
+        assert!(function(&out, "Anim_Gem_Spin").contains("_OAMRAM+6"));
+    }
+
+    #[test]
+    fn test_two_composites_with_the_same_animation_name() {
+        // B25: both composites emitted Anim_Walk_0 and Anim_Walk_1
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        for name in ["Hero", "Rival"] {
+            let composite = gb.add_sprite_16x16(name, tiles(4), tiles(4), 0, 0, 0);
+            gb.sprites
+                .add_composite_animation(composite, "Walk", 0, 1, AnimationType::Loop);
+            gb.sprites
+                .add_composite_animation(composite, "Run", 0, 1, AnimationType::Loop);
+        }
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid sprite name \"my sprite\"")]
+    fn test_sprite_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        gb.add_sprite("my sprite", tiles(1), 0, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid composite sprite name \"2player\"")]
+    fn test_composite_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.add_sprite_16x16("2player", tiles(2), tiles(2), 0, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid animation name \"Spin-Left\"")]
+    fn test_animation_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(4), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin-Left", 0, 3, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid animation name \"Walk Left\"")]
+    fn test_composite_animation_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        gb.sprites
+            .add_composite_animation(player, "Walk Left", 0, 0, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "sprite name \"Coin\" is already used")]
+    fn test_sprite_names_are_unique() {
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Coin", tiles(1), 0, 0, 0);
+        gb.add_sprite("Coin", tiles(1), 8, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "sprite \"Coin\" already has an animation \"Spin\"")]
+    fn test_animation_names_are_unique_per_sprite() {
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(4), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+        gb.sprites
+            .add_animation(coin, "Spin", 2, 3, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "composite sprite \"Player\" already has an animation \"Walk\"")]
+    fn test_composite_animation_names_are_unique() {
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        gb.sprites
+            .add_composite_animation(player, "Walk", 0, 0, AnimationType::Loop);
+        gb.sprites
+            .add_composite_animation(player, "Walk", 0, 0, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "label Anim_Big_Coin_Spin")]
+    fn test_animation_labels_cannot_collide() {
+        // Sprite "Big_Coin" + animation "Spin" and sprite "Big" + animation "Coin_Spin"
+        // would both be Anim_Big_Coin_Spin
+        let mut gb = RustBoy::new();
+        let big_coin = gb.add_sprite("Big_Coin", tiles(2), 0, 0, 0);
+        let big = gb.add_sprite("Big", tiles(2), 8, 0, 0);
+        gb.sprites
+            .add_animation(big_coin, "Spin", 0, 1, AnimationType::Loop);
+        gb.sprites
+            .add_animation(big, "Coin_Spin", 0, 1, AnimationType::Loop);
     }
 }

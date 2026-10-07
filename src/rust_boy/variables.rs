@@ -1,11 +1,11 @@
 //! Variable management with automatic WRAM allocation
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::gb_asm::{Asm, Instr};
 
 /// Unique identifier for a variable
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VarId(pub(crate) usize);
 
 /// A handle to a variable that provides convenient operations.
@@ -102,19 +102,21 @@ pub(crate) struct Variable {
 /// Manages variables with automatic WRAM allocation
 #[derive(Debug)]
 pub struct VariableManager {
-    variables: HashMap<VarId, Variable>,
+    /// Variables by id; ids are sequential, so iteration follows creation order
+    variables: BTreeMap<VarId, Variable>,
     next_id: usize,
     next_wram_addr: u16,
-    sections: HashMap<String, Vec<VarId>>,
+    /// Sections in first-use order, each with its variables in creation order
+    sections: Vec<(String, Vec<VarId>)>,
 }
 
 impl VariableManager {
     pub(crate) fn new() -> Self {
         Self {
-            variables: HashMap::new(),
+            variables: BTreeMap::new(),
             next_id: 0,
             next_wram_addr: 0xC000,
-            sections: HashMap::new(),
+            sections: Vec::new(),
         }
     }
 
@@ -165,10 +167,10 @@ impl VariableManager {
         };
 
         self.variables.insert(id, var);
-        self.sections
-            .entry(section.to_string())
-            .or_default()
-            .push(id);
+        match self.sections.iter_mut().find(|(s, _)| s == section) {
+            Some((_, ids)) => ids.push(id),
+            None => self.sections.push((section.to_string(), vec![id])),
+        }
 
         Var {
             id,

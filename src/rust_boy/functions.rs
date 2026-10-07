@@ -1,11 +1,11 @@
 //! Builtin function registry for auto-inclusion
 
-use std::collections::{HashMap, HashSet};
+use std::collections::BTreeSet;
 
 use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 
 /// Builtin functions that can be auto-included
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BuiltinFunction {
     /// Memory copy routine
     Memcopy,
@@ -63,12 +63,12 @@ impl BuiltinFunction {
 /// Registry for tracking which functions are used (both builtin and user-defined)
 #[derive(Default)]
 pub struct FunctionRegistry {
-    /// Builtin functions that have been marked as used
-    used_builtins: HashSet<BuiltinFunction>,
-    /// User-defined functions (name -> instructions)
-    user_functions: HashMap<String, Vec<Instr>>,
+    /// Builtin functions that have been marked as used (emitted in enum order)
+    used_builtins: BTreeSet<BuiltinFunction>,
+    /// User-defined functions as (name, instructions), in registration order
+    user_functions: Vec<(String, Vec<Instr>)>,
     /// User functions that have been called (for validation)
-    used_user_functions: HashSet<String>,
+    used_user_functions: BTreeSet<String>,
 }
 
 impl FunctionRegistry {
@@ -87,13 +87,22 @@ impl FunctionRegistry {
     }
 
     /// Register a user-defined function
+    ///
+    /// Registering the same name again replaces the body and keeps its position.
     pub fn register_user_function(&mut self, name: &str, body: Vec<Instr>) {
-        self.user_functions.insert(name.to_string(), body);
+        match self.user_functions.iter_mut().find(|(n, _)| n == name) {
+            Some((_, existing)) => *existing = body,
+            None => self.user_functions.push((name.to_string(), body)),
+        }
+    }
+
+    fn has_user_function(&self, name: &str) -> bool {
+        self.user_functions.iter().any(|(n, _)| n == name)
     }
 
     /// Check if a function exists (builtin or user-defined)
     pub fn function_exists(&self, name: &str) -> bool {
-        BuiltinFunction::from_name(name).is_some() || self.user_functions.contains_key(name)
+        BuiltinFunction::from_name(name).is_some() || self.has_user_function(name)
     }
 
     /// Mark a function as called and auto-register if builtin
@@ -106,7 +115,7 @@ impl FunctionRegistry {
         }
 
         // Check if it's a user-defined function
-        if self.user_functions.contains_key(name) {
+        if self.has_user_function(name) {
             self.used_user_functions.insert(name.to_string());
             return true;
         }
@@ -124,7 +133,7 @@ impl FunctionRegistry {
             "GetTileByPixel".to_string(),
             "Delay".to_string(),
         ];
-        names.extend(self.user_functions.keys().cloned());
+        names.extend(self.user_functions.iter().map(|(n, _)| n.clone()));
         names.sort();
         names
     }
@@ -323,4 +332,33 @@ fn generate_delay() -> Vec<Instr> {
     asm.ret();
 
     asm.get_main_instrs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn function_body(label: &str) -> Vec<Instr> {
+        let mut asm = Asm::new();
+        asm.label(label).ret();
+        asm.get_main_instrs()
+    }
+
+    #[test]
+    fn test_user_functions_keep_registration_order() {
+        let mut registry = FunctionRegistry::new();
+        registry.register_user_function("Second", function_body("Second"));
+        registry.register_user_function("First", function_body("First"));
+        // Registering a name again replaces the body but keeps its position
+        registry.register_user_function("Second", function_body("SecondV2"));
+
+        let lines: Vec<String> = registry
+            .generate_all()
+            .iter()
+            .map(|instr| instr.to_string())
+            .collect();
+        assert_eq!(lines, ["SecondV2:", "ret", "First:", "ret"]);
+        assert!(registry.function_exists("First"));
+        assert!(!registry.function_exists("Missing"));
+    }
 }

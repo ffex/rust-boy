@@ -3,11 +3,12 @@ use rust_boy::gb_asm::{Asm, Chunk, Condition};
 fn main() {
     let mut asm = Asm::new();
 
-    // Add some directives
+    // Cartridge header at $100-$14F: rgbfix fills in the logo and checksums
     asm.include_hardware()
         .section("Header", "ROM0[$100]")
         .raw("nop")
-        .raw("jp EntryPoint");
+        .raw("jp EntryPoint")
+        .ds("$150 - @", "0");
 
     // Main code section
     asm.section("Main", "ROM0")

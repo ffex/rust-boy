@@ -29,8 +29,8 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ─�
 ### Commands
 
 ```bash
-cargo build                              # library + all bins (coin-anim currently fails, see B2)
-cargo test                               # currently fails to compile, see B1
+cargo build                              # library + all bins
+cargo test                               # unit tests
 cargo run --bin fosdem > main.asm        # bins: basic_usage, unbricked, unbricked_std,
                                          #       unbricked_rustboy, fosdem, coin-anim
 rgbasm -o main.o main.asm                # hardware.inc + assets (.2bpp) next to main.asm
@@ -38,13 +38,13 @@ rgblink -o main.gb main.o
 rgbfix -v -p 0xFF main.gb
 ```
 
-### Health at `4601a5c`
+### Health (snapshot at `4601a5c`, updated as fixes land)
 
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds, 10 warnings |
-| `cargo test` | ❌ 8 type errors in `src/rust_boy/variables.rs` tests ([B1](#b1)) |
-| bin `coin-anim` | ❌ does not compile ([B2](#b2)) |
+| `cargo test` | ✅ 28 tests pass (was: 8 type errors, fixed — [B1](#b1)) |
+| bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); sprites still render wrong until [B4](#b4) |
 | bin `unbricked_rustboy` | ⚠️ compiles, but the generated asm has duplicate labels → rgbasm fails ([B3](#b3)) |
 | bin `unbricked_std` | ⚠️ assembles, but the paddle bounce never fires ([B5](#b5)) |
 | bin `fosdem` | ⚠️ assembles, but the 16×16 player collapses at screen edges ([B6](#b6)) |
@@ -149,6 +149,7 @@ will hit · **P2** = latent, edge case or documentation.
 returned by `create_u8/create_u16/create_i8` to `get_label/get_address/get_type`, which take `VarId`
 (`:174, :179, :184`). 8 × E0308. *Fix:* return/accept the right type (e.g. store `VarId` inside `Var`, or
 look up by name) and update the tests.
+**Status: fixed** on `refactor-p0-fix-build` — `Var` now carries its `VarId` (`Var::id()`), tests use it.
 
 #### B2
 **Bin `coin-anim` does not compile.** `src/bin/coin-anim/main.rs:15, 18, 19` call
@@ -156,6 +157,7 @@ look up by name) and update the tests.
 `enable_animation(SpriteId, u8)` / `disable_animation(SpriteId)` (`src/rust_boy/sprites.rs:184, 210`).
 Line 15 also discards its result (no effect). *Fix:* delete line 15 (the default is already disabled),
 use `enable_animation(coin, idx)` / `disable_animation(coin)`.
+**Status: fixed** on `refactor-p0-fix-build` (A starts the animation, B stops it).
 
 #### B3
 **Duplicate labels `wCurKeys` / `wNewKeys` in `unbricked_rustboy`.** The example creates them
@@ -417,16 +419,20 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 Compared with `origin/main` (`git rev-list --count`):
 
-| Branch | Ahead / behind | Content | Verdict |
-|---|---|---|---|
-| `documentations` | 1 / 0 | 7 docs (`api-levels`, `animations`, `button-actions`, `control-flow`, `graphics`, `sprite-movement`, `variables`), 892 lines | **Keep** — good material; fix [B30](#b30), then fast-forward merge |
-| `unbricked-example` | 3 / 57 | Early experiment using the external `retroshield-z80-workbench` crate (binary output); `originals/` identical to `main` | **Delete** (superseded); optionally tag `archive/unbricked-example` first |
-| `fosdem-example` | 0 / 0 | Same commit as `main` | **Delete** |
-| `test-animation` | 0 / 11 | Fully merged | **Delete** |
-| `rust-boy-implementation` | 0 / 12 | Fully merged (tag `v0.2.0-poc` marks it) | **Delete** |
-| `gbz80-std` | 0 / 45 | Fully merged | **Delete** |
-| `gbz80-workbench-more-idiomatic` | 0 / 51 | Fully merged | **Delete** |
-| `gbz80-workbench` | 0 / 57 | Fully merged | **Delete** |
+| Branch | Last commit | Ahead / behind | Content | Verdict |
+|---|---|---|---|---|
+| `documentations` | `8fe484d` | 1 / 0 | 7 docs (`api-levels`, `animations`, `button-actions`, `control-flow`, `graphics`, `sprite-movement`, `variables`), 892 lines | **Keep** — good material; fix [B30](#b30), then fast-forward merge |
+| `unbricked-example` | `a7167ea` | 3 / 57 | Early experiment using the external `retroshield-z80-workbench` crate (binary output); `originals/` identical to `main` | **Delete** (superseded); optionally tag `archive/unbricked-example` first |
+| `fosdem-example` | `4601a5c` | 0 / 0 | Same commit as `main` | **Delete** |
+| `test-animation` | `3e471a4` | 0 / 11 | Fully merged | **Delete** |
+| `rust-boy-implementation` | `41d3eb1` | 0 / 12 | Fully merged (tag `v0.2.0-poc` marks it) | **Delete** |
+| `gbz80-std` | `fc63483` | 0 / 45 | Fully merged | **Delete** |
+| `gbz80-workbench-more-idiomatic` | `a9a4381` | 0 / 51 | Fully merged | **Delete** |
+| `gbz80-workbench` | `ae304a1` | 0 / 57 | Fully merged | **Delete** |
 
 Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historical milestones.
-Branch deletion is destructive and must be confirmed by the maintainer.
+
+**Status (2026-10-07):** the maintainer approved deleting the 7 *Delete* branches. The Claude session
+could not delete them (GitHub answered HTTP 403 to the delete push), so they stay until the maintainer
+removes them. To restore a deleted branch: `git push origin <last commit>:refs/heads/<branch>`; only
+`unbricked-example` has commits that are not in `main`, so restore it before GitHub garbage-collects them.

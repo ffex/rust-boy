@@ -22,8 +22,8 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 
 - [x] Create `Task.md` and `CONTEXT.md` (branch `refactor-p0-plan-docs`)
 - [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
-- [ ] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1)
-- [ ] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2)
+- [x] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1) (branch `refactor-p0-fix-build`)
+- [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)
 - [ ] Deterministic output: replace `HashMap`/`HashSet` iteration with `BTreeMap`/ordered `Vec` — [B13](CONTEXT.md#b13).
       *Prerequisite for every snapshot test.*
 - [ ] Decide the `If` semantics once: `If::lt(l, r)` means `l < r` (documented meaning). Needed before
@@ -41,7 +41,10 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 - [ ] README refresh — [B29](CONTEXT.md#b29), [B21](CONTEXT.md#b21): bin list (6), `rust_boy` quick start, project tree,
       remove "complete instruction set" / "compile-time guarantees" claims, drop `rgbasm -L`, state the
       RGBDS version, remove "Current branch: gbz80-std"
-- [ ] Branch cleanup (**needs maintainer confirmation — destructive**), see [Branches](#branches)
+- [ ] Branch cleanup — **approved** by the maintainer on 2026-10-07 (the 7 branches marked *Delete* in
+      [Branches](#branches)). The Claude session cannot delete branches (GitHub answered HTTP 403), so the
+      maintainer deletes them, on GitHub → Branches or with:
+      `git push origin --delete unbricked-example fosdem-example test-animation rust-boy-implementation gbz80-std gbz80-workbench-more-idiomatic gbz80-workbench`
 - [ ] *(optional)* Mirror this file into GitHub issues + milestones
 
 ## Phase 1 — Bug fixes
@@ -187,15 +190,17 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 
 ## Branches
 
-Verified with `git rev-list --count` against `origin/main`. Deleting is destructive — confirm first.
+Verified with `git rev-list --count` against `origin/main`. Deletion of the 7 *Delete* branches was
+approved on 2026-10-07 and is waiting for the maintainer (see Phase 0). A deleted branch can be restored
+with `git push origin <last commit>:refs/heads/<branch>`.
 
-| Branch | Ahead / behind | Action |
-|---|---|---|
-| `documentations` | 1 / 0 | **Keep** — 7 good docs; fix [B30](CONTEXT.md#b30), then fast-forward merge (Phase 4) |
-| `unbricked-example` | 3 / 57 | **Delete** — superseded experiment with the external `retroshield-z80-workbench` crate (optionally tag `archive/unbricked-example` first) |
-| `fosdem-example` | 0 / 0 | **Delete** — same commit as `main` |
-| `test-animation` | 0 / 11 | **Delete** — fully merged |
-| `rust-boy-implementation` | 0 / 12 | **Delete** — fully merged (tag `v0.2.0-poc` keeps the milestone) |
-| `gbz80-std` | 0 / 45 | **Delete** — fully merged |
-| `gbz80-workbench-more-idiomatic` | 0 / 51 | **Delete** — fully merged |
-| `gbz80-workbench` | 0 / 57 | **Delete** — fully merged |
+| Branch | Last commit | Ahead / behind | Action |
+|---|---|---|---|
+| `documentations` | `8fe484d` | 1 / 0 | **Keep** — 7 good docs; fix [B30](CONTEXT.md#b30), then fast-forward merge (Phase 4) |
+| `unbricked-example` | `a7167ea` | 3 / 57 | **Delete** — superseded experiment with the external `retroshield-z80-workbench` crate (optionally tag `archive/unbricked-example` first) |
+| `fosdem-example` | `4601a5c` | 0 / 0 | **Delete** — same commit as `main` |
+| `test-animation` | `3e471a4` | 0 / 11 | **Delete** — fully merged |
+| `rust-boy-implementation` | `41d3eb1` | 0 / 12 | **Delete** — fully merged (tag `v0.2.0-poc` keeps the milestone) |
+| `gbz80-std` | `fc63483` | 0 / 45 | **Delete** — fully merged |
+| `gbz80-workbench-more-idiomatic` | `a9a4381` | 0 / 51 | **Delete** — fully merged |
+| `gbz80-workbench` | `ae304a1` | 0 / 57 | **Delete** — fully merged |

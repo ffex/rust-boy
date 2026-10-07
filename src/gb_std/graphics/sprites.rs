@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr, JumpTarget, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 
 pub fn clear_objects_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
@@ -20,6 +20,12 @@ pub struct SpriteManager {
     sprites: Vec<Sprite>,
     current_sprite_index: u8,
 }
+impl Default for SpriteManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpriteManager {
     pub fn new() -> Self {
         SpriteManager {
@@ -180,7 +186,7 @@ impl Sprite {
 
     pub fn move_x_var(&mut self, var_name: &str) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a_addr_def(&format!("{}", var_name))
+        asm.ld_a_addr_def(var_name)
             .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
             .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
             .add(Operand::Reg(Register::A), Operand::Reg(Register::B))
@@ -191,7 +197,7 @@ impl Sprite {
 
     pub fn move_y_var(&mut self, var_name: &str) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a_addr_def(&format!("{}", var_name))
+        asm.ld_a_addr_def(var_name)
             .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
             .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
             .add(Operand::Reg(Register::A), Operand::Reg(Register::B))

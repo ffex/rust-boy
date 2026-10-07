@@ -24,6 +24,7 @@ pub struct VarId(pub(crate) usize);
 pub struct Var {
     id: VarId,
     name: String,
+    #[allow(dead_code)] // read once set/get handle 16-bit variables (B16)
     var_type: VarType,
 }
 
@@ -96,7 +97,6 @@ pub(crate) struct Variable {
     pub var_type: VarType,
     pub initial_value: i32,
     pub wram_address: u16,
-    pub section: String, // Section name for grouping
 }
 
 /// Manages variables with automatic WRAM allocation
@@ -163,7 +163,6 @@ impl VariableManager {
             var_type,
             initial_value: initial,
             wram_address: addr,
-            section: section.to_string(),
         };
 
         self.variables.insert(id, var);

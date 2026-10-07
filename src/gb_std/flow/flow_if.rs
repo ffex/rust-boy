@@ -37,11 +37,6 @@ impl ComparisonOp {
             ComparisonOp::GT => AsmCondition::C,
         }
     }
-
-    /// Check if this comparison requires special multi-check handling
-    fn needs_special_handling(&self) -> bool {
-        matches!(self, ComparisonOp::LE | ComparisonOp::GT)
-    }
 }
 
 /// High-level If statement that hides register management.
@@ -1004,7 +999,7 @@ mod tests {
         let mut counter = 0;
         let result = if_stmt.emit(&mut counter);
 
-        assert!(result.len() > 0);
+        assert!(!result.is_empty());
         assert_eq!(counter, 1); // If increments counter
     }
 
@@ -1031,7 +1026,7 @@ mod tests {
         let mut counter = 0;
         let result = if_stmt.emit(&mut counter);
 
-        assert!(result.len() > 0);
+        assert!(!result.is_empty());
         assert_eq!(counter, 1);
     }
 
@@ -1065,7 +1060,7 @@ mod tests {
         let mut counter = 0;
         let result = outer_if.emit(&mut counter);
 
-        assert!(result.len() > 0);
+        assert!(!result.is_empty());
         assert_eq!(counter, 2); // Both ifs increment counter
     }
 
@@ -1179,10 +1174,12 @@ mod tests {
     }
 
     type MakeIf = fn(Vec<Instr>, Vec<Instr>, Vec<Instr>) -> If;
+    /// (operator name, constructor, expected result for (left, right))
+    type Case = (&'static str, MakeIf, fn(u8, u8) -> bool);
 
     #[test]
     fn test_if_compares_left_with_right() {
-        let cases: [(&str, MakeIf, fn(u8, u8) -> bool); 6] = [
+        let cases: [Case; 6] = [
             ("eq", |l, r, t| If::eq(l, r, t), |l, r| l == r),
             ("ne", |l, r, t| If::ne(l, r, t), |l, r| l != r),
             ("lt", |l, r, t| If::lt(l, r, t), |l, r| l < r),

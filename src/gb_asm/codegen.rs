@@ -28,16 +28,14 @@ impl Asm {
         ];
 
         for chunk in &chunk_order {
-            if let Some(instructions) = self.chunks.get(chunk) {
-                if !instructions.is_empty() {
-                    // Write instructions with indentation
-                    for instruction in instructions {
-                        asm.push_str(&format!("    {}\n", instruction));
-                    }
-
-                    // Add blank line between chunks
-                    asm.push('\n');
+            if let Some(instructions) = self.chunks.get(chunk).filter(|i| !i.is_empty()) {
+                // Write instructions with indentation
+                for instruction in instructions {
+                    asm.push_str(&format!("    {}\n", instruction));
                 }
+
+                // Add blank line between chunks
+                asm.push('\n');
             }
         }
 

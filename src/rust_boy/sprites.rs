@@ -19,6 +19,7 @@ pub struct CompositeSpriteId(pub(crate) usize);
 /// A composite sprite made of multiple hardware sprites that move together
 #[derive(Debug, Clone)]
 pub(crate) struct CompositeSpriteData {
+    #[allow(dead_code)] // for namespacing composite animation labels (B25)
     pub name: String,
     /// The individual sprite IDs that make up this composite
     pub sprites: Vec<SpriteId>,
@@ -107,8 +108,9 @@ impl SpriteManager {
         }
     }
 
-    /// Get sprite data
-    pub fn get(&self, id: SpriteId) -> Option<&SpriteData> {
+    /// Get sprite data (used by the tests)
+    #[cfg(test)]
+    pub(crate) fn get(&self, id: SpriteId) -> Option<&SpriteData> {
         self.sprites.get(&id)
     }
 
@@ -117,6 +119,7 @@ impl SpriteManager {
     /// - `start_frame`: Relative start frame index (e.g., 0)
     /// - `end_frame`: Relative end frame index (e.g., 6)
     /// - `anim_type`: Type of animation (Loop, PingPong, Once)
+    ///
     /// Returns the animation index within this sprite
     pub fn add_animation(
         &mut self,

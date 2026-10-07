@@ -56,11 +56,12 @@ mod tests {
     #[test]
     fn test_section_keeps_declaration_order() {
         let mut section = VariableSection::new("Vars", "WRAM0");
-        section.add_data("wB", "db");
-        section.add_data("wA", "db");
-        section.add_data("wC", "dw");
+        // Eight names in neither alphabetical nor any hash order (1 chance in 40320)
+        for name in ["wG", "wA", "wE", "wH", "wB", "wF", "wC", "wD"] {
+            section.add_data(name, "db");
+        }
         // Declaring a name again changes its type but keeps its position
-        section.add_data("wA", "dw");
+        section.add_data("wE", "dw");
 
         let lines: Vec<String> = section
             .generate()
@@ -69,7 +70,17 @@ mod tests {
             .collect();
         assert_eq!(
             lines,
-            ["SECTION \"Vars\", WRAM0", "wB: db", "wA: dw", "wC: dw"]
+            [
+                "SECTION \"Vars\", WRAM0",
+                "wG: db",
+                "wA: db",
+                "wE: dw",
+                "wH: db",
+                "wB: db",
+                "wF: db",
+                "wC: db",
+                "wD: db",
+            ]
         );
     }
 }

@@ -346,19 +346,30 @@ mod tests {
 
     #[test]
     fn test_user_functions_keep_registration_order() {
+        // Eight names in neither alphabetical nor any hash order (1 chance in 40320)
+        let names = [
+            "Golf", "Alpha", "Echo", "Hotel", "Bravo", "Foxtrot", "Charlie", "Delta",
+        ];
         let mut registry = FunctionRegistry::new();
-        registry.register_user_function("Second", function_body("Second"));
-        registry.register_user_function("First", function_body("First"));
+        for name in names {
+            registry.register_user_function(name, function_body(name));
+        }
         // Registering a name again replaces the body but keeps its position
-        registry.register_user_function("Second", function_body("SecondV2"));
+        registry.register_user_function("Echo", function_body("EchoV2"));
 
-        let lines: Vec<String> = registry
+        let labels: Vec<String> = registry
             .generate_all()
             .iter()
             .map(|instr| instr.to_string())
+            .filter(|line| line != "ret")
             .collect();
-        assert_eq!(lines, ["SecondV2:", "ret", "First:", "ret"]);
-        assert!(registry.function_exists("First"));
+        assert_eq!(
+            labels,
+            [
+                "Golf:", "Alpha:", "EchoV2:", "Hotel:", "Bravo:", "Foxtrot:", "Charlie:", "Delta:",
+            ]
+        );
+        assert!(registry.function_exists("Alpha"));
         assert!(!registry.function_exists("Missing"));
     }
 }

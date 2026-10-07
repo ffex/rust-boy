@@ -22,7 +22,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ─�
 ```
 
 - Zero Rust dependencies, edition 2024.
-- The committed `.o` files are RGBDS object format `RGB9` (RGBDS 1.0). Generated code uses `0x05`-style
+- The project is built with RGBDS 1.0 (the `.o` files once committed were object format `RGB9`). Generated code uses `0x05`-style
   constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
   `examples/`); pass it with `rgbasm -I include`.

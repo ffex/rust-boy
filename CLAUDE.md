@@ -29,7 +29,8 @@ cargo clippy --all-targets                # lint
 cargo fmt                                 # format
 cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbricked_std,
                                           #       unbricked_rustboy, fosdem, coin-anim
-scripts/assemble-examples.sh              # every example -> target/examples/<bin>/main.gb (needs RGBDS)
+scripts/assemble-examples.sh              # every example -> target/examples/<bin>/main.gb (needs RGBDS;
+                                          # under $CARGO_TARGET_DIR when it is set)
 ```
 
 Assembling generated output (RGBDS ≥ 0.9). `include/hardware.inc` (v4.x) and the example's `.2bpp` assets
@@ -76,6 +77,23 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 - Never force-push, rewrite published history or delete branches without asking first.
 - Do not mention or link the Claude session in commit messages or PR descriptions.
 
+### Independent review before asking for a merge
+
+Before telling the maintainer that a PR (or a chain of stacked PRs) is ready, have an agent with **no
+context** from the work review it. Give it only the PR numbers, their branches and the merge order, not
+your own conclusions. It must:
+
+1. Simulate the merge into `refactor` locally (in order, never push) and report conflicts.
+2. Run the same checks as CI on the merged result (fmt, clippy `-D warnings`, tests,
+   `scripts/assemble-examples.sh`).
+3. Compare each PR description with the code it really changes, and flag false or unverified claims.
+4. Review the changes for bugs, regressions and violations of the rules in this file.
+5. Check that `Task.md` and `CONTEXT.md` agree with the code.
+
+The reviewer is read-only towards GitHub (no pushes, comments or reviews) and works in its own worktree.
+Fix what it finds, or say in the PR why not, before asking for the merge; mention in the PR that the
+independent review was done and what it found.
+
 ### PR description template
 
 ```markdown
@@ -96,6 +114,9 @@ Why this change: the problem and the outcome, in 2–4 sentences.
 
 ## Risks and follow-ups
 - Breaking changes, open questions, what is left for a later PR.
+
+## Independent review
+- What the context-free reviewer found and which commit fixed each finding (or why not), or "no findings".
 
 ## How to review
 - Suggested reading order / what to focus on.

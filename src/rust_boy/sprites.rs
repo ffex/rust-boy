@@ -4,10 +4,28 @@ use std::collections::BTreeMap;
 
 use super::tiles::TileId;
 use crate::{
-    gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register},
+    gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register, is_identifier},
     gb_std::graphics::sprites::{MoveDir, move_coord_limit},
     rust_boy::animations::Animation,
 };
+
+/// Panics unless `name`, given by the user for a `kind` ("sprite", "animation", ...), is
+/// a valid RGBDS identifier: it becomes part of assembly labels (B25)
+pub(crate) fn check_name(kind: &str, name: &str) {
+    if !is_identifier(name) {
+        panic!(
+            "invalid {} name \"{}\": it becomes part of assembly labels, so it must start \
+             with a letter or '_' and contain only letters, digits, '_', '#', '$' or '@'",
+            kind, name
+        );
+    }
+}
+
+/// Label of the function that plays animation `animation` of sprite `sprite`; the
+/// sprite name keeps two sprites with an animation of the same name apart (B25)
+fn animation_label(sprite: &str, animation: &str) -> String {
+    format!("Anim_{}_{}", sprite, animation)
+}
 
 /// Unique identifier for a sprite instance
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -20,11 +38,11 @@ pub struct CompositeSpriteId(pub(crate) usize);
 /// A composite sprite made of multiple hardware sprites that move together
 #[derive(Debug, Clone)]
 pub(crate) struct CompositeSpriteData {
-    #[allow(dead_code)] // for namespacing composite animation labels (B25)
+    /// The composite's name; its sprites are named after it (`{name}_left`, ...)
     pub name: String,
     /// The individual sprite IDs that make up this composite
     pub sprites: Vec<SpriteId>,
-    /// Animation names for this composite (all sprites share the same animation name prefix)
+    /// Animation names for this composite (every sprite of it has an animation of that name)
     pub animation_names: Vec<String>,
 }
 
@@ -158,9 +176,19 @@ impl SpriteManager {
     /// `tile_count` is the number of tiles this sprite uses (for proper tile index allocation)
     ///
     /// # Panics
-    /// In 8x16 mode, if `tile_count` is odd: the bottom half of the last frame would be
-    /// the next tile in VRAM, which is not this sprite's.
+    /// - If `name` is not a valid RGBDS identifier, or another sprite has it: the name
+    ///   becomes part of labels (the sprite's tiles, its animations).
+    /// - In 8x16 mode, if `tile_count` is odd: the bottom half of the last frame would be
+    ///   the next tile in VRAM, which is not this sprite's.
     pub fn add(&mut self, name: &str, x: u8, y: u8, flags: u8, tile_count: u8) -> SpriteId {
+        check_name("sprite", name);
+        if self.sprites.values().any(|sprite| sprite.name == name) {
+            panic!(
+                "sprite name \"{}\" is already used: sprite names become labels (tiles, \
+                 animations), so each sprite needs its own",
+                name
+            );
+        }
         if self.size == SpriteSize::Size8x16 && tile_count % 2 != 0 {
             panic!(
                 "sprite \"{}\" has {} tiles, but in 8x16 mode every sprite frame is two tiles \
@@ -214,12 +242,16 @@ impl SpriteManager {
 
     /// Add an animation to a sprite; a frame is one sprite's worth of tiles
     /// (1 tile in 8x8 mode, 2 tiles in 8x16 mode)
-    /// - `name`: Animation name (used for label generation)
+    /// - `name`: Animation name, unique for this sprite; the animation is played by the
+    ///   function `Anim_{sprite name}_{name}`
     /// - `start_frame`: Relative start frame index (e.g., 0)
     /// - `end_frame`: Relative end frame index (e.g., 6)
     /// - `anim_type`: Type of animation (Loop, PingPong, Once)
     ///
     /// Returns the animation index within this sprite
+    ///
+    /// # Panics
+    /// See [`SpriteManager::add_animation_with_step`].
     pub fn add_animation(
         &mut self,
         sprite_id: SpriteId,
@@ -243,7 +275,11 @@ impl SpriteManager {
     /// Returns the animation index within this sprite
     ///
     /// # Panics
-    /// In 8x16 mode, if `frame_step` is odd: every frame must start on an even tile.
+    /// - If `name` is not a valid RGBDS identifier, or the sprite already has an animation
+    ///   of that name: it becomes part of labels (`Anim_{sprite name}_{name}`).
+    /// - If that label is another animation's: "Big_Coin" + "Spin" and "Big" + "Coin_Spin"
+    ///   are both `Anim_Big_Coin_Spin`.
+    /// - In 8x16 mode, if `frame_step` is odd: every frame must start on an even tile.
     pub fn add_animation_with_step(
         &mut self,
         sprite_id: SpriteId,
@@ -253,12 +289,16 @@ impl SpriteManager {
         anim_type: super::animations::AnimationType,
         frame_step: u8,
     ) -> u8 {
+        check_name("animation", name);
         if self.size == SpriteSize::Size8x16 && frame_step % 2 != 0 {
             panic!(
                 "animation \"{}\": frame_step {} is odd, but in 8x16 mode every frame is two \
                  tiles, so frame_step must be even",
                 name, frame_step
             );
+        }
+        if let Some(sprite) = self.sprites.get(&sprite_id) {
+            self.check_animation_label(sprite, name);
         }
         if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
             let index = sprite.animations.len() as u8;
@@ -276,6 +316,28 @@ impl SpriteManager {
             index
         } else {
             0
+        }
+    }
+
+    /// Panics if animation `name` of `sprite` would get the label of an existing animation
+    fn check_animation_label(&self, sprite: &SpriteData, name: &str) {
+        if sprite.animations.iter().any(|anim| anim.name == name) {
+            panic!(
+                "sprite \"{}\" already has an animation \"{}\"",
+                sprite.name, name
+            );
+        }
+        let label = animation_label(&sprite.name, name);
+        for other in self.sprites.values() {
+            for anim in &other.animations {
+                if animation_label(&other.name, &anim.name) == label {
+                    panic!(
+                        "animation \"{}\" of sprite \"{}\" would get the label {}, which \
+                         animation \"{}\" of sprite \"{}\" already has: rename one of them",
+                        name, sprite.name, label, anim.name, other.name
+                    );
+                }
+            }
         }
     }
 
@@ -369,9 +431,14 @@ impl SpriteManager {
     }
 
     /// Add an animation to all sprites in a composite
-    /// The animation name will be used as a prefix, with each sprite getting a unique suffix
+    /// Each sprite gets an animation called `name`, played by `Anim_{sprite name}_{name}`
+    /// (e.g. `Anim_player_left_Walk` and `Anim_player_right_Walk`)
     /// Composites are made of 8x16 sprites, so a frame is two tiles
     /// Returns the animation index (same for all sprites in the composite)
+    ///
+    /// # Panics
+    /// If `name` is not a valid RGBDS identifier, or the composite already has an
+    /// animation of that name (see [`SpriteManager::add_animation_with_step`]).
     pub fn add_composite_animation(
         &mut self,
         composite_id: CompositeSpriteId,
@@ -381,20 +448,21 @@ impl SpriteManager {
         anim_type: super::animations::AnimationType,
     ) -> u8 {
         let mut anim_index = 0u8;
+        check_name("animation", name);
 
         if let Some(composite) = self.composite_sprites.get_mut(&composite_id) {
+            if composite.animation_names.iter().any(|anim| anim == name) {
+                panic!(
+                    "composite sprite \"{}\" already has an animation \"{}\"",
+                    composite.name, name
+                );
+            }
             let sprite_ids = composite.sprites.clone();
             composite.animation_names.push(name.to_string());
 
-            for (i, sprite_id) in sprite_ids.iter().enumerate() {
-                let anim_name = format!("{}_{}", name, i);
-                anim_index = self.add_animation(
-                    *sprite_id,
-                    &anim_name,
-                    start_frame,
-                    end_frame,
-                    anim_type.clone(),
-                );
+            for sprite_id in sprite_ids {
+                anim_index =
+                    self.add_animation(sprite_id, name, start_frame, end_frame, anim_type.clone());
             }
         }
 
@@ -748,7 +816,7 @@ impl SpriteManager {
         for sprite in self.sprites.values() {
             for animation in &sprite.animations {
                 let mut asm = Asm::new();
-                let func_name = format!("Anim_{}", animation.name);
+                let func_name = animation_label(&sprite.name, &animation.name);
 
                 asm.label(&func_name);
                 asm.emit_all(animation.generate_loop_func());
@@ -801,8 +869,8 @@ impl SpriteManager {
 
             // For each animation, check if it's the current one
             for animation in &sprite.animations {
-                let func_name = format!("Anim_{}", animation.name);
-                let skip_label = format!(".skip_{}", animation.name);
+                let func_name = animation_label(&sprite.name, &animation.name);
+                let skip_label = format!(".skip_{}_{}", sprite.name, animation.name);
 
                 // Check if this animation index is selected
                 asm.cp_imm(animation.index);

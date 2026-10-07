@@ -5,7 +5,7 @@ use crate::gb_std::flow::Emittable;
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
-use super::sprites::{SpriteManager, SpriteSize};
+use super::sprites::{SpriteManager, SpriteSize, check_name};
 use super::tiles::TileManager;
 use super::variables::VariableManager;
 
@@ -459,7 +459,9 @@ impl RustBoy {
     /// Returns the sprite ID for later reference
     ///
     /// # Panics
-    /// In 8x16 mode, if `tile_source` has an odd number of tiles.
+    /// - If `name` is not a valid RGBDS identifier, or another sprite has it: the name
+    ///   becomes part of labels.
+    /// - In 8x16 mode, if `tile_source` has an odd number of tiles.
     pub fn add_sprite(
         &mut self,
         name: &str,
@@ -500,8 +502,10 @@ impl RustBoy {
     /// A `CompositeSpriteId` that can be used with composite sprite methods
     ///
     /// # Panics
-    /// In 8x8 mode (call `set_sprite_size(SpriteSize::Size8x16)` first), or if a half has
-    /// an odd number of tiles.
+    /// - If `name` is not a valid RGBDS identifier, or a sprite already has the name of a
+    ///   half (`{name}_left`, `{name}_right`): the names become labels.
+    /// - In 8x8 mode (call `set_sprite_size(SpriteSize::Size8x16)` first), or if a half has
+    ///   an odd number of tiles.
     pub fn add_sprite_16x16(
         &mut self,
         name: &str,
@@ -511,6 +515,7 @@ impl RustBoy {
         y: u8,
         flags: u8,
     ) -> super::sprites::CompositeSpriteId {
+        check_name("composite sprite", name);
         if self.sprites.size() != SpriteSize::Size8x16 {
             panic!(
                 "add_sprite_16x16(\"{}\") needs 8x16 sprites: call \
@@ -605,11 +610,11 @@ mod tests {
         gb.tiles.add_tilemap("Map", &[[0u8; 32]]);
 
         let frames: [[&str; 8]; 2] = [["$FF"; 8], ["$00"; 8]];
+        // The same animation name on every sprite (B25)
         for name in ["Alpha", "Bravo", "Charlie"] {
             let sprite = gb.add_sprite(name, TileSource::from_raw(&frames), 16, 16, 0);
-            let anim_name = format!("{}Spin", name);
             gb.sprites
-                .add_animation(sprite, &anim_name, 0, 1, AnimationType::Loop);
+                .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
         }
 
         gb.vars.create_u8("wZulu", 1);
@@ -691,11 +696,11 @@ mod tests {
         ]);
         // Animation dispatch and functions in sprite order
         in_order(&[
-            "call Anim_AlphaSpin",
-            "call Anim_BravoSpin",
-            "call Anim_CharlieSpin",
+            "call Anim_Alpha_Spin",
+            "call Anim_Bravo_Spin",
+            "call Anim_Charlie_Spin",
         ]);
-        in_order(&["Anim_AlphaSpin:", "Anim_BravoSpin:", "Anim_CharlieSpin:"]);
+        in_order(&["Anim_Alpha_Spin:", "Anim_Bravo_Spin:", "Anim_Charlie_Spin:"]);
         // Builtins in a fixed order, then user functions in registration order
         in_order(&[
             "Memcopy:",
@@ -827,7 +832,7 @@ mod tests {
 
         let out = gb.build();
         // Walker starts at tile 2; frames 1..=3 are tiles 4, 6 and 8, two apart
-        let walk = function(&out, "Anim_Walk");
+        let walk = function(&out, "Anim_Walker_Walk");
         assert!(walk.contains("add a, 2"), "{}", walk);
         assert!(walk.contains("cp 4"), "{}", walk);
         assert!(walk.contains("cp 10"), "{}", walk);
@@ -842,7 +847,7 @@ mod tests {
             .add_animation(coin, "Spin", 0, 6, AnimationType::Loop);
 
         let out = gb.build();
-        let spin = function(&out, "Anim_Spin");
+        let spin = function(&out, "Anim_Coin_Spin");
         assert!(spin.contains("inc a"), "{}", spin);
         assert!(spin.contains("cp 7"), "{}", spin);
     }
@@ -995,5 +1000,117 @@ mod tests {
         gb.add_to_main_loop(move_left);
 
         assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_two_sprites_with_the_same_animation_name() {
+        // B25: both sprites emitted Anim_Spin, and the dispatcher .skip_Spin twice
+        let mut gb = RustBoy::new();
+        for name in ["Coin", "Gem"] {
+            let sprite = gb.add_sprite(name, tiles(4), 16, 16, 0);
+            gb.sprites
+                .add_animation(sprite, "Spin", 0, 3, AnimationType::Loop);
+        }
+
+        let out = gb.build();
+        assert_labels_ok(&out);
+        // Each sprite runs its own animation, on its own tiles
+        assert!(out.contains("call Anim_Coin_Spin"), "{}", out);
+        assert!(out.contains("call Anim_Gem_Spin"), "{}", out);
+        assert!(function(&out, "Anim_Coin_Spin").contains("_OAMRAM+2"));
+        assert!(function(&out, "Anim_Gem_Spin").contains("_OAMRAM+6"));
+    }
+
+    #[test]
+    fn test_two_composites_with_the_same_animation_name() {
+        // B25: both composites emitted Anim_Walk_0 and Anim_Walk_1
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        for name in ["Hero", "Rival"] {
+            let composite = gb.add_sprite_16x16(name, tiles(4), tiles(4), 0, 0, 0);
+            gb.sprites
+                .add_composite_animation(composite, "Walk", 0, 1, AnimationType::Loop);
+            gb.sprites
+                .add_composite_animation(composite, "Run", 0, 1, AnimationType::Loop);
+        }
+
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid sprite name \"my sprite\"")]
+    fn test_sprite_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        gb.add_sprite("my sprite", tiles(1), 0, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid composite sprite name \"2player\"")]
+    fn test_composite_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.add_sprite_16x16("2player", tiles(2), tiles(2), 0, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid animation name \"Spin-Left\"")]
+    fn test_animation_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(4), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin-Left", 0, 3, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid animation name \"Walk Left\"")]
+    fn test_composite_animation_name_must_be_an_identifier() {
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        gb.sprites
+            .add_composite_animation(player, "Walk Left", 0, 0, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "sprite name \"Coin\" is already used")]
+    fn test_sprite_names_are_unique() {
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Coin", tiles(1), 0, 0, 0);
+        gb.add_sprite("Coin", tiles(1), 8, 0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "sprite \"Coin\" already has an animation \"Spin\"")]
+    fn test_animation_names_are_unique_per_sprite() {
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(4), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+        gb.sprites
+            .add_animation(coin, "Spin", 2, 3, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "composite sprite \"Player\" already has an animation \"Walk\"")]
+    fn test_composite_animation_names_are_unique() {
+        let mut gb = RustBoy::new();
+        let player = player(&mut gb);
+        gb.sprites
+            .add_composite_animation(player, "Walk", 0, 0, AnimationType::Loop);
+        gb.sprites
+            .add_composite_animation(player, "Walk", 0, 0, AnimationType::Loop);
+    }
+
+    #[test]
+    #[should_panic(expected = "label Anim_Big_Coin_Spin")]
+    fn test_animation_labels_cannot_collide() {
+        // Sprite "Big_Coin" + animation "Spin" and sprite "Big" + animation "Coin_Spin"
+        // would both be Anim_Big_Coin_Spin
+        let mut gb = RustBoy::new();
+        let big_coin = gb.add_sprite("Big_Coin", tiles(2), 0, 0, 0);
+        let big = gb.add_sprite("Big", tiles(2), 8, 0, 0);
+        gb.sprites
+            .add_animation(big_coin, "Spin", 0, 1, AnimationType::Loop);
+        gb.sprites
+            .add_animation(big, "Coin_Spin", 0, 1, AnimationType::Loop);
     }
 }

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, refactor]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RGBDS_VERSION: v1.0.4
+
+jobs:
+  rust:
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  msrv:
+    name: test on Rust 1.85 (rust-version)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - run: cargo test
+
+  assemble:
+    name: assemble examples with RGBDS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache RGBDS
+        id: cache-rgbds
+        uses: actions/cache@v4
+        with:
+          path: ~/rgbds
+          key: rgbds-${{ env.RGBDS_VERSION }}-${{ runner.os }}
+      - name: Build RGBDS
+        if: steps.cache-rgbds.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bison libpng-dev pkg-config
+          git clone --depth 1 --branch "$RGBDS_VERSION" https://github.com/gbdev/rgbds /tmp/rgbds
+          make -C /tmp/rgbds -j"$(nproc)" rgbasm rgblink rgbfix
+          mkdir -p ~/rgbds
+          cp /tmp/rgbds/rgbasm /tmp/rgbds/rgblink /tmp/rgbds/rgbfix ~/rgbds/
+      - run: echo "$HOME/rgbds" >> "$GITHUB_PATH"
+      - run: rgbasm --version
+      - run: scripts/assemble-examples.sh
+      - name: Upload example ROMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: example-roms
+          path: target/examples/*/main.gb

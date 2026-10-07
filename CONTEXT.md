@@ -46,7 +46,7 @@ rgbfix -v -p 0xFF main.gb
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
 | `cargo test` | ✅ 28 tests pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); sprites still render wrong until [B4](#b4) |
-| bin `unbricked_rustboy` | ❌ compiles, but rgbasm fails: "`wCurKeys` already defined" ([B3](#b3)), confirmed with RGBDS 1.0.4 |
+| bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ⚠️ assembles, but the 16×16 player collapses at screen edges ([B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
@@ -167,6 +167,8 @@ use `enable_animation(coin, idx)` / `disable_animation(coin)`.
 rejects duplicates, so `wCurKeys: db` is emitted twice → rgbasm "already defined". The same would happen
 with `wFrameCounter` as soon as the example adds an animation. *Fix:* make `create_var` idempotent for
 same name+type (or error on conflict); remove the manual creation from the example.
+**Status: fixed** on `refactor-p1-duplicate-vars`: creating an existing name returns that variable (first
+initial value and section kept), a different type panics; the example no longer creates the input variables.
 
 #### B4
 **All sprites are forced to 8×16.** `src/rust_boy/rustboy.rs:313` always sets `LCDCF_OBJ16` (added in
@@ -269,6 +271,9 @@ sequential, so creation order), name-keyed lists (user functions, variable secti
 **`build()` is not idempotent.** `build(&mut self)` (`src/rust_boy/rustboy.rs:258`) creates `wFrameCounter`
 and the `wAnim_*_Current` variables on every call (`:300-306`) → a second `build()` emits duplicate labels.
 *Fix:* `build(&self)`, all registration done up front.
+**Status: fixed** on `refactor-p1-duplicate-vars`: with B3 fixed, the variables created again by a second
+`build()` are the existing ones, so two builds give the same output (tested). Making `build` take `&self`
+stays in Phase 2.
 
 #### B15
 **`RustBoy::raw()` silently drops code.** The closure runs on `self.asm` (`src/rust_boy/rustboy.rs:141-147`)

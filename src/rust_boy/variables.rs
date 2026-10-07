@@ -100,6 +100,10 @@ pub(crate) struct Variable {
 }
 
 /// Manages variables with automatic WRAM allocation
+///
+/// A name is one WRAM label: creating a variable whose name already exists returns the
+/// existing variable (its first initial value and section are kept). Creating it again
+/// with a different type panics.
 #[derive(Debug)]
 pub struct VariableManager {
     /// Variables by id; ids are sequential, so iteration follows creation order
@@ -152,6 +156,21 @@ impl VariableManager {
     }
 
     fn create_var(&mut self, name: &str, var_type: VarType, initial: i32, section: &str) -> Var {
+        if let Some((&id, existing)) = self.variables.iter().find(|(_, v)| v.name == name) {
+            assert!(
+                existing.var_type == var_type,
+                "variable `{}` already exists as {:?}, cannot create it again as {:?}",
+                name,
+                existing.var_type,
+                var_type
+            );
+            return Var {
+                id,
+                name: name.to_string(),
+                var_type,
+            };
+        }
+
         let addr = self.next_wram_addr;
         self.next_wram_addr += var_type.size();
 
@@ -313,5 +332,33 @@ mod tests {
 
         assert_eq!(vm.get_label(id), Some("wMomentum"));
         assert_eq!(vm.get_type(id), Some(VarType::I8));
+    }
+
+    fn lines(instrs: Vec<Instr>) -> Vec<String> {
+        instrs.iter().map(|instr| instr.to_string()).collect()
+    }
+
+    #[test]
+    fn test_creating_a_variable_twice_returns_the_same_one() {
+        let mut vm = VariableManager::new();
+
+        let first = vm.create_u8("wKeys", 0).id();
+        let second = vm.create_u8("wKeys", 5).id();
+
+        assert_eq!(first, second);
+        assert_eq!(
+            lines(vm.generate_sections()),
+            ["SECTION \"Variables\", WRAM0", "wKeys: db"]
+        );
+        // The first initial value is kept
+        assert_eq!(lines(vm.generate_init_code()), ["ld a, 0", "ld [wKeys], a"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "already exists as U8")]
+    fn test_creating_a_variable_with_another_type_panics() {
+        let mut vm = VariableManager::new();
+        vm.create_u8("wValue", 0);
+        vm.create_u16("wValue", 0);
     }
 }

@@ -51,7 +51,8 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   Target design (Phase 2): `asm` / `hw` (pure data) / `std` / `engine` — see `CONTEXT.md` §3.
 - Every routine (Memcopy, WaitVBlank, UpdateKeys, …) exists **once**. Do not copy a routine into another layer.
 - Generated output must be **deterministic**: never let `HashMap`/`HashSet` iteration order reach the
-  output; use `BTreeMap` or an ordered `Vec`.
+  output; use `BTreeMap` or an ordered `Vec`. Sprites, tiles, variables and functions are emitted in the
+  order they were created.
 - Generated labels must be unique and must not break RGBDS local-label scope (a global label inside an
   `If` body breaks `.end_if_N`). Prefer local labels or the label allocator.
 - Do not hardcode hardware addresses/flags as strings in new code; use (or add to) the `hw` constants.
@@ -72,6 +73,7 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 - Push the branch and open a **PR into `refactor`** (never straight into `main`). When everything is done,
   `refactor` → `main` is a final PR.
 - Never force-push, rewrite published history or delete branches without asking first.
+- Do not mention or link the Claude session in commit messages or PR descriptions.
 
 ### PR description template
 

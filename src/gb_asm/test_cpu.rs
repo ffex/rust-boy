@@ -3,7 +3,7 @@
 //! It runs the [`Instr`]s a routine emits, so a test can check what the generated code
 //! does rather than how it looks. It models the 8-bit registers, the Z and C flags, a
 //! memory addressed by symbol (`[wCurKeys]`, `[_OAMRAM+1]`, …) and symbolic constants
-//! (`PADF_LEFT`). A memory symbol plus a decimal offset has one name however it is
+//! (`PADF_LEFT`). A memory symbol plus an offset (`+4`, `+$4`, `+%100`) has one name however it is
 //! written: `_OAMRAM+4+1`, `_OAMRAM + 5` and `_OAMRAM+5` are the same byte, `_OAMRAM+0`
 //! is `_OAMRAM`. A number is an address too, named `$XXXX`: `$9800+33` is `$9821`.
 //! The register pairs `bc`, `de` and `hl` hold a symbolic address
@@ -40,13 +40,13 @@ pub(crate) struct Pointer {
 }
 
 impl Pointer {
-    /// The address `symbol`, split into a base symbol and a decimal offset:
-    /// `_OAMRAM+4+1` is `_OAMRAM` + 5; a number (`$9800`, `0x9800`, `%1001`, `38912`) has
+    /// The address `symbol`, split into a base symbol and offsets (any RGBDS number):
+    /// `_OAMRAM+4+1` and `_OAMRAM+$5` are `_OAMRAM` + 5; a number (`$9800`, `0x9800`, `%1001`, `38912`) has
     /// no symbol
     fn parse(symbol: &str) -> Pointer {
         let symbol = symbol.trim();
         if let Some((base, offset)) = symbol.rsplit_once('+') {
-            if let Ok(offset) = offset.trim().parse::<u16>() {
+            if let Some(offset) = parse_number(offset.trim()) {
                 let mut pointer = Pointer::parse(base);
                 pointer.offset = pointer.offset.wrapping_add(offset);
                 return pointer;
@@ -895,6 +895,10 @@ mod tests {
         assert_eq!(cpu.mem.get("0x12FF"), Some(&7));
         assert_eq!(cpu.mem.get("%1001100000000000"), Some(&9));
         assert_eq!(cpu.mem.get("4863+1"), Some(&7), "$12FF + 1");
+        // Offsets in any base too: $9800+$21 is $9821, _OAMRAM+%101 is _OAMRAM+5
+        assert_eq!(normalize("$9800+$21"), "$9821");
+        assert_eq!(normalize("$9800 + 0x10 + 17"), "$9821");
+        assert_eq!(normalize("_OAMRAM+%101"), "_OAMRAM+5");
     }
 
     #[test]

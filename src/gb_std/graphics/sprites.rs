@@ -1,18 +1,21 @@
 use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register};
 
+/// Clear the OAM loop: write `a` to `b` bytes from `[hl]` on, under the global label
+/// `ClearOam`. Set the registers with [`initialize_objects_screen`] first, which clears
+/// the whole OAM (every sprite at Y 0, so hidden).
 pub fn clear_objects_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
-    // Clear OAM loop
     asm.label("ClearOam")
-        .ld_hli_label("a")
-        .dec_label("b")
+        .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A))
+        .dec(Operand::Reg(Register::B))
         .jp_cond(Condition::NZ, "ClearOam");
     asm.get_main_instrs()
 }
 
+/// Set the registers for [`clear_objects_screen`] to clear the whole OAM: `a = 0`,
+/// `b = 160` (40 sprites of 4 bytes), `hl = _OAMRAM`
 pub fn initialize_objects_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
-    // Initialize OAM
     asm.ld_a(0).ld_b(160).ld_hl_label("_OAMRAM");
     asm.get_main_instrs()
 }

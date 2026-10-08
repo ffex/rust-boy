@@ -2,12 +2,18 @@
 
 use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator};
 use crate::gb_std::flow::Emittable;
+use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
 use super::sprites::{SpriteManager, SpriteSize, check_name};
 use super::tiles::TileManager;
 use super::variables::VariableManager;
+
+/// The palette `build()` writes to `rBGP`, `rOBP0` and `rOBP1` at start-up: colour i
+/// shows shade i (0 lightest, 3 darkest), so both object palettes look like the
+/// background one until the program changes them
+const DEFAULT_PALETTE: u8 = 0b11100100;
 
 /// High-level Game Boy development API
 ///
@@ -160,6 +166,16 @@ impl RustBoy {
     }
 
     /// Add initialization code (runs once at startup)
+    ///
+    /// The start-up code runs, in order: LCD off, tile data copied to VRAM, OAM cleared
+    /// and the sprites written, default palettes (`rBGP`, `rOBP0`, `rOBP1`), every
+    /// variable set to its initial value (animation variables included), **this code**,
+    /// then LCD on. So the code here can change any variable, animation or palette, and
+    /// runs with the LCD off (VRAM and OAM can be written freely). `rLCDC` is the
+    /// exception: `build()` sets it after this code to turn the LCD on.
+    ///
+    /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
+    /// off, `rLY` stays 0 and the wait never ends.
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
         let instrs = code.emit(&mut self.if_counter);
         self.init_code.extend(instrs);
@@ -297,6 +313,11 @@ impl RustBoy {
 
     /// Build the final assembly output
     pub fn build(&mut self) -> String {
+        self.build_asm().to_asm()
+    }
+
+    /// The program [`build`](Self::build) prints, as instructions in chunks
+    pub(crate) fn build_asm(&mut self) -> Asm {
         // Start fresh assembly
         let mut asm = Asm::new();
 
@@ -329,13 +350,19 @@ impl RustBoy {
             asm.emit_all(self.tiles.generate_memcopy_calls());
         }
 
-        // Initialize sprites (OAM setup)
+        // Clear the whole OAM, with or without sprites: objects are always turned on
+        // below, and OAM holds garbage at power-on (B28)
+        asm.emit_all(initialize_objects_screen());
+        asm.emit_all(clear_objects_screen());
         if !self.sprites.is_empty() {
             asm.emit_all(self.sprites.generate_init_code());
         }
 
-        // Emit user init code
-        asm.emit_all(self.init_code.clone());
+        // Default palettes, every one of them (OBP1 too, B28)
+        asm.ld_a(DEFAULT_PALETTE);
+        for palette in ["rBGP", "rOBP0", "rOBP1"] {
+            asm.ld_addr_def_a(palette);
+        }
 
         // Add animation variables if animations are used
         if self.sprites.has_animations() {
@@ -350,18 +377,16 @@ impl RustBoy {
         // Emit variable initialization
         asm.emit_all(self.vars.generate_init_code());
 
+        // Emit user init code, after every default it may want to change: variables,
+        // animations, palettes, OAM (B11). The LCD is still off, so it can write VRAM.
+        asm.emit_all(self.init_code.clone());
+
         // Turn on screen, with the sprite size chosen by set_sprite_size
         asm.ld_a_label(&format!(
             "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
             self.sprites.size().lcdc_flag()
         ));
         asm.ld_addr_def_a("rLCDC");
-
-        // Set default palettes
-        asm.ld_a(0b11100100);
-        asm.ld_addr_def_a("rBGP");
-        asm.ld_a(0b11100100);
-        asm.ld_addr_def_a("rOBP0");
 
         // === MAIN LOOP CHUNK ===
         asm.chunk(Chunk::MainLoop);
@@ -412,7 +437,7 @@ impl RustBoy {
             asm.emit_all(existing);
         }
 
-        asm.to_asm()
+        asm
     }
 
     /// Add code to the main game loop
@@ -1152,5 +1177,165 @@ mod tests {
             .add_animation(big_coin, "Spin", 0, 1, AnimationType::Loop);
         gb.sprites
             .add_animation(big, "Coin_Spin", 0, 1, AnimationType::Loop);
+    }
+
+    // ==================== Start-up code (B11, B28) ====================
+
+    use crate::gb_asm::test_cpu::{Event, TestCpu};
+
+    /// The palette every palette register starts with: colour i shows shade i
+    const IDENTITY_PALETTE: u8 = 0b11100100;
+
+    /// Run the start-up code of `gb` on the test CPU, from `EntryPoint` to where the main
+    /// loop starts. `Memcopy` is a stub (the CPU model does not copy blocks): its calls
+    /// are in the trace.
+    fn run_startup(gb: &mut RustBoy) -> TestCpu {
+        let lcdc_on = format!(
+            "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
+            gb.sprite_size().lcdc_flag()
+        );
+        let asm = gb.build_asm();
+        let mut code = asm
+            .get_chunk(Chunk::Init)
+            .cloned()
+            .expect("no start-up code");
+        code.push(Instr::Ret); // stop where the main loop starts
+        code.extend(asm.get_chunk(Chunk::Functions).cloned().unwrap_or_default());
+
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert("rLY".to_string(), 144); // in VBlank: WaitVBlank returns at once
+        cpu.stubs.insert("Memcopy".to_string());
+        cpu.consts.insert(lcdc_on, 0x83);
+        cpu.run(&code);
+        cpu
+    }
+
+    /// The memory symbol of OAM byte `i`, as the test CPU names it
+    fn oam(i: u16) -> String {
+        if i == 0 {
+            "_OAMRAM".to_string()
+        } else {
+            format!("_OAMRAM+{}", i)
+        }
+    }
+
+    /// Asserts that `cpu` wrote `value` to `symbol`
+    fn assert_mem(cpu: &TestCpu, symbol: &str, value: u8) {
+        assert_eq!(cpu.mem.get(symbol), Some(&value), "[{}]", symbol);
+    }
+
+    #[test]
+    fn test_init_code_runs_after_variable_initialisation() {
+        let mut gb = RustBoy::new();
+        let lives = gb.vars.create_u8("wLives", 0);
+        let coin = gb.add_sprite("Coin", tiles(4), 16, 16, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+        gb.sprites
+            .add_animation(coin, "Bounce", 2, 3, AnimationType::PingPong);
+
+        // What init() sets must survive the start-up code: a variable, the animation
+        // (disabled by default), the PingPong direction and a palette
+        gb.init(lives.set(3));
+        let enable = gb.sprites.enable_animation(coin, 1);
+        gb.init(enable);
+        let mut own = Asm::new();
+        own.ld_a(1)
+            .ld_addr_def_a("wAnim_Coin_Dir")
+            .ld_a(0b00011011)
+            .ld_addr_def_a("rBGP");
+        gb.init(own.get_main_instrs());
+
+        let cpu = run_startup(&mut gb);
+        assert_mem(&cpu, "wLives", 3);
+        assert_mem(&cpu, "wAnim_Coin_Current", 1);
+        assert_mem(&cpu, "wAnim_Coin_Dir", 1);
+        assert_mem(&cpu, "wFrameCounter", 0);
+        assert_mem(&cpu, "rBGP", 0b00011011);
+    }
+
+    #[test]
+    fn test_startup_order() {
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
+        gb.vars.create_u8("wScore", 7);
+        gb.add_sprite("Ball", tiles(1), 16, 16, 0);
+        let mut user = Asm::new();
+        user.ld_a(5).ld_addr_def_a("rSCX");
+        gb.init(user.get_main_instrs());
+
+        let cpu = run_startup(&mut gb);
+        // Each side effect, by the start-up step it belongs to
+        let step = |event: &Event| match event {
+            Event::Call(name) if name == "WaitVBlank" => "wait for VBlank",
+            Event::Write(reg, 0) if reg == "rLCDC" => "LCD off",
+            Event::Call(name) if name == "Memcopy" => "copy to VRAM",
+            Event::Write(addr, _) if addr.starts_with("_OAMRAM") => "OAM",
+            Event::Write(reg, _) if ["rBGP", "rOBP0", "rOBP1"].contains(&reg.as_str()) => {
+                "palettes"
+            }
+            Event::Write(var, _) if var.starts_with('w') => "variables",
+            Event::Write(reg, _) if reg == "rSCX" => "user init",
+            Event::Write(reg, _) if reg == "rLCDC" => "LCD on",
+            other => panic!("unexpected start-up event {:?}", other),
+        };
+        let mut steps: Vec<&str> = cpu.trace.iter().map(step).collect();
+        steps.dedup();
+        assert_eq!(
+            steps,
+            [
+                "wait for VBlank",
+                "LCD off",
+                "copy to VRAM",
+                "OAM",
+                "palettes",
+                "variables",
+                "user init",
+                "LCD on",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_oam_is_cleared_without_sprites() {
+        // A background-only program still turns objects on: the OAM must be empty
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
+        gb.vars.create_u8("wScore", 0);
+
+        let cpu = run_startup(&mut gb);
+        for i in 0..160 {
+            assert_mem(&cpu, &oam(i), 0);
+        }
+        assert_labels_ok(&gb.build());
+    }
+
+    #[test]
+    fn test_oam_is_cleared_before_the_sprites_are_written() {
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Ball", tiles(1), 16, 24, 0);
+
+        let cpu = run_startup(&mut gb);
+        let written: Vec<u8> = (0..4).map(|i| cpu.mem[&oam(i)]).collect();
+        assert_eq!(written, [24 + 16, 16 + 8, 0, 0], "Y, X, tile, flags");
+        for i in 4..160 {
+            assert_mem(&cpu, &oam(i), 0);
+        }
+    }
+
+    #[test]
+    fn test_every_palette_is_set() {
+        for with_sprites in [false, true] {
+            let mut gb = RustBoy::new();
+            if with_sprites {
+                gb.add_sprite("Ball", tiles(1), 16, 16, 0);
+            }
+            let cpu = run_startup(&mut gb);
+            for palette in ["rBGP", "rOBP0", "rOBP1"] {
+                assert_mem(&cpu, palette, IDENTITY_PALETTE);
+            }
+        }
     }
 }

@@ -318,7 +318,8 @@ impl TestCpu {
                                 (hl, other.offset)
                             };
                             self.unknown |= UNKNOWN_CARRY;
-                            base.moved(i32::from(number))
+                            // 16-bit wrap-around: adding $FFFF is going back one byte
+                            base.moved(i32::from(number as i16))
                         }
                         (false, false) => panic!(
                             "add hl, {:?}: the sum of {} and {} is not supported by the test CPU",
@@ -941,6 +942,18 @@ mod tests {
         assert!(panics(&symbol_plus_number(&|asm| {
             asm.jp_cond(Condition::C, "End").label("End");
         })));
+
+        // A number from $8000 is a step back, as the sum wraps around at 16 bits:
+        // _SCRN0+5 + $FFFF is _SCRN0+4
+        let mut asm = Asm::new();
+        ld_pair(&mut asm, Register::HL, "_SCRN0+5");
+        ld_pair(&mut asm, Register::DE, "$FFFF");
+        asm.add(reg(Register::HL), reg(Register::DE))
+            .ld_a_addr_reg(Register::HL);
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert("_SCRN0+4".to_string(), 8);
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!(cpu.a, 8);
 
         // Two symbols cannot be added
         let mut asm = Asm::new();

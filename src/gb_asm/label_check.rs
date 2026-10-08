@@ -110,6 +110,121 @@ pub(crate) fn assert_labels_ok(asm: &str) {
     );
 }
 
+/// Words that are not symbols: registers, conditions and the RGBDS functions the
+/// generated code uses (compared without case)
+const KEYWORDS: [&str; 20] = [
+    "a", "b", "c", "d", "e", "h", "l", "af", "bc", "de", "hl", "sp", "hli", "hld", "z", "nz", "nc",
+    "low", "high", "bank",
+];
+
+/// Every global symbol that `asm` uses but neither defines (a label, `name: db`, `DEF`)
+/// nor gets from `hardware.inc`: what rgbasm or rgblink would report as undefined (the
+/// targets of `jp` / `jr` / `call`, variables, constants, `ld hl, Name`, `dw Name`, …).
+/// Comments and strings are skipped; local labels are left to [`label_errors`].
+pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
+    use super::labels::{code_of_line, split_label, symbol_words};
+
+    let hardware: BTreeSet<&str> = include_str!("../../include/hardware.inc")
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("DEF "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .collect();
+    let mut defined = BTreeSet::new();
+    let mut used = Vec::new();
+    for (index, line) in asm.lines().enumerate() {
+        let code = code_of_line(line);
+        let (label, rest) = split_label(&code);
+        if let Some(label) = label {
+            defined.insert(label.to_string());
+        }
+        // Skip a local label definition (`.loop:`), then split the mnemonic or directive
+        // from its operands
+        let mut rest = rest.trim();
+        if rest.starts_with('.') {
+            if let Some((_, after)) = rest.split_once(':') {
+                rest = after.trim_start_matches(':').trim();
+            }
+        }
+        let (first, operands) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let operands = match first.to_ascii_uppercase().as_str() {
+            "" | "SECTION" | "INCLUDE" | "INCBIN" => continue,
+            // `DEF NAME EQU value`
+            "DEF" => {
+                let mut parts = operands.split_whitespace();
+                if let Some(name) = parts.next() {
+                    defined.insert(name.to_string());
+                }
+                parts.skip(1).collect::<Vec<_>>().join(" ")
+            }
+            _ => operands.to_string(),
+        };
+        for word in symbol_words(&operands) {
+            if !KEYWORDS.contains(&word.to_ascii_lowercase().as_str()) {
+                used.push((index + 1, word.to_string()));
+            }
+        }
+    }
+    used.into_iter()
+        .filter(|(_, word)| !defined.contains(word) && !hardware.contains(word.as_str()))
+        .map(|(number, word)| format!("line {}: {} is not defined", number, word))
+        .collect()
+}
+
+/// Panics, with the assembly, unless `asm` would assemble and link as far as its symbols
+/// go: no [`label_errors`] and no [`undefined_symbols`]
+///
+/// With the environment variable `RGBDS_LINK_CHECK` set (and `rgbasm` / `rgblink` on the
+/// `PATH`), it also assembles and links `asm` with RGBDS, `include/` on the include path.
+pub(crate) fn assert_links(asm: &str) {
+    let mut errors = label_errors(asm);
+    errors.extend(undefined_symbols(asm));
+    assert!(
+        errors.is_empty(),
+        "link errors:\n{}\n\nin:\n{}",
+        errors.join("\n"),
+        asm
+    );
+    if std::env::var_os("RGBDS_LINK_CHECK").is_some() {
+        rgbds_link(asm);
+    }
+}
+
+/// Assemble and link `asm` with RGBDS in a new temporary directory; panics with the
+/// RGBDS errors if it fails
+fn rgbds_link(asm: &str) {
+    use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "rust-boy-link-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).expect("cannot create a temporary directory");
+    std::fs::write(dir.join("main.asm"), asm).expect("cannot write main.asm");
+    let include = concat!(env!("CARGO_MANIFEST_DIR"), "/include");
+    let steps: [(&str, Vec<&str>); 2] = [
+        ("rgbasm", vec!["-I", include, "-o", "main.o", "main.asm"]),
+        ("rgblink", vec!["-o", "main.gb", "main.o"]),
+    ];
+    for (tool, args) in steps {
+        let output = Command::new(tool)
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|error| panic!("cannot run {}: {}", tool, error));
+        assert!(
+            output.status.success(),
+            "{} failed:\n{}\n\nin:\n{}",
+            tool,
+            String::from_utf8_lossy(&output.stderr),
+            asm
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// [`assert_labels_ok`] for a piece of generated code, placed after a global label as
 /// it is in a program
 pub(crate) fn assert_code_labels_ok(code: &[Instr]) {
@@ -230,6 +345,35 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::gb_asm::Condition;
+
+    #[test]
+    fn test_undefined_symbols() {
+        let asm = "
+            INCLUDE \"hardware.inc\"
+            DEF LIMIT EQU 10 + OTHER
+            SECTION \"Code\", ROM0
+            Main:
+            .loop: ld a, [wCount] ; call NotUsed
+            ld [rLCDC], a
+            cp LIMIT
+            jr nz, .loop
+            call Helper
+            ld hl, Table + 2
+            db \"call Quoted\", LOW(Main)
+            ld a, [hli]
+            jp Main
+            SECTION \"Variables\", WRAM0
+            wCount: db
+        ";
+        assert_eq!(
+            undefined_symbols(asm),
+            [
+                "line 3: OTHER is not defined",
+                "line 10: Helper is not defined",
+                "line 11: Table is not defined",
+            ]
+        );
+    }
 
     #[test]
     fn test_accepts_local_labels_in_their_scope() {

@@ -215,9 +215,11 @@ impl RustBoy {
     /// `build()` emits only the functions the program uses: the ones the start-up code,
     /// the main loop, the code passed to [`RustBoy::raw`] or the animations refer to, and
     /// the ones those functions refer to, and so on. A function is found by its name
-    /// anywhere in an instruction: `call`, `jp`, `IfCall`, `Call`, `ld hl, Name`,
-    /// `dw Name`, a raw line. So keep only a function that is called from code `build()`
-    /// does not see: asm added to its output afterwards, or an `INCLUDE`d file.
+    /// anywhere in an instruction's code: `call`, `jp`, `IfCall`, `Call`, `ld hl, Name`,
+    /// `dw Name`, raw lines (`Asm::raw`, one or several lines); not in comments or strings.
+    /// The variables a builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are created
+    /// with it. So keep only a function that is called from code `build()` does not see:
+    /// asm added to its output afterwards, or an `INCLUDE`d file.
     ///
     /// # Panics
     /// If there is no function `name`: define it first.
@@ -372,56 +374,49 @@ impl RustBoy {
         }
 
         // === INIT CHUNK ===
-        asm.chunk(Chunk::Init);
+        // In two parts, before and after the variable initialisation, which is emitted
+        // once the functions are known: a builtin may need variables (B26)
+        let mut startup = Asm::new();
 
         // Entry point
-        asm.label("EntryPoint");
-        asm.call("WaitVBlank");
+        startup.label("EntryPoint");
+        startup.call("WaitVBlank");
 
         // Turn off screen for safe VRAM access
-        asm.ld_a(0);
-        asm.ld_addr_def_a("rLCDC");
+        startup.ld_a(0);
+        startup.ld_addr_def_a("rLCDC");
 
         // Copy the tile data to VRAM (empty blobs are skipped, B27)
-        asm.emit_all(self.tiles.generate_memcopy_calls());
+        startup.emit_all(self.tiles.generate_memcopy_calls());
 
         // Clear the whole OAM, with or without sprites: objects are always turned on
         // below, and OAM holds garbage at power-on (B28)
-        asm.emit_all(initialize_objects_screen());
-        asm.emit_all(clear_objects_screen());
+        startup.emit_all(initialize_objects_screen());
+        startup.emit_all(clear_objects_screen());
         if !self.sprites.is_empty() {
-            asm.emit_all(self.sprites.generate_init_code());
+            startup.emit_all(self.sprites.generate_init_code());
         }
 
         // Default palettes, every one of them (OBP1 too, B28)
-        asm.ld_a(DEFAULT_PALETTE);
+        startup.ld_a(DEFAULT_PALETTE);
         for palette in ["rBGP", "rOBP0", "rOBP1"] {
-            asm.ld_addr_def_a(palette);
+            startup.ld_addr_def_a(palette);
         }
 
-        // Add animation variables if animations are used
-        if self.sprites.has_animations() {
-            self.vars.create_u8("wFrameCounter", 0);
-
-            // Create enabled flag for each animation
-            for (var_name, initial_value) in self.sprites.get_animation_variables() {
-                self.vars.create_u8(&var_name, initial_value);
-            }
-        }
-
-        // Emit variable initialization
-        asm.emit_all(self.vars.generate_init_code());
-
-        // Emit user init code, after every default it may want to change: variables,
-        // animations, palettes, OAM (B11). The LCD is still off, so it can write VRAM.
-        asm.emit_all(self.init_code.clone());
+        // Then the variables (below), then the user init code, after every default it
+        // may want to change: variables, animations, palettes, OAM (B11). The LCD is
+        // still off, so it can write VRAM.
+        let mut finish = Asm::new();
+        finish.emit_all(self.init_code.clone());
 
         // Turn on screen, with the sprite size chosen by set_sprite_size
-        asm.ld_a_label(&format!(
+        finish.ld_a_label(&format!(
             "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
             self.sprites.size().lcdc_flag()
         ));
-        asm.ld_addr_def_a("rLCDC");
+        finish.ld_addr_def_a("rLCDC");
+        let startup = startup.get_main_instrs();
+        let finish = finish.get_main_instrs();
 
         // === MAIN LOOP CHUNK ===
         asm.chunk(Chunk::MainLoop);
@@ -441,10 +436,6 @@ impl RustBoy {
         // Jump back to main loop
         asm.jp("Main");
 
-        // === DATA CHUNK ===
-        asm.chunk(Chunk::Data);
-        asm.emit_all(self.vars.generate_sections());
-
         // === TILES CHUNK ===
         asm.chunk(Chunk::Tiles);
         asm.emit_all(self.tiles.generate_tile_data());
@@ -461,34 +452,57 @@ impl RustBoy {
         }
 
         // === FUNCTIONS CHUNK ===
-        // Last, once every other chunk is known: the builtins and user functions that
-        // the program refers to, directly or through other functions (B24, B26), then
-        // the animation functions
+        // Once all the code is known: the builtins and user functions that the program
+        // refers to, directly or through other functions (B24, B26), then the animation
+        // functions. (Variables only hold data, so their code is not needed for this.)
         let animations = self.sprites.generate_animation_functions();
         let mut code: Vec<&[Instr]> = [
             Chunk::Header,
             Chunk::Constants,
-            Chunk::Init,
             Chunk::MainLoop,
             Chunk::Main,
             Chunk::Tiles,
             Chunk::Tilemap,
-            Chunk::Data,
         ]
         .iter()
         .filter_map(|chunk| asm.get_chunk(*chunk))
         .map(Vec::as_slice)
         .collect();
+        code.extend([startup.as_slice(), finish.as_slice()]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
         let functions = self.functions.generate_used(&code);
         asm.chunk(Chunk::Functions);
-        asm.emit_all(functions);
+        asm.emit_all(functions.code);
 
         for (name, body) in animations {
             // Register function first so it's tracked (though we emit directly)
             self.functions.register_user_function(&name, Vec::new());
             asm.emit_all(body);
         }
+
+        // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
+        // Add animation variables if animations are used
+        if self.sprites.has_animations() {
+            self.vars.create_u8("wFrameCounter", 0);
+
+            // Create enabled flag for each animation
+            for (var_name, initial_value) in self.sprites.get_animation_variables() {
+                self.vars.create_u8(&var_name, initial_value);
+            }
+        }
+        // The variables of the emitted builtins (`wCurKeys`, `wNewKeys` for UpdateKeys),
+        // however the program calls them
+        for name in functions.variables {
+            self.vars.create_u8(name, 0);
+        }
+
+        asm.chunk(Chunk::Init);
+        asm.emit_all(startup);
+        asm.emit_all(self.vars.generate_init_code());
+        asm.emit_all(finish);
+
+        asm.chunk(Chunk::Data);
+        asm.emit_all(self.vars.generate_sections());
 
         asm
     }
@@ -1404,6 +1418,8 @@ mod tests {
 
     // ==================== Functions (B23, B24, B26, B27) ====================
 
+    // assert_links: no undefined symbol, and with RGBDS_LINK_CHECK set, rgbasm + rgblink
+    use crate::gb_asm::label_check::assert_links;
     use crate::gb_std::flow::{IfA, IfCall, IfConst, boxed};
     use crate::gb_std::graphics::tile_ref::TileRef;
 
@@ -1430,7 +1446,7 @@ mod tests {
         // reached through Call, IfCall, a function body or raw code was missing (rgblink:
         // undefined symbol)
         type Program = fn(&mut RustBoy);
-        let paths: [(&str, &str, Program); 6] = [
+        let paths: [(&str, &str, Program); 9] = [
             ("Call in the main loop", "GetTileByPixel", |gb| {
                 gb.add_to_main_loop(Call::with_args("GetTileByPixel", Vec::new()));
             }),
@@ -1456,6 +1472,23 @@ mod tests {
                     asm.label("RawCode").call("Delay").ret();
                 });
             }),
+            // UpdateKeys needs wCurKeys / wNewKeys, which add_inputs used to create alone
+            ("a function that only init calls", "UpdateKeys", |gb| {
+                gb.define_function_from("PollOnce", Call::new("UpdateKeys"));
+                gb.init(Call::new("PollOnce"));
+            }),
+            // A raw instruction of several lines, a comment before the call
+            ("raw text after a comment", "Delay", |gb| {
+                let mut code = Asm::new();
+                code.raw("ld a, 1 ; one\n    call Delay");
+                gb.add_to_main_loop(code.get_main_instrs());
+            }),
+            // A `;` in a string is not a comment
+            ("a db with a string", "Delay", |gb| {
+                gb.raw(|asm| {
+                    asm.raw("Table: db \"a;b\", LOW(Delay), HIGH(Delay)");
+                });
+            }),
         ];
         for (path, builtin, program) in paths {
             let mut gb = RustBoy::new();
@@ -1468,7 +1501,7 @@ mod tests {
                 builtin,
                 path
             );
-            assert_labels_ok(&out);
+            assert_links(&out);
         }
     }
 
@@ -1484,7 +1517,7 @@ mod tests {
 
         let out = gb.build();
         assert_eq!(definitions(&out, "GetTileByPixel"), 1);
-        assert_labels_ok(&out);
+        assert_links(&out);
     }
 
     #[test]
@@ -1502,18 +1535,26 @@ mod tests {
         gb.define_function("ByAddress", calling("ByAddress", &[]));
         gb.define_function("FromRaw", calling("FromRaw", &[]));
         gb.define_function("Jumped", calling("Jumped", &[]));
+        gb.define_function("FromRawText", calling("FromRawText", &[]));
+        gb.define_function("InTable", calling("InTable", &[]));
         gb.add_to_main_loop(Call::new("Called"));
         let mut table = Asm::new();
         table
             .ld_hl_label("ByAddress")
-            .jp_cond(crate::gb_asm::Condition::Z, "Jumped");
+            .jp_cond(crate::gb_asm::Condition::Z, "Jumped")
+            // Raw text of several lines, the call after a comment
+            .raw("ld a, 1 ; one\n    call FromRawText");
         gb.add_to_main_loop(table.get_main_instrs());
         gb.raw(|asm| {
-            asm.label("RawCode").call("FromRaw").ret();
+            asm.label("RawCode")
+                .call("FromRaw")
+                .ret()
+                // A `;` in a string, then a reference
+                .raw("Pointers: db \"a;b\"\n    dw InTable");
         });
 
         let out = gb.build();
-        assert_labels_ok(&out);
+        assert_links(&out);
         let user_functions: Vec<&str> = [
             "Unused",
             "Leaf",
@@ -1524,13 +1565,24 @@ mod tests {
             "ByAddress",
             "FromRaw",
             "Jumped",
+            "FromRawText",
+            "InTable",
         ]
         .into_iter()
         .filter(|name| definitions(&out, name) > 0)
         .collect();
         assert_eq!(
             user_functions,
-            ["Leaf", "Helper", "Called", "ByAddress", "FromRaw", "Jumped"]
+            [
+                "Leaf",
+                "Helper",
+                "Called",
+                "ByAddress",
+                "FromRaw",
+                "Jumped",
+                "FromRawText",
+                "InTable"
+            ]
         );
         for name in &user_functions {
             assert_eq!(definitions(&out, name), 1, "{}", name);
@@ -1558,7 +1610,7 @@ mod tests {
             assert_eq!(definitions(&out, name), 1, "{}", name);
         }
         assert_eq!(definitions(&out, "Unused"), 0);
-        assert_labels_ok(&out);
+        assert_links(&out);
     }
 
     #[test]
@@ -1589,7 +1641,7 @@ mod tests {
         });
         let out = gb.build();
         assert_eq!(definitions(&out, "Memcopy"), 1);
-        assert_labels_ok(&out);
+        assert_links(&out);
     }
 
     #[test]
@@ -1598,6 +1650,9 @@ mod tests {
         // unbricked_rustboy brick handler tests a (IfConst, IfA), then blanks the brick
         // through hl (TileRef). Its call is inside a function body (B26).
         let mut gb = RustBoy::new();
+        gb.define_const("BRICK_LEFT", 5)
+            .define_const("BRICK_RIGHT", 6)
+            .define_const("BLANK_TILE", 8);
         gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
         let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
         gb.define_function_from(
@@ -1624,7 +1679,7 @@ mod tests {
         );
         gb.add_to_main_loop(Call::new("CheckAndHandleBrick"));
         let asm = gb.build_asm();
-        assert_labels_ok(&asm.to_asm());
+        assert_links(&asm.to_asm());
         let mut code = Asm::new();
         code.call("CheckAndHandleBrick").ret();
         let mut code = code.get_main_instrs();
@@ -1715,6 +1770,7 @@ mod tests {
             .add_background("NoTiles", TileSource::from_raw(&[]));
         gb.tiles.add_tilemap("NoMap", &[]);
         let out = gb.build();
+        assert_links(&out);
         assert!(!out.contains("Memcopy"), "{}", out);
         assert!(
             out.contains("NoTiles:") && out.contains("NoMapEnd:"),

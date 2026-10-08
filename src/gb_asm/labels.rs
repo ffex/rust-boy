@@ -64,9 +64,82 @@ pub fn is_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '#' | '$' | '@'))
 }
 
+/// The code of one line of assembly, as RGBDS reads it: without its comment (from a `;`
+/// outside a string) and with the contents of its strings (`"…"`, `'…'`) blanked, so
+/// that neither is taken for code
+pub(crate) fn code_of_line(line: &str) -> String {
+    let mut code = String::with_capacity(line.len());
+    let mut quote = None;
+    let mut escaped = false;
+    for c in line.chars() {
+        match quote {
+            Some(q) => {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                    code.push(c);
+                    continue;
+                }
+                code.push(' ');
+            }
+            None => match c {
+                ';' => break,
+                '"' | '\'' => {
+                    quote = Some(c);
+                    code.push(c);
+                }
+                _ => code.push(c),
+            },
+        }
+    }
+    code
+}
+
+/// The global label a line of code (from [`code_of_line`]) starts with (`Name:`,
+/// `Name::`, `Name: db 1`), and the rest of the line
+pub(crate) fn split_label(code: &str) -> (Option<&str>, &str) {
+    match code.split_once(':') {
+        Some((label, rest)) if is_identifier(label.trim()) => {
+            (Some(label.trim()), rest.trim_start_matches(':'))
+        }
+        _ => (None, code),
+    }
+}
+
+/// The global symbols a piece of code (from [`code_of_line`]) names: each word made of
+/// symbol characters that is an identifier. `Scope.local` names `Scope`; a local label
+/// (`.name`) and a number (`$FF`, `10`) name none. Mnemonics and registers are words too.
+pub(crate) fn symbol_words(code: &str) -> impl Iterator<Item = &str> {
+    code.split(|c: char| !(c.is_ascii_alphanumeric() || "_#$@.".contains(c)))
+        .map(|word| word.split('.').next().unwrap_or_default())
+        .filter(|word| is_identifier(word))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_code_of_line() {
+        assert_eq!(code_of_line("ld a, 1 ; one"), "ld a, 1 ");
+        assert_eq!(
+            code_of_line("db \"a;b\", LOW(Delay)"),
+            "db \"   \", LOW(Delay)"
+        );
+        assert_eq!(
+            code_of_line("db 'x', \"say \\\"hi\\\"\" ; c"),
+            "db ' ', \"          \" "
+        );
+        assert_eq!(split_label("Name:: db 1"), (Some("Name"), " db 1"));
+        assert_eq!(split_label(".local: ret"), (None, ".local: ret"));
+        let words: Vec<&str> = symbol_words("jp nz, .end_if_0").collect();
+        assert_eq!(words, ["jp", "nz"]);
+        let words: Vec<&str> = symbol_words("ld hl, Scope.local + $10 + 2").collect();
+        assert_eq!(words, ["ld", "hl", "Scope"]);
+    }
 
     #[test]
     fn test_local_labels_are_unique_and_shared_by_clones() {

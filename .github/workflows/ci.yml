@@ -54,6 +54,12 @@ jobs:
       - run: echo "$HOME/rgbds" >> "$GITHUB_PATH"
       - run: rgbasm --version
       - run: scripts/assemble-examples.sh
+      # The unit tests that check a whole program with `assert_links` also assemble and
+      # link it with RGBDS
+      - name: Link the test programs with RGBDS
+        run: cargo test --lib
+        env:
+          RGBDS_LINK_CHECK: 1
       - name: Upload example ROMs
         uses: actions/upload-artifact@v4
         with:

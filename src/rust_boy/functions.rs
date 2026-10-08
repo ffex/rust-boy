@@ -3,7 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register, is_identifier};
+use crate::gb_asm::labels::{code_of_line, split_label, symbol_words};
+use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 use crate::gb_std::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
 use crate::gb_std::inputs::update_keys;
 
@@ -66,6 +67,23 @@ impl BuiltinFunction {
             BuiltinFunction::Delay => generate_delay(),
         }
     }
+
+    /// The `u8` variables (WRAM) the routine reads or writes, which `build()` creates
+    /// when it emits the routine
+    pub fn variables(&self) -> &'static [&'static str] {
+        match self {
+            BuiltinFunction::UpdateKeys => &["wCurKeys", "wNewKeys"],
+            _ => &[],
+        }
+    }
+}
+
+/// What [`FunctionRegistry::generate_used`] found
+pub struct UsedFunctions {
+    /// The functions to emit, in their fixed order
+    pub code: Vec<Instr>,
+    /// The variables the emitted builtins need, in builtin order
+    pub variables: Vec<&'static str>,
 }
 
 /// A function a name refers to
@@ -161,8 +179,8 @@ impl FunctionRegistry {
     /// copy of a routine), nor a builtin whose label an emitted user function defines.
     ///
     /// The order is fixed: builtins in [`BuiltinFunction`] order, then user functions in
-    /// registration order.
-    pub fn generate_used(&self, code: &[&[Instr]]) -> Vec<Instr> {
+    /// registration order. The variables the emitted builtins need come with them.
+    pub fn generate_used(&self, code: &[&[Instr]]) -> UsedFunctions {
         let mut defined = BTreeSet::new();
         let mut pending = Vec::new();
         for instrs in code {
@@ -206,24 +224,32 @@ impl FunctionRegistry {
             }
         }
 
-        let mut all_instrs = Vec::new();
+        let mut used = UsedFunctions {
+            code: Vec::new(),
+            variables: Vec::new(),
+        };
         for func in builtins {
             if !user_labels.contains(func.label()) {
-                all_instrs.extend(func.generate());
+                used.code.extend(func.generate());
+                used.variables.extend(func.variables());
             }
         }
         for index in users {
-            all_instrs.extend(self.user_functions[index].1.iter().cloned());
+            used.code
+                .extend(self.user_functions[index].1.iter().cloned());
         }
-        all_instrs
+        used
     }
 }
 
-/// Add to `refs` the global symbols `instr` refers to, and to `defs` the global label it
+/// Add to `refs` the global symbols `instr` refers to, and to `defs` the global labels it
 /// defines
 ///
-/// A local symbol (`.end_if_0`) is skipped, and `Scope.local` refers to `Scope`.
-/// Comments, sections and file names refer to nothing.
+/// The text of the instruction is read line by line (a raw instruction can hold several
+/// lines), as RGBDS reads it: comments and the contents of strings are skipped, and a
+/// line that starts with `Name:` defines `Name`. A local symbol (`.end_if_0`) is skipped,
+/// and `Scope.local` refers to `Scope`. Comments, sections and file names refer to
+/// nothing.
 fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
     let text = match instr {
         Instr::Label { name } => {
@@ -237,25 +263,15 @@ fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
         | Instr::Include { .. }
         | Instr::Incbin { .. } => return,
         Instr::Def { value, .. } => value.clone(),
-        Instr::Raw { line } => {
-            // Up to a comment; `Name:` (or `Name::`) at the start defines a label
-            let line = line.split(';').next().unwrap_or_default();
-            match line.split_once(':') {
-                Some((label, rest)) if is_identifier(label.trim()) => {
-                    defs.insert(label.trim().to_string());
-                    rest.to_string()
-                }
-                _ => line.to_string(),
-            }
-        }
         other => other.to_string(),
     };
-    let is_symbol_char = |c: char| c.is_ascii_alphanumeric() || "_#$@.".contains(c);
-    for word in text.split(|c: char| !is_symbol_char(c)) {
-        let global = word.split('.').next().unwrap_or_default();
-        if is_identifier(global) {
-            refs.push(global.to_string());
+    for line in text.lines() {
+        let code = code_of_line(line);
+        let (label, rest) = split_label(&code);
+        if let Some(label) = label {
+            defs.insert(label.to_string());
         }
+        refs.extend(symbol_words(rest).map(str::to_string));
     }
 }
 
@@ -314,7 +330,7 @@ mod tests {
             calls.call(name);
         }
         assert_eq!(
-            labels(&registry.generate_used(&[&calls.get_main_instrs()])),
+            labels(&registry.generate_used(&[&calls.get_main_instrs()]).code),
             [
                 "Golf:", "Alpha:", "EchoV2:", "Hotel:", "Bravo:", "Foxtrot:", "Charlie:", "Delta:",
             ]
@@ -370,9 +386,22 @@ mod tests {
         let mut main = Asm::new();
         main.label("Main").call("First").jp("Main");
 
-        let out = text(&registry.generate_used(&[&main.get_main_instrs()]));
+        let used = registry.generate_used(&[&main.get_main_instrs()]);
+        let out = text(&used.code);
         let defined: Vec<&str> = out.lines().filter(|l| l.ends_with(':')).collect();
         assert_eq!(defined, ["Memcopy:", "Second:", "First:"]);
+        assert!(used.variables.is_empty());
+
+        // UpdateKeys comes with its variables, however it is reached
+        registry.register_user_function("Poll", {
+            let mut body = Asm::new();
+            body.label("Poll").call("UpdateKeys").ret();
+            body.get_main_instrs()
+        });
+        let mut main = Asm::new();
+        main.call("Poll");
+        let used = registry.generate_used(&[&main.get_main_instrs()]);
+        assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
     }
 
     #[test]
@@ -388,7 +417,11 @@ mod tests {
             .ld_a(5)
             .comment("call NotAReference")
             .raw("Raw: dw Target ; NotAReference either")
-            .raw("ld [hl], BLANK_TILE");
+            .raw("ld [hl], BLANK_TILE")
+            // Several lines in one raw instruction: each read on its own (a comment ends
+            // at its line), a `;` in a string is not a comment, strings are not code
+            .raw("ld a, 1 ; one\n    call Helper\nSecond: jp Third")
+            .raw("db \"a;b\", LOW(Fourth), \"NotAReference\"");
         let mut refs = Vec::new();
         let mut defs = BTreeSet::new();
         for instr in asm.get_main_instrs() {
@@ -403,12 +436,26 @@ mod tests {
             "Tiles",
             "Target",
             "BLANK_TILE",
+            "Helper",
+            "Third",
+            "Fourth",
         ] {
             assert!(refs.iter().any(|r| r == name), "{} not in {:?}", name, refs);
         }
-        for name in ["Start", "Raw", "loop", "local", "NotAReference", "5"] {
+        for name in [
+            "Start",
+            "Raw",
+            "Second",
+            "loop",
+            "local",
+            "NotAReference",
+            "5",
+        ] {
             assert!(!refs.iter().any(|r| r == name), "{} in {:?}", name, refs);
         }
-        assert_eq!(defs.into_iter().collect::<Vec<_>>(), ["Raw", "Start"]);
+        assert_eq!(
+            defs.into_iter().collect::<Vec<_>>(),
+            ["Raw", "Second", "Start"]
+        );
     }
 }

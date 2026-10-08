@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::gb_asm::Instr;
+use crate::gb_std::graphics::utility::cp_in_memory;
 
 /// Unique identifier for a tile or tileset
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -249,21 +250,17 @@ impl TileManager {
         asm.get_main_instrs()
     }
 
-    /// Generate memcopy calls for the Main chunk
+    /// Generate the code that copies every blob to VRAM, in creation order
+    ///
+    /// An empty blob (no tiles, a file of 0 tiles, a tilemap with no rows) is not copied:
+    /// `Memcopy` copies at least one byte, so a length of 0 would copy 64 KiB (B27). Its
+    /// labels are still emitted, with nothing between them.
     pub(crate) fn generate_memcopy_calls(&self) -> Vec<Instr> {
-        use crate::gb_asm::Asm;
-
-        let mut asm = Asm::new();
-
-        for tile in self.tiles.values() {
-            let dest_addr = format!("${:04X}", tile.vram_address);
-            asm.ld_de_label(&tile.name)
-                .ld_hl_label(&dest_addr)
-                .ld_bc_label(&format!("{}End - {}", tile.name, tile.name))
-                .call("Memcopy");
-        }
-
-        asm.get_main_instrs()
+        self.tiles
+            .values()
+            .filter(|tile| tile.source.tile_count() > 0)
+            .flat_map(|tile| cp_in_memory(&tile.name, &format!("${:04X}", tile.vram_address)))
+            .collect()
     }
 
     /// Check if any tiles have been added

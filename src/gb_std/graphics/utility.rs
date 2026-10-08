@@ -42,6 +42,12 @@ pub fn add_tilemap(label: &str, tilemap: &[[u8; 32]]) -> Vec<Instr> {
     asm.label(&format!("{}End", label));
     asm.get_main_instrs()
 }
+
+/// Copy the data between `label` and `{label}End` to `addr` with [`memcopy`]
+///
+/// The data must not be empty: `Memcopy` copies at least one byte, so a length of 0
+/// copies 64 KiB over WRAM, the stack and the I/O registers. The length is only known
+/// once assembled, so it cannot be checked here; `RustBoy` skips its empty blobs.
 pub fn cp_in_memory(label: &str, addr: &str) -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.ld_de_label(label)
@@ -50,7 +56,13 @@ pub fn cp_in_memory(label: &str, addr: &str) -> Vec<Instr> {
         .call("Memcopy");
     asm.get_main_instrs()
 }
-// Memcopy function
+
+/// The `Memcopy` routine: copy `bc` bytes from `de` to `hl`
+///
+/// - In: `de` = source, `hl` = destination, `bc` = length, **at least 1**: it is a
+///   do-while loop, so a length of 0 copies 64 KiB.
+/// - Out: `de` and `hl` point after the copied bytes, `bc` = 0.
+/// - Changes: `a` and the flags.
 pub fn memcopy() -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.comment("Copy bytes from one area to another");
@@ -59,11 +71,11 @@ pub fn memcopy() -> Vec<Instr> {
     asm.comment("@param bc: length");
     asm.label("Memcopy");
     asm.ld_a_addr_reg(Register::DE);
-    asm.ld_hli_label("a");
-    asm.inc_label("de");
-    asm.dec_label("bc");
-    asm.ld_a_label("b");
-    asm.or_label("a", "c");
+    asm.ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A));
+    asm.inc(Operand::Reg(Register::DE));
+    asm.dec(Operand::Reg(Register::BC));
+    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
+    asm.or(Operand::Reg(Register::A), Operand::Reg(Register::C));
     asm.jp_cond(Condition::NZ, "Memcopy");
     asm.ret();
     asm.get_main_instrs()
@@ -101,19 +113,29 @@ pub fn wait_not_vblank() -> Vec<Instr> {
     asm.get_main_instrs()
 }
 
-// Convert a pixel position to a tilemap address
-// hl = $9800 + X + Y * 32
-// @param b: X
-// @param c: Y
-// @return hl: tile address
+/// The `GetTileByPixel` routine: the background tile under a pixel
+///
+/// This is the only `GetTileByPixel`: `RustBoy` emits this one too
+/// (`BuiltinFunction::GetTileByPixel`). Its contract:
+/// - In: `b` = X and `c` = Y, in pixels on the background map at `$9800` (0 to 255; the
+///   screen pixel when `rSCX` and `rSCY` are 0). `get_pivot` (of a `gb_std` `Sprite`, or
+///   of the `RustBoy` sprite manager) loads them from a sprite's position.
+/// - Out: `hl` = the address of that tile in the map, `$9800 + (Y / 8) * 32 + X / 8`,
+///   and `a` = the tile index stored there (`[hl]`). So a caller can test the tile at
+///   once (`IfConst`, `IfA`, `IfCall`), then change it through `hl` (`TileRef`).
+/// - Changes: `bc` and the flags; `de` is kept.
+///
+/// It reads VRAM: call it while VRAM is accessible (in VBlank, or with the LCD off).
 pub fn get_tile_by_pixel() -> Vec<Instr> {
     let mut asm = Asm::new();
 
-    asm.comment("Convert a pixel position to a tilemap address");
-    asm.comment("hl = $9800 + X + Y * 32");
+    asm.comment("Convert a pixel position to a tilemap address and read the tile there");
+    asm.comment("hl = $9800 + X / 8 + (Y / 8) * 32");
     asm.comment("@param b: X");
     asm.comment("@param c: Y");
     asm.comment("@return hl: tile address");
+    asm.comment("@return a: tile index at that address");
+    asm.comment("changes bc");
     asm.label("GetTileByPixel");
 
     // First, we need to divide by 8 to convert a pixel position to a tile position.
@@ -141,9 +163,12 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     asm.sub(Operand::Reg(Register::A), Operand::Reg(Register::L));
     asm.ld(Operand::Reg(Register::H), Operand::Reg(Register::A));
 
-    // Add the offset to the tilemap's base address, and we are done!
+    // Add the offset to the tilemap's base address
     asm.ld_bc_label("$9800");
     asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
+
+    // And read the tile there
+    asm.ld_a_addr_reg(Register::HL);
     asm.ret();
 
     asm.get_main_instrs()
@@ -160,4 +185,92 @@ pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
     }
     asm.ret();
     asm.get_main_instrs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gb_asm::test_cpu::TestCpu;
+    use crate::gb_std::graphics::sprites::Sprite;
+
+    /// The tile index the tests store at map address `addr`: different for neighbours
+    fn tile_at(addr: u16) -> u8 {
+        (addr % 251) as u8
+    }
+
+    /// A CPU whose background map at `$9800` holds [`tile_at`]
+    fn cpu_with_map() -> TestCpu {
+        let mut cpu = TestCpu::default();
+        for addr in 0x9800..0x9C00 {
+            cpu.mem.insert(format!("${:04X}", addr), tile_at(addr));
+        }
+        cpu
+    }
+
+    #[test]
+    fn test_get_tile_by_pixel_returns_the_address_and_the_tile() {
+        // B23: one contract. In: b = X, c = Y (pixels). Out: hl = $9800 + (Y/8)*32 + X/8,
+        // a = [hl]; de kept. (The gb_std copy did not return the tile in a.)
+        let routine = get_tile_by_pixel();
+        let positions = [0u8, 1, 7, 8, 9, 100, 143, 159, 255];
+        for x in positions {
+            for y in positions {
+                let mut cpu = cpu_with_map();
+                (cpu.b, cpu.c, cpu.d, cpu.e) = (x, y, 0x12, 0x34);
+                cpu.run(&routine);
+                let addr = 0x9800 + u16::from(y / 8) * 32 + u16::from(x / 8);
+                let hl = u16::from_be_bytes([cpu.h, cpu.l]);
+                assert_eq!(hl, addr, "hl for X {} Y {}", x, y);
+                assert_eq!(cpu.a, tile_at(addr), "a for X {} Y {}", x, y);
+                assert_eq!((cpu.d, cpu.e), (0x12, 0x34), "de kept");
+                assert!(cpu.trace.is_empty(), "no writes: {:?}", cpu.trace);
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_pivot_then_get_tile_by_pixel_then_a_tile_test() {
+        // The gb_std callers (unbricked_std): get_pivot, GetTileByPixel, then a routine
+        // that tests the tile in a, with no `ld a, [hl]` in between
+        let ball = Sprite::new(1, 0, 0, 0, 0);
+        let mut code = ball.get_pivot(0, 1);
+        let mut asm = Asm::new();
+        asm.call("GetTileByPixel").call("IsWallTile").ret();
+        code.extend(asm.get_main_instrs());
+        code.extend(get_tile_by_pixel());
+        code.extend(is_specific_tile("IsWallTile", &["WALL"]));
+
+        // The ball at OAM X 48, Y 57: the pixel above it is (40, 40), map tile (5, 5)
+        let wall_addr = 0x9800 + 5 * 32 + 5;
+        for (tile, is_wall) in [(3u8, true), (4, false)] {
+            let mut cpu = cpu_with_map();
+            cpu.mem.insert("_OAMRAM+4".to_string(), 57);
+            cpu.mem.insert("_OAMRAM+5".to_string(), 48);
+            cpu.mem.insert(format!("${:04X}", wall_addr), tile);
+            cpu.consts.insert("WALL".to_string(), 3);
+            cpu.run(&code);
+            assert_eq!(cpu.zero, is_wall, "tile {}", tile);
+            assert_eq!(u16::from_be_bytes([cpu.h, cpu.l]), wall_addr);
+        }
+    }
+
+    #[test]
+    fn test_memcopy_copies_bc_bytes() {
+        let mut asm = Asm::new();
+        asm.emit_all(cp_in_memory("Data", "$C000")).ret();
+        asm.emit_all(memcopy());
+        let mut cpu = TestCpu::default();
+        cpu.consts16.insert("DataEnd - Data".to_string(), 3);
+        for i in 0..4 {
+            cpu.mem.insert(format!("Data+{}", i), 10 + i);
+        }
+        cpu.run(&asm.get_main_instrs());
+        let written: Vec<_> = ["$C000", "$C001", "$C002"]
+            .iter()
+            .map(|addr| cpu.mem.get(addr).copied())
+            .collect();
+        assert_eq!(written, [Some(10), Some(11), Some(12)]);
+        assert_eq!(cpu.mem.get("$C003"), None, "3 bytes only");
+        assert_eq!((cpu.b, cpu.c), (0, 0));
+    }
 }

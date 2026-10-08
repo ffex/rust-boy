@@ -1,8 +1,11 @@
-//! Builtin function registry for auto-inclusion
+//! Function registry: the builtin routines and the user functions, and which of them
+//! `build()` emits
 
 use std::collections::BTreeSet;
 
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, Operand, Register, is_identifier};
+use crate::gb_std::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
+use crate::gb_std::inputs::update_keys;
 
 /// Builtin functions that can be auto-included
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -15,13 +18,24 @@ pub enum BuiltinFunction {
     WaitNotVBlank,
     /// Update keyboard input state
     UpdateKeys,
-    /// Convert pixel position to tile address
+    /// The background tile under a pixel: its address in `hl`, its index in `a`
+    /// (see `gb_std::graphics::utility::get_tile_by_pixel` for the contract)
     GetTileByPixel,
     /// Delay loop using BC as counter
     Delay,
 }
 
 impl BuiltinFunction {
+    /// Every builtin, in the order `build()` emits them
+    const ALL: [BuiltinFunction; 6] = [
+        BuiltinFunction::Memcopy,
+        BuiltinFunction::WaitVBlank,
+        BuiltinFunction::WaitNotVBlank,
+        BuiltinFunction::UpdateKeys,
+        BuiltinFunction::GetTileByPixel,
+        BuiltinFunction::Delay,
+    ];
+
     /// Get the label name for this function
     pub fn label(&self) -> &'static str {
         match self {
@@ -36,39 +50,42 @@ impl BuiltinFunction {
 
     /// Try to get a BuiltinFunction from its label name
     pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "Memcopy" => Some(BuiltinFunction::Memcopy),
-            "WaitVBlank" => Some(BuiltinFunction::WaitVBlank),
-            "WaitNotVBlank" => Some(BuiltinFunction::WaitNotVBlank),
-            "UpdateKeys" => Some(BuiltinFunction::UpdateKeys),
-            "GetTileByPixel" => Some(BuiltinFunction::GetTileByPixel),
-            "Delay" => Some(BuiltinFunction::Delay),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|func| func.label() == name)
     }
 
     /// Generate the assembly instructions for this function
+    ///
+    /// Every routine but `Delay` is the `gb_std` one: a routine exists once (B23).
     pub fn generate(&self) -> Vec<Instr> {
         match self {
-            BuiltinFunction::Memcopy => generate_memcopy(),
-            BuiltinFunction::WaitVBlank => generate_wait_vblank(),
-            BuiltinFunction::WaitNotVBlank => generate_wait_not_vblank(),
-            BuiltinFunction::UpdateKeys => generate_update_keys(),
-            BuiltinFunction::GetTileByPixel => generate_get_tile_by_pixel(),
+            BuiltinFunction::Memcopy => memcopy(),
+            BuiltinFunction::WaitVBlank => wait_vblank(),
+            BuiltinFunction::WaitNotVBlank => wait_not_vblank(),
+            BuiltinFunction::UpdateKeys => update_keys(),
+            BuiltinFunction::GetTileByPixel => get_tile_by_pixel(),
             BuiltinFunction::Delay => generate_delay(),
         }
     }
 }
 
-/// Registry for tracking which functions are used (both builtin and user-defined)
+/// A function a name refers to
+#[derive(Clone, Copy)]
+enum Function {
+    Builtin(BuiltinFunction),
+    /// Index in [`FunctionRegistry::user_functions`]
+    User(usize),
+}
+
+/// The builtin and user functions of a program, and the ones that must be emitted even
+/// if no code calls them
 #[derive(Default)]
 pub struct FunctionRegistry {
-    /// Builtin functions that have been marked as used (emitted in enum order)
-    used_builtins: BTreeSet<BuiltinFunction>,
+    /// Builtins emitted even if no code calls them (`RustBoy::use_function`)
+    forced_builtins: BTreeSet<BuiltinFunction>,
     /// User-defined functions as (name, instructions), in registration order
     user_functions: Vec<(String, Vec<Instr>)>,
-    /// User functions that have been called (for validation)
-    used_user_functions: BTreeSet<String>,
+    /// User functions emitted even if no code calls them (`RustBoy::keep_function`)
+    kept_user_functions: BTreeSet<String>,
 }
 
 impl FunctionRegistry {
@@ -76,9 +93,25 @@ impl FunctionRegistry {
         Self::default()
     }
 
-    /// Mark a builtin function as used
+    /// Emit a builtin function even if no code calls it
     pub fn use_function(&mut self, func: BuiltinFunction) {
-        self.used_builtins.insert(func);
+        self.forced_builtins.insert(func);
+    }
+
+    /// Emit the function `name` (a user function, or else a builtin) even if no code
+    /// calls it. Returns false if there is no such function.
+    pub fn keep_function(&mut self, name: &str) -> bool {
+        match self.resolve(name) {
+            Some(Function::User(_)) => {
+                self.kept_user_functions.insert(name.to_string());
+                true
+            }
+            Some(Function::Builtin(func)) => {
+                self.forced_builtins.insert(func);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Register a user-defined function
@@ -91,228 +124,142 @@ impl FunctionRegistry {
         }
     }
 
-    fn has_user_function(&self, name: &str) -> bool {
-        self.user_functions.iter().any(|(n, _)| n == name)
+    /// The function `name` refers to: a user function, or else a builtin (a user
+    /// function with the name of a builtin replaces it)
+    fn resolve(&self, name: &str) -> Option<Function> {
+        match self.user_functions.iter().position(|(n, _)| n == name) {
+            Some(index) => Some(Function::User(index)),
+            None => BuiltinFunction::from_name(name).map(Function::Builtin),
+        }
     }
 
     /// Check if a function exists (builtin or user-defined)
     pub fn function_exists(&self, name: &str) -> bool {
-        BuiltinFunction::from_name(name).is_some() || self.has_user_function(name)
-    }
-
-    /// Mark a function as called and auto-register if builtin
-    /// Returns true if the function exists, false otherwise
-    pub fn call_function(&mut self, name: &str) -> bool {
-        // Check if it's a builtin function
-        if let Some(builtin) = BuiltinFunction::from_name(name) {
-            self.used_builtins.insert(builtin);
-            return true;
-        }
-
-        // Check if it's a user-defined function
-        if self.has_user_function(name) {
-            self.used_user_functions.insert(name.to_string());
-            return true;
-        }
-
-        false
+        self.resolve(name).is_some()
     }
 
     /// Get list of all registered function names (for error messages)
     pub fn available_functions(&self) -> Vec<String> {
-        let mut names: Vec<String> = vec![
-            "Memcopy".to_string(),
-            "WaitVBlank".to_string(),
-            "WaitNotVBlank".to_string(),
-            "UpdateKeys".to_string(),
-            "GetTileByPixel".to_string(),
-            "Delay".to_string(),
-        ];
+        let mut names: Vec<String> = BuiltinFunction::ALL
+            .iter()
+            .map(|func| func.label().to_string())
+            .collect();
         names.extend(self.user_functions.iter().map(|(n, _)| n.clone()));
         names.sort();
+        names.dedup();
         names
     }
 
-    /// Generate all used functions (builtin and user-defined)
-    pub fn generate_all(&self) -> Vec<Instr> {
+    /// The functions a program needs, given its code outside the functions (`code`):
+    /// every function that code refers to, then every function those refer to, and so
+    /// on, plus the forced builtins and kept user functions (B24, B26)
+    ///
+    /// A function is found by its name anywhere in an instruction (`call`, `jp`, `jr`,
+    /// `ld hl, Name`, `dw Name`, a raw line), so a call made through `Call`, `IfCall`, a
+    /// user function body or raw code is seen. A name only counts once, so each function
+    /// is emitted once; and none is emitted whose label `code` already defines (its own
+    /// copy of a routine), nor a builtin whose label an emitted user function defines.
+    ///
+    /// The order is fixed: builtins in [`BuiltinFunction`] order, then user functions in
+    /// registration order.
+    pub fn generate_used(&self, code: &[&[Instr]]) -> Vec<Instr> {
+        let mut defined = BTreeSet::new();
+        let mut pending = Vec::new();
+        for instrs in code {
+            for instr in instrs.iter() {
+                symbols(instr, &mut pending, &mut defined);
+            }
+        }
+        pending.extend(self.kept_user_functions.iter().cloned());
+
+        let mut builtins = BTreeSet::new();
+        let mut users = BTreeSet::new();
+        // Labels defined by the emitted user functions
+        let mut user_labels = BTreeSet::new();
+        let mut visit = |function: Function, pending: &mut Vec<String>| match function {
+            Function::Builtin(func) => {
+                if builtins.insert(func) {
+                    for instr in func.generate() {
+                        symbols(&instr, pending, &mut BTreeSet::new());
+                    }
+                }
+            }
+            Function::User(index) => {
+                if users.insert(index) {
+                    for instr in &self.user_functions[index].1 {
+                        symbols(instr, pending, &mut user_labels);
+                    }
+                }
+            }
+        };
+        for &func in &self.forced_builtins {
+            if !defined.contains(func.label()) {
+                visit(Function::Builtin(func), &mut pending);
+            }
+        }
+        while let Some(name) = pending.pop() {
+            if defined.contains(&name) {
+                continue;
+            }
+            if let Some(function) = self.resolve(&name) {
+                visit(function, &mut pending);
+            }
+        }
+
         let mut all_instrs = Vec::new();
-
-        // Generate builtin functions
-        for func in &self.used_builtins {
-            all_instrs.extend(func.generate());
+        for func in builtins {
+            if !user_labels.contains(func.label()) {
+                all_instrs.extend(func.generate());
+            }
         }
-
-        // Generate user-defined functions
-        for (_, body) in &self.user_functions {
-            all_instrs.extend(body.clone());
+        for index in users {
+            all_instrs.extend(self.user_functions[index].1.iter().cloned());
         }
-
         all_instrs
     }
 }
 
+/// Add to `refs` the global symbols `instr` refers to, and to `defs` the global label it
+/// defines
+///
+/// A local symbol (`.end_if_0`) is skipped, and `Scope.local` refers to `Scope`.
+/// Comments, sections and file names refer to nothing.
+fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
+    let text = match instr {
+        Instr::Label { name } => {
+            if !name.starts_with('.') {
+                defs.insert(name.clone());
+            }
+            return;
+        }
+        Instr::Comment { .. }
+        | Instr::Section { .. }
+        | Instr::Include { .. }
+        | Instr::Incbin { .. } => return,
+        Instr::Def { value, .. } => value.clone(),
+        Instr::Raw { line } => {
+            // Up to a comment; `Name:` (or `Name::`) at the start defines a label
+            let line = line.split(';').next().unwrap_or_default();
+            match line.split_once(':') {
+                Some((label, rest)) if is_identifier(label.trim()) => {
+                    defs.insert(label.trim().to_string());
+                    rest.to_string()
+                }
+                _ => line.to_string(),
+            }
+        }
+        other => other.to_string(),
+    };
+    let is_symbol_char = |c: char| c.is_ascii_alphanumeric() || "_#$@.".contains(c);
+    for word in text.split(|c: char| !is_symbol_char(c)) {
+        let global = word.split('.').next().unwrap_or_default();
+        if is_identifier(global) {
+            refs.push(global.to_string());
+        }
+    }
+}
+
 // Function implementations
-
-fn generate_memcopy() -> Vec<Instr> {
-    let mut asm = Asm::new();
-
-    asm.comment("Copy bytes from one area to another");
-    asm.comment("@param de: source");
-    asm.comment("@param hl: destination");
-    asm.comment("@param bc: length");
-    asm.label("Memcopy");
-    asm.ld_a_addr_reg(Register::DE);
-    asm.ld_hli_label("a");
-    asm.inc_label("de");
-    asm.dec_label("bc");
-    asm.ld_a_label("b");
-    asm.or_label("a", "c");
-    asm.jp_cond(Condition::NZ, "Memcopy");
-    asm.ret();
-
-    asm.get_main_instrs()
-}
-
-fn generate_wait_vblank() -> Vec<Instr> {
-    let mut asm = Asm::new();
-
-    asm.label("WaitVBlank");
-    asm.ld_a_addr_def("rLY");
-    asm.cp_imm(144);
-    asm.jp_cond(Condition::C, "WaitVBlank");
-    asm.ret();
-
-    asm.get_main_instrs()
-}
-
-fn generate_wait_not_vblank() -> Vec<Instr> {
-    let mut asm = Asm::new();
-
-    asm.label("WaitNotVBlank");
-    asm.ld_a_addr_def("rLY");
-    asm.cp_imm(144);
-    asm.jp_cond(Condition::NC, "WaitNotVBlank");
-    asm.ret();
-
-    asm.get_main_instrs()
-}
-
-fn generate_update_keys() -> Vec<Instr> {
-    let mut asm = Asm::new();
-
-    asm.label("UpdateKeys");
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::Label("P1F_GET_BTN".to_string()),
-    );
-    asm.call(".onenibble");
-    asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::Label("P1F_GET_DPAD".to_string()),
-    );
-    asm.call(".onenibble");
-    asm.swap(Operand::Reg(Register::A));
-    asm.xor(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::Label("P1F_GET_NONE".to_string()),
-    );
-    asm.ldh(
-        Operand::AddrDef("rP1".to_string()),
-        Operand::Reg(Register::A),
-    );
-
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("wCurKeys".to_string()),
-    );
-    asm.xor(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.and(Operand::Reg(Register::B));
-    asm.ld(
-        Operand::AddrDef("wNewKeys".to_string()),
-        Operand::Reg(Register::A),
-    );
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.ld(
-        Operand::AddrDef("wCurKeys".to_string()),
-        Operand::Reg(Register::A),
-    );
-    asm.ret();
-
-    asm.label(".onenibble");
-    asm.ldh(
-        Operand::AddrDef("rP1".to_string()),
-        Operand::Reg(Register::A),
-    );
-    asm.call(".knowret");
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.or(Operand::Reg(Register::A), Operand::Imm(0xF0));
-
-    asm.label(".knowret");
-    asm.ret();
-
-    asm.get_main_instrs()
-}
-
-fn generate_get_tile_by_pixel() -> Vec<Instr> {
-    let mut asm = Asm::new();
-
-    asm.comment("Convert a pixel position to a tilemap address");
-    asm.comment("hl = $9800 + X + Y * 32");
-    asm.comment("@param b: X");
-    asm.comment("@param c: Y");
-    asm.comment("@return hl: tile address");
-    asm.label("GetTileByPixel");
-
-    // First, we need to divide by 8 to convert a pixel position to a tile position.
-    // After this we want to multiply the Y position by 32.
-    // These operations effectively cancel out so we only need to mask the Y value.
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::C));
-    asm.and(Operand::Imm(0b11111000));
-    asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
-    asm.ld(Operand::Reg(Register::H), Operand::Imm(0));
-
-    // Now we have the position * 8 in hl
-    asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::HL)); // position * 16
-    asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::HL)); // position * 32
-
-    // Convert the X position to an offset.
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.srl(Operand::Reg(Register::A)); // a / 2
-    asm.srl(Operand::Reg(Register::A)); // a / 4
-    asm.srl(Operand::Reg(Register::A)); // a / 8
-
-    // Add the two offsets together.
-    asm.add(Operand::Reg(Register::A), Operand::Reg(Register::L));
-    asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
-    asm.adc(Operand::Reg(Register::A), Operand::Reg(Register::H));
-    asm.sub(Operand::Reg(Register::A), Operand::Reg(Register::L));
-    asm.ld(Operand::Reg(Register::H), Operand::Reg(Register::A));
-
-    // Add the offset to the tilemap's base address, and we are done!
-    asm.ld_bc_label("$9800");
-    asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
-
-    asm.ld_a_addr_reg(Register::HL); //done to help, fit good in unbreaked
-    asm.ret();
-
-    asm.get_main_instrs()
-}
 
 fn generate_delay() -> Vec<Instr> {
     let mut asm = Asm::new();
@@ -339,6 +286,15 @@ mod tests {
         asm.get_main_instrs()
     }
 
+    /// The labels of `instrs`, without the `ret`s
+    fn labels(instrs: &[Instr]) -> Vec<String> {
+        instrs
+            .iter()
+            .map(|instr| instr.to_string())
+            .filter(|line| line != "ret")
+            .collect()
+    }
+
     #[test]
     fn test_user_functions_keep_registration_order() {
         // Eight names in neither alphabetical nor any hash order (1 chance in 40320)
@@ -352,19 +308,107 @@ mod tests {
         // Registering a name again replaces the body but keeps its position
         registry.register_user_function("Echo", function_body("EchoV2"));
 
-        let labels: Vec<String> = registry
-            .generate_all()
-            .iter()
-            .map(|instr| instr.to_string())
-            .filter(|line| line != "ret")
-            .collect();
+        // All of them called, in another order
+        let mut calls = Asm::new();
+        for name in names.iter().rev() {
+            calls.call(name);
+        }
         assert_eq!(
-            labels,
+            labels(&registry.generate_used(&[&calls.get_main_instrs()])),
             [
                 "Golf:", "Alpha:", "EchoV2:", "Hotel:", "Bravo:", "Foxtrot:", "Charlie:", "Delta:",
             ]
         );
         assert!(registry.function_exists("Alpha"));
         assert!(!registry.function_exists("Missing"));
+    }
+
+    /// The text of `instrs`, one instruction per line
+    fn text(instrs: &[Instr]) -> String {
+        instrs.iter().map(|instr| format!("{}\n", instr)).collect()
+    }
+
+    #[test]
+    fn test_builtins_are_the_gb_std_routines() {
+        // B23: each routine exists once; rust_boy's GetTileByPixel had another contract
+        // than gb_std's (it also loaded the tile into a)
+        let gb_std = [
+            (BuiltinFunction::Memcopy, memcopy()),
+            (BuiltinFunction::WaitVBlank, wait_vblank()),
+            (BuiltinFunction::WaitNotVBlank, wait_not_vblank()),
+            (BuiltinFunction::UpdateKeys, update_keys()),
+            (BuiltinFunction::GetTileByPixel, get_tile_by_pixel()),
+        ];
+        for (builtin, routine) in gb_std {
+            assert_eq!(text(&builtin.generate()), text(&routine), "{:?}", builtin);
+        }
+        for builtin in BuiltinFunction::ALL {
+            assert_eq!(BuiltinFunction::from_name(builtin.label()), Some(builtin));
+            let label = format!("{}:", builtin.label());
+            let body = text(&builtin.generate());
+            assert_eq!(body.lines().filter(|line| *line == label).count(), 1);
+        }
+    }
+
+    #[test]
+    fn test_used_functions_are_found_through_other_functions() {
+        // Main -> First -> (Second, Memcopy); Second -> Second; Unused -> Delay
+        let mut registry = FunctionRegistry::new();
+        for (name, calls) in [
+            ("Unused", vec!["Delay"]),
+            ("Second", vec!["Second"]),
+            ("First", vec!["Second", "Memcopy"]),
+        ] {
+            let mut body = Asm::new();
+            body.label(name);
+            for callee in calls {
+                body.call(callee);
+            }
+            body.ret();
+            registry.register_user_function(name, body.get_main_instrs());
+        }
+        let mut main = Asm::new();
+        main.label("Main").call("First").jp("Main");
+
+        let out = text(&registry.generate_used(&[&main.get_main_instrs()]));
+        let defined: Vec<&str> = out.lines().filter(|l| l.ends_with(':')).collect();
+        assert_eq!(defined, ["Memcopy:", "Second:", "First:"]);
+    }
+
+    #[test]
+    fn test_symbols_of_an_instruction() {
+        let mut asm = Asm::new();
+        asm.label("Start")
+            .label(".loop")
+            .call("Func")
+            .jp_cond(Condition::NZ, ".loop")
+            .jr("Other.local")
+            .ld_hl_label("Table + 2")
+            .ld_bc_label("TilesEnd - Tiles")
+            .ld_a(5)
+            .comment("call NotAReference")
+            .raw("Raw: dw Target ; NotAReference either")
+            .raw("ld [hl], BLANK_TILE");
+        let mut refs = Vec::new();
+        let mut defs = BTreeSet::new();
+        for instr in asm.get_main_instrs() {
+            symbols(&instr, &mut refs, &mut defs);
+        }
+        // Mnemonics and registers are words too (`call`, `hl`): they never name a function
+        for name in [
+            "Func",
+            "Other",
+            "Table",
+            "TilesEnd",
+            "Tiles",
+            "Target",
+            "BLANK_TILE",
+        ] {
+            assert!(refs.iter().any(|r| r == name), "{} not in {:?}", name, refs);
+        }
+        for name in ["Start", "Raw", "loop", "local", "NotAReference", "5"] {
+            assert!(!refs.iter().any(|r| r == name), "{} in {:?}", name, refs);
+        }
+        assert_eq!(defs.into_iter().collect::<Vec<_>>(), ["Raw", "Start"]);
     }
 }

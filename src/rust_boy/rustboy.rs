@@ -201,15 +201,63 @@ impl RustBoy {
         self
     }
 
-    /// Mark a builtin function as used (will be auto-included)
+    /// Emit a builtin function even if no code calls it
+    ///
+    /// Not needed for a builtin the program calls: `build()` emits every builtin and
+    /// user function that the generated code refers to (see [`RustBoy::keep_function`]).
     pub fn use_function(&mut self, func: BuiltinFunction) -> &mut Self {
         self.functions.use_function(func);
         self
     }
 
+    /// Emit the function `name` (a user function or a builtin) even if no code calls it
+    ///
+    /// `build()` emits only the functions the program uses: the ones the start-up code,
+    /// the main loop, the code passed to [`RustBoy::raw`] or the animations refer to, and
+    /// the ones those functions refer to, and so on. A function is found by its name
+    /// anywhere in an instruction: `call`, `jp`, `IfCall`, `Call`, `ld hl, Name`,
+    /// `dw Name`, a raw line. So keep only a function that is called from code `build()`
+    /// does not see: asm added to its output afterwards, or an `INCLUDE`d file.
+    ///
+    /// # Panics
+    /// If there is no function `name`: define it first.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_asm::Asm;
+    /// use rust_boy::rust_boy::RustBoy;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// let mut body = Asm::new();
+    /// body.label("OnInterrupt").ret();
+    /// gb.define_function("OnInterrupt", body.get_main_instrs());
+    /// assert!(!gb.build().contains("OnInterrupt:"), "never called");
+    ///
+    /// gb.keep_function("OnInterrupt");
+    /// assert!(gb.build().contains("OnInterrupt:"));
+    /// ```
+    pub fn keep_function(&mut self, name: &str) -> &mut Self {
+        if !self.functions.keep_function(name) {
+            self.unknown_function(name);
+        }
+        self
+    }
+
+    /// Panics: there is no function `name`
+    fn unknown_function(&self, name: &str) -> ! {
+        let available = self.functions.available_functions();
+        panic!(
+            "Unknown function '{}'. Available functions: {}",
+            name,
+            available.join(", ")
+        );
+    }
+
     /// Register a user-defined function from raw instructions
     ///
     /// The function body should include its own label as the first instruction.
+    /// `build()` emits it only if the program uses it (see [`RustBoy::keep_function`]).
+    /// A function with the name of a builtin (`Memcopy`, ...) replaces that builtin.
     ///
     /// # Example
     /// ```ignore
@@ -224,6 +272,7 @@ impl RustBoy {
     ///
     /// This method automatically adds the function label and ret instruction.
     /// Use this when building functions from control flow structures like If, IfConst, etc.
+    /// `build()` emits it only if the program uses it (see [`RustBoy::keep_function`]).
     ///
     /// # Example
     /// ```ignore
@@ -245,15 +294,15 @@ impl RustBoy {
     /// Generate a call instruction with validation
     ///
     /// This method validates that the function exists (either as a builtin or
-    /// user-defined function) and automatically registers builtin functions
-    /// when they are called.
+    /// user-defined function). Wherever the call ends up in the program, `build()` emits
+    /// the function, like any function the program refers to.
     ///
     /// # Panics
     /// Panics if the function doesn't exist.
     ///
     /// # Example
     /// ```ignore
-    /// // Automatically registers GetTileByPixel as used
+    /// // GetTileByPixel is emitted, because the main loop calls it
     /// let call = gb.call("GetTileByPixel");
     /// gb.add_to_main_loop(call);
     ///
@@ -263,13 +312,8 @@ impl RustBoy {
     /// gb.add_to_main_loop(call);
     /// ```
     pub fn call(&mut self, name: &str) -> Vec<Instr> {
-        if !self.functions.call_function(name) {
-            let available = self.functions.available_functions();
-            panic!(
-                "Unknown function '{}'. Available functions: {}",
-                name,
-                available.join(", ")
-            );
+        if !self.functions.function_exists(name) {
+            self.unknown_function(name);
         }
         vec![Instr::Call {
             target: JumpTarget::Label(name.to_string()),
@@ -291,13 +335,8 @@ impl RustBoy {
     /// gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(1)));
     /// ```
     pub fn call_args(&mut self, name: &str, setup: Vec<Instr>) -> &mut Self {
-        if !self.functions.call_function(name) {
-            let available = self.functions.available_functions();
-            panic!(
-                "Unknown function '{}'. Available functions: {}",
-                name,
-                available.join(", ")
-            );
+        if !self.functions.function_exists(name) {
+            self.unknown_function(name);
         }
         self.main_loop_code.extend(setup);
         self.main_loop_code.push(Instr::Call {
@@ -338,17 +377,13 @@ impl RustBoy {
         // Entry point
         asm.label("EntryPoint");
         asm.call("WaitVBlank");
-        self.functions.use_function(BuiltinFunction::WaitVBlank);
 
         // Turn off screen for safe VRAM access
         asm.ld_a(0);
         asm.ld_addr_def_a("rLCDC");
 
-        // Generate tile memcopy calls (tiles need Memcopy function)
-        if !self.tiles.is_empty() {
-            self.functions.use_function(BuiltinFunction::Memcopy);
-            asm.emit_all(self.tiles.generate_memcopy_calls());
-        }
+        // Copy the tile data to VRAM (empty blobs are skipped, B27)
+        asm.emit_all(self.tiles.generate_memcopy_calls());
 
         // Clear the whole OAM, with or without sprites: objects are always turned on
         // below, and OAM holds garbage at power-on (B28)
@@ -392,7 +427,6 @@ impl RustBoy {
         asm.chunk(Chunk::MainLoop);
 
         asm.label("Main");
-        self.functions.use_function(BuiltinFunction::WaitNotVBlank);
         asm.call("WaitNotVBlank");
         asm.call("WaitVBlank");
 
@@ -411,17 +445,6 @@ impl RustBoy {
         asm.chunk(Chunk::Data);
         asm.emit_all(self.vars.generate_sections());
 
-        // === FUNCTIONS CHUNK ===
-        asm.chunk(Chunk::Functions);
-        asm.emit_all(self.functions.generate_all());
-
-        // Generate animation functions
-        for (name, body) in self.sprites.generate_animation_functions() {
-            // Register function first so it's tracked (though we emit directly)
-            self.functions.register_user_function(&name, Vec::new());
-            asm.emit_all(body);
-        }
-
         // === TILES CHUNK ===
         asm.chunk(Chunk::Tiles);
         asm.emit_all(self.tiles.generate_tile_data());
@@ -435,6 +458,36 @@ impl RustBoy {
         if !existing.is_empty() {
             asm.chunk(Chunk::Main);
             asm.emit_all(existing);
+        }
+
+        // === FUNCTIONS CHUNK ===
+        // Last, once every other chunk is known: the builtins and user functions that
+        // the program refers to, directly or through other functions (B24, B26), then
+        // the animation functions
+        let animations = self.sprites.generate_animation_functions();
+        let mut code: Vec<&[Instr]> = [
+            Chunk::Header,
+            Chunk::Constants,
+            Chunk::Init,
+            Chunk::MainLoop,
+            Chunk::Main,
+            Chunk::Tiles,
+            Chunk::Tilemap,
+            Chunk::Data,
+        ]
+        .iter()
+        .filter_map(|chunk| asm.get_chunk(*chunk))
+        .map(Vec::as_slice)
+        .collect();
+        code.extend(animations.iter().map(|(_, body)| body.as_slice()));
+        let functions = self.functions.generate_used(&code);
+        asm.chunk(Chunk::Functions);
+        asm.emit_all(functions);
+
+        for (name, body) in animations {
+            // Register function first so it's tracked (though we emit directly)
+            self.functions.register_user_function(&name, Vec::new());
+            asm.emit_all(body);
         }
 
         asm
@@ -479,9 +532,6 @@ impl RustBoy {
         if inputs.is_empty() {
             return self;
         }
-
-        // Auto-register UpdateKeys as used
-        self.functions.use_function(BuiltinFunction::UpdateKeys);
 
         // Auto-create input variables required by UpdateKeys
         self.vars.create_u8("wCurKeys", 0);
@@ -671,6 +721,9 @@ mod tests {
             body.label(name).ret();
             gb.define_function(name, body.get_main_instrs());
         }
+        // Called in the other order: functions are emitted in registration order
+        gb.add_to_main_loop(crate::gb_std::flow::Call::new("FuncA"));
+        gb.add_to_main_loop(crate::gb_std::flow::Call::new("FuncB"));
         gb.use_function(BuiltinFunction::Delay);
         gb.use_function(BuiltinFunction::GetTileByPixel);
 
@@ -932,7 +985,7 @@ mod tests {
     // ==================== Labels (B7, B25) ====================
 
     use crate::gb_asm::label_check::assert_labels_ok;
-    use crate::gb_std::flow::If;
+    use crate::gb_std::flow::{Call, If};
     use crate::gb_std::inputs::PadButton;
     use crate::rust_boy::CompositeSpriteId;
 
@@ -1027,8 +1080,11 @@ mod tests {
         )
         .or_else(gb.sprites.move_left_limit(ball, 2, 16));
         gb.define_function_from("FollowPaddle", else_move);
+        gb.add_to_main_loop(Call::new("FollowPaddle"));
 
-        assert_labels_ok(&gb.build());
+        let out = gb.build();
+        assert!(out.contains("FollowPaddle:"));
+        assert_labels_ok(&out);
     }
 
     #[test]
@@ -1190,6 +1246,15 @@ mod tests {
     /// loop starts. `Memcopy` is a stub (the CPU model does not copy blocks): its calls
     /// are in the trace.
     fn run_startup(gb: &mut RustBoy) -> TestCpu {
+        let (code, mut cpu) = startup(gb);
+        cpu.stubs.insert("Memcopy".to_string());
+        cpu.run(&code);
+        cpu
+    }
+
+    /// The start-up code of `gb`, from `EntryPoint` to where the main loop starts, then
+    /// its functions; and a CPU ready to run it
+    fn startup(gb: &mut RustBoy) -> (Vec<Instr>, TestCpu) {
         let lcdc_on = format!(
             "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
             gb.sprite_size().lcdc_flag()
@@ -1204,10 +1269,8 @@ mod tests {
 
         let mut cpu = TestCpu::default();
         cpu.mem.insert("rLY".to_string(), 144); // in VBlank: WaitVBlank returns at once
-        cpu.stubs.insert("Memcopy".to_string());
         cpu.consts.insert(lcdc_on, 0x83);
-        cpu.run(&code);
-        cpu
+        (code, cpu)
     }
 
     /// The memory symbol of OAM byte `i`, as the test CPU names it
@@ -1337,5 +1400,325 @@ mod tests {
                 assert_mem(&cpu, palette, IDENTITY_PALETTE);
             }
         }
+    }
+
+    // ==================== Functions (B23, B24, B26, B27) ====================
+
+    use crate::gb_std::flow::{IfA, IfCall, IfConst, boxed};
+    use crate::gb_std::graphics::tile_ref::TileRef;
+
+    /// How many times `out` defines the global label `name`
+    fn definitions(out: &str, name: &str) -> usize {
+        let label = format!("{}:", name);
+        out.lines().filter(|line| line.trim() == label).count()
+    }
+
+    /// A function `name` that calls each of `callees`
+    fn calling(name: &str, callees: &[&str]) -> Vec<Instr> {
+        let mut body = Asm::new();
+        body.label(name);
+        for callee in callees {
+            body.call(callee);
+        }
+        body.ret();
+        body.get_main_instrs()
+    }
+
+    #[test]
+    fn test_builtins_are_emitted_whatever_calls_them() {
+        // B26: only RustBoy::call / call_args / use_function included a builtin, so one
+        // reached through Call, IfCall, a function body or raw code was missing (rgblink:
+        // undefined symbol)
+        type Program = fn(&mut RustBoy);
+        let paths: [(&str, &str, Program); 6] = [
+            ("Call in the main loop", "GetTileByPixel", |gb| {
+                gb.add_to_main_loop(Call::with_args("GetTileByPixel", Vec::new()));
+            }),
+            ("IfCall in init", "Delay", |gb| {
+                gb.init(IfCall::is_false("Delay", Vec::<Instr>::new()));
+            }),
+            ("Call in a define_function_from body", "Memcopy", |gb| {
+                gb.define_function_from("CopyAll", Call::new("Memcopy"));
+                gb.add_to_main_loop(Call::new("CopyAll"));
+            }),
+            ("a define_function body", "UpdateKeys", |gb| {
+                gb.define_function("Poll", calling("Poll", &["UpdateKeys"]));
+                let call = gb.call("Poll");
+                gb.add_to_main_loop(call);
+            }),
+            ("a function called by a function", "GetTileByPixel", |gb| {
+                gb.define_function("Inner", calling("Inner", &["GetTileByPixel"]));
+                gb.define_function("Outer", calling("Outer", &["Inner"]));
+                gb.init(IfCall::is_true("Outer", Vec::<Instr>::new()));
+            }),
+            ("raw code", "Delay", |gb| {
+                gb.raw(|asm| {
+                    asm.label("RawCode").call("Delay").ret();
+                });
+            }),
+        ];
+        for (path, builtin, program) in paths {
+            let mut gb = RustBoy::new();
+            program(&mut gb);
+            let out = gb.build();
+            assert_eq!(
+                definitions(&out, builtin),
+                1,
+                "{} through {}",
+                builtin,
+                path
+            );
+            assert_labels_ok(&out);
+        }
+    }
+
+    #[test]
+    fn test_a_builtin_called_from_everywhere_is_emitted_once() {
+        let mut gb = RustBoy::new();
+        gb.define_function_from("Probe", Call::new("GetTileByPixel"));
+        gb.call_args("GetTileByPixel", Vec::new());
+        gb.add_to_main_loop(Call::new("GetTileByPixel"));
+        gb.add_to_main_loop(Call::new("Probe"));
+        gb.init(IfCall::is_true("GetTileByPixel", Vec::<Instr>::new()));
+        gb.use_function(BuiltinFunction::GetTileByPixel);
+
+        let out = gb.build();
+        assert_eq!(definitions(&out, "GetTileByPixel"), 1);
+        assert_labels_ok(&out);
+    }
+
+    #[test]
+    fn test_only_used_user_functions_are_emitted() {
+        // B24: every user function was emitted, used or not. Now: the ones the program
+        // refers to (call, jp, an address, raw code), and the ones those refer to, in
+        // registration order
+        let mut gb = RustBoy::new();
+        gb.define_function("Unused", calling("Unused", &["Delay"]));
+        gb.define_function("Leaf", calling("Leaf", &["Leaf"])); // recursive
+        gb.define_function("PingA", calling("PingA", &["PingB"])); // unused cycle
+        gb.define_function("PingB", calling("PingB", &["PingA"]));
+        gb.define_function("Helper", calling("Helper", &["Leaf"]));
+        gb.define_function("Called", calling("Called", &["Helper"]));
+        gb.define_function("ByAddress", calling("ByAddress", &[]));
+        gb.define_function("FromRaw", calling("FromRaw", &[]));
+        gb.define_function("Jumped", calling("Jumped", &[]));
+        gb.add_to_main_loop(Call::new("Called"));
+        let mut table = Asm::new();
+        table
+            .ld_hl_label("ByAddress")
+            .jp_cond(crate::gb_asm::Condition::Z, "Jumped");
+        gb.add_to_main_loop(table.get_main_instrs());
+        gb.raw(|asm| {
+            asm.label("RawCode").call("FromRaw").ret();
+        });
+
+        let out = gb.build();
+        assert_labels_ok(&out);
+        let user_functions: Vec<&str> = [
+            "Unused",
+            "Leaf",
+            "PingA",
+            "PingB",
+            "Helper",
+            "Called",
+            "ByAddress",
+            "FromRaw",
+            "Jumped",
+        ]
+        .into_iter()
+        .filter(|name| definitions(&out, name) > 0)
+        .collect();
+        assert_eq!(
+            user_functions,
+            ["Leaf", "Helper", "Called", "ByAddress", "FromRaw", "Jumped"]
+        );
+        for name in &user_functions {
+            assert_eq!(definitions(&out, name), 1, "{}", name);
+        }
+        // Registration order
+        let position = |name: &str| out.find(&format!("{}:", name)).unwrap();
+        assert!(position("Leaf") < position("Helper") && position("Helper") < position("Called"));
+        // The builtin only the unused function calls is not emitted either
+        assert_eq!(definitions(&out, "Delay"), 0);
+    }
+
+    #[test]
+    fn test_keep_function_emits_a_function_nothing_calls() {
+        let mut gb = RustBoy::new();
+        gb.define_function("FromOutside", calling("FromOutside", &["Delay"]));
+        gb.define_function("Unused", calling("Unused", &[]));
+        let out = gb.build();
+        assert_eq!(definitions(&out, "FromOutside"), 0);
+
+        // Kept: emitted with what it calls; a builtin can be kept by name too
+        gb.keep_function("FromOutside")
+            .keep_function("GetTileByPixel");
+        let out = gb.build();
+        for name in ["FromOutside", "Delay", "GetTileByPixel"] {
+            assert_eq!(definitions(&out, name), 1, "{}", name);
+        }
+        assert_eq!(definitions(&out, "Unused"), 0);
+        assert_labels_ok(&out);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unknown function 'Missing'")]
+    fn test_keep_function_needs_a_function() {
+        RustBoy::new().keep_function("Missing");
+    }
+
+    #[test]
+    fn test_a_routine_is_never_emitted_twice() {
+        use crate::gb_std::graphics::utility::memcopy;
+
+        // A user function with the name of a builtin replaces it
+        let mut gb = RustBoy::new();
+        gb.define_function("Delay", calling("Delay", &[]));
+        let call = gb.call("Delay");
+        gb.add_to_main_loop(call);
+        let out = gb.build();
+        assert_eq!(definitions(&out, "Delay"), 1);
+        assert!(!out.contains("Delay loop using BC"), "the builtin Delay");
+
+        // Raw code with its own copy of a routine the program calls
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
+        gb.raw(|asm| {
+            asm.emit_all(memcopy());
+        });
+        let out = gb.build();
+        assert_eq!(definitions(&out, "Memcopy"), 1);
+        assert_labels_ok(&out);
+    }
+
+    #[test]
+    fn test_get_tile_by_pixel_callers_follow_its_contract() {
+        // B23: GetTileByPixel returns the tile address in hl and the tile in a. The
+        // unbricked_rustboy brick handler tests a (IfConst, IfA), then blanks the brick
+        // through hl (TileRef). Its call is inside a function body (B26).
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
+        let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
+        gb.define_function_from(
+            "CheckAndHandleBrick",
+            vec![
+                boxed(IfConst::eq(
+                    Call::with_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, 1)),
+                    "BRICK_LEFT",
+                    vec![
+                        TileRef::set_tile_label("BLANK_TILE"),
+                        TileRef::next_tile(),
+                        TileRef::set_tile_label("BLANK_TILE"),
+                    ],
+                )),
+                boxed(IfA::eq(
+                    "BRICK_RIGHT",
+                    vec![
+                        TileRef::set_tile_label("BLANK_TILE"),
+                        TileRef::prev_tile(),
+                        TileRef::set_tile_label("BLANK_TILE"),
+                    ],
+                )),
+            ],
+        );
+        gb.add_to_main_loop(Call::new("CheckAndHandleBrick"));
+        let asm = gb.build_asm();
+        assert_labels_ok(&asm.to_asm());
+        let mut code = Asm::new();
+        code.call("CheckAndHandleBrick").ret();
+        let mut code = code.get_main_instrs();
+        code.extend(asm.get_chunk(Chunk::Functions).cloned().unwrap());
+
+        // The ball at OAM X 48, Y 57: the pixel above it is (40, 40), map tile (5, 5)
+        const BRICK_LEFT: u8 = 5;
+        const BRICK_RIGHT: u8 = 6;
+        const BLANK_TILE: u8 = 8;
+        let hit = 0x9800 + 5 * 32 + 5;
+        let map = |addr: u16| format!("${:04X}", addr);
+        for (tile, blanked) in [
+            (BRICK_LEFT, [hit, hit + 1]),
+            (BRICK_RIGHT, [hit, hit - 1]),
+            (BLANK_TILE, [0, 0]),
+        ] {
+            let mut cpu = TestCpu::default();
+            cpu.mem.insert("_OAMRAM+4".to_string(), 57);
+            cpu.mem.insert("_OAMRAM+5".to_string(), 48);
+            cpu.mem.insert(map(hit), tile);
+            for (name, value) in [
+                ("BRICK_LEFT", BRICK_LEFT),
+                ("BRICK_RIGHT", BRICK_RIGHT),
+                ("BLANK_TILE", BLANK_TILE),
+            ] {
+                cpu.consts.insert(name.to_string(), value);
+            }
+            cpu.run(&code);
+            let writes: Vec<Event> = cpu
+                .trace
+                .iter()
+                .filter(|event| matches!(event, Event::Write(..)))
+                .cloned()
+                .collect();
+            let expected: Vec<Event> = blanked
+                .iter()
+                .filter(|addr| **addr != 0)
+                .map(|addr| Event::Write(map(*addr), BLANK_TILE))
+                .collect();
+            assert_eq!(writes, expected, "tile {}", tile);
+        }
+    }
+
+    #[test]
+    fn test_empty_blobs_are_not_copied() {
+        // B27: Memcopy copies at least one byte, so an empty blob made it copy 64 KiB
+        // over WRAM, the stack and the I/O registers
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("NoTiles", TileSource::from_raw(&[]));
+        gb.tiles
+            .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
+        gb.tiles
+            .add_background("NoFile", TileSource::from_file("none.2bpp", 0));
+        gb.tiles.add_tilemap("NoMap", &[]);
+        assert_labels_ok(&gb.build());
+
+        // Memcopy runs for real: only BgTiles is copied, to $9000
+        let (code, mut cpu) = startup(&mut gb);
+        for (blob, size) in [("NoTiles", 0), ("BgTiles", 16), ("NoFile", 0), ("NoMap", 0)] {
+            cpu.consts16.insert(format!("{0}End - {0}", blob), size);
+        }
+        for i in 0..16 {
+            cpu.mem.insert(format!("BgTiles+{}", i), 100 + i);
+        }
+        cpu.run(&code);
+        let vram: Vec<(String, u8)> = cpu
+            .trace
+            .iter()
+            .filter_map(|event| match event {
+                Event::Write(addr, value) if addr.starts_with('$') => Some((addr.clone(), *value)),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<(String, u8)> = (0..16)
+            .map(|i| (format!("${:04X}", 0x9000 + i), 100 + i as u8))
+            .collect();
+        assert_eq!(vram, expected);
+        let copies = cpu
+            .trace
+            .iter()
+            .filter(|event| **event == Event::Call("Memcopy".to_string()));
+        assert_eq!(copies.count(), 1);
+
+        // With only empty blobs, nothing is copied and Memcopy is not emitted
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("NoTiles", TileSource::from_raw(&[]));
+        gb.tiles.add_tilemap("NoMap", &[]);
+        let out = gb.build();
+        assert!(!out.contains("Memcopy"), "{}", out);
+        assert!(
+            out.contains("NoTiles:") && out.contains("NoMapEnd:"),
+            "labels kept"
+        );
     }
 }

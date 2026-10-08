@@ -2,6 +2,7 @@
 
 use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator};
 use crate::gb_std::flow::Emittable;
+use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
 
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
@@ -297,6 +298,11 @@ impl RustBoy {
 
     /// Build the final assembly output
     pub fn build(&mut self) -> String {
+        self.build_asm().to_asm()
+    }
+
+    /// The program [`build`](Self::build) prints, as instructions in chunks
+    pub(crate) fn build_asm(&mut self) -> Asm {
         // Start fresh assembly
         let mut asm = Asm::new();
 
@@ -331,6 +337,8 @@ impl RustBoy {
 
         // Initialize sprites (OAM setup)
         if !self.sprites.is_empty() {
+            asm.emit_all(initialize_objects_screen());
+            asm.emit_all(clear_objects_screen());
             asm.emit_all(self.sprites.generate_init_code());
         }
 
@@ -412,7 +420,7 @@ impl RustBoy {
             asm.emit_all(existing);
         }
 
-        asm.to_asm()
+        asm
     }
 
     /// Add code to the main game loop

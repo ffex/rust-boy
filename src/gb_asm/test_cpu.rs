@@ -3,17 +3,50 @@
 //! It runs the [`Instr`]s a routine emits, so a test can check what the generated code
 //! does rather than how it looks. It models the 8-bit registers, the Z and C flags, a
 //! memory addressed by symbol (`[wCurKeys]`, `[_OAMRAM+1]`, …) and symbolic constants
-//! (`PADF_LEFT`). Jumps and calls go to labels in the same instruction list, and
+//! (`PADF_LEFT`). The register pairs `bc`, `de` and `hl` hold a symbolic address
+//! ([`Pointer`]): `ld hl, _OAMRAM` then `ld [hli], a` writes `[_OAMRAM]`, then
+//! `[_OAMRAM+1]`, the names a direct access such as `ld [_OAMRAM+1], a` uses. Jumps and
+//! calls go to labels in the same instruction list, and
 //! execution ends when it runs past the last instruction or on a `ret` with no `call`
 //! to return to (so a routine can be run on its own, or a test can put its routines
-//! after a `ret`). A local label (`.name`) belongs to the last global label before
+//! after a `ret`). A call to one of the [`TestCpu::stubs`] returns at once (for a
+//! routine the model cannot run, such as `Memcopy`). Every write to memory and every
+//! call is recorded in [`TestCpu::trace`], so a test can check the order of side
+//! effects. A local label (`.name`) belongs to the last global label before
 //! it, as in RGBDS, so two routines can each have their own `.loop`; `label_check`
 //! checks the scopes of a whole program. Anything it does not model panics, so a test
 //! never passes by skipping code.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Condition, Instr, JumpTarget, Operand, Register};
+
+/// The address held by a register pair: a symbol plus an offset in bytes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Pointer {
+    pub symbol: String,
+    pub offset: u16,
+}
+
+impl Pointer {
+    /// The memory symbol of the byte it points to: `_OAMRAM`, `_OAMRAM+1`, …
+    fn name(&self) -> String {
+        if self.offset == 0 {
+            self.symbol.clone()
+        } else {
+            format!("{}+{}", self.symbol, self.offset)
+        }
+    }
+}
+
+/// A side effect recorded in [`TestCpu::trace`]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// `value` written to the memory symbol
+    Write(String, u8),
+    /// A call to the label (a stub or a routine in the code)
+    Call(String),
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct TestCpu {
@@ -31,6 +64,15 @@ pub(crate) struct TestCpu {
     /// Values of the symbols used as immediates (`and PADF_LEFT`); reading one that is
     /// not set panics
     pub consts: BTreeMap<String, u8>,
+    /// The register pairs; `None` until loaded with an address, and again after one of
+    /// their 8-bit halves is changed (using such a pair panics)
+    pub bc: Option<Pointer>,
+    pub de: Option<Pointer>,
+    pub hl: Option<Pointer>,
+    /// Routines that are not run: a call to one is recorded and returns at once
+    pub stubs: BTreeSet<String>,
+    /// Every memory write and every call, in order
+    pub trace: Vec<Event>,
 }
 
 impl TestCpu {
@@ -81,6 +123,10 @@ impl TestCpu {
             steps += 1;
             assert!(steps <= 100_000, "the code does not terminate");
             match &instrs[pc] {
+                Instr::Ld {
+                    dst: Operand::Reg(reg),
+                    src,
+                } if self.load_pair(reg, src) => {}
                 Instr::Ld { dst, src } => {
                     let value = self.read(src);
                     self.write(dst, value);
@@ -109,6 +155,7 @@ impl TestCpu {
                 Instr::Inc {
                     operand: Operand::Reg(reg),
                 } => {
+                    self.split_pair(reg);
                     let value = self.reg(reg).wrapping_add(1);
                     *self.reg(reg) = value;
                     self.zero = value == 0; // carry unchanged
@@ -116,6 +163,7 @@ impl TestCpu {
                 Instr::Dec {
                     operand: Operand::Reg(reg),
                 } => {
+                    self.split_pair(reg);
                     let value = self.reg(reg).wrapping_sub(1);
                     *self.reg(reg) = value;
                     self.zero = value == 0; // carry unchanged
@@ -143,6 +191,13 @@ impl TestCpu {
                     }
                 }
                 Instr::Call { target: t } => {
+                    if let JumpTarget::Label(name) = t {
+                        self.trace.push(Event::Call(name.clone()));
+                        if self.stubs.contains(name) {
+                            pc += 1;
+                            continue;
+                        }
+                    }
                     stack.push(pc + 1);
                     pc = target(pc, t);
                     continue;
@@ -188,6 +243,34 @@ impl TestCpu {
         self.carry = self.a < value;
     }
 
+    /// Forget the address in the pair `reg` belongs to: its 8-bit half is about to change
+    fn split_pair(&mut self, reg: &Register) {
+        match reg {
+            Register::B | Register::C => self.bc = None,
+            Register::D | Register::E => self.de = None,
+            Register::H | Register::L => self.hl = None,
+            _ => {}
+        }
+    }
+
+    /// The register pair `reg`, or `None` for an 8-bit register
+    fn pair(&mut self, reg: &Register) -> Option<&mut Option<Pointer>> {
+        match reg {
+            Register::BC => Some(&mut self.bc),
+            Register::DE => Some(&mut self.de),
+            Register::HL => Some(&mut self.hl),
+            _ => None,
+        }
+    }
+
+    /// The address in the register pair `reg`; panics if it holds none
+    fn pointer(&mut self, reg: &Register) -> &mut Pointer {
+        self.pair(reg)
+            .unwrap_or_else(|| panic!("{:?} is not a register pair", reg))
+            .as_mut()
+            .unwrap_or_else(|| panic!("{:?} used without an address loaded", reg))
+    }
+
     fn reg(&mut self, reg: &Register) -> &mut u8 {
         match reg {
             Register::A => &mut self.a,
@@ -209,6 +292,10 @@ impl TestCpu {
                 .mem
                 .get(symbol)
                 .unwrap_or_else(|| panic!("read of [{}], which was never written", symbol)),
+            Operand::AddrReg(reg) => {
+                let name = self.pointer(reg).name();
+                self.read(&Operand::AddrDef(name))
+            }
             Operand::Label(symbol) => *self
                 .consts
                 .get(symbol)
@@ -217,11 +304,41 @@ impl TestCpu {
         }
     }
 
+    /// `ld rr, symbol`: point the register pair `rr` at `symbol`
+    fn load_pair(&mut self, reg: &Register, src: &Operand) -> bool {
+        let Some(pair) = self.pair(reg) else {
+            return false;
+        };
+        match src {
+            Operand::Label(symbol) => {
+                *pair = Some(Pointer {
+                    symbol: symbol.clone(),
+                    offset: 0,
+                })
+            }
+            other => panic!("ld {:?}, {} not supported by the test CPU", reg, other),
+        }
+        true
+    }
+
     fn write(&mut self, operand: &Operand, value: u8) {
         match operand {
-            Operand::Reg(reg) => *self.reg(reg) = value,
+            Operand::Reg(reg) => {
+                self.split_pair(reg);
+                *self.reg(reg) = value
+            }
             Operand::AddrDef(symbol) => {
+                self.trace.push(Event::Write(symbol.clone(), value));
                 self.mem.insert(symbol.clone(), value);
+            }
+            Operand::AddrReg(reg) => {
+                let name = self.pointer(reg).name();
+                self.write(&Operand::AddrDef(name), value);
+            }
+            Operand::AddrRegInc(Register::HL) => {
+                let name = self.pointer(&Register::HL).name();
+                self.write(&Operand::AddrDef(name), value);
+                self.pointer(&Register::HL).offset += 1;
             }
             other => panic!("cannot write to {} in the test CPU", other),
         }
@@ -267,6 +384,49 @@ mod tests {
         assert_eq!((cpu.a, cpu.b, cpu.zero), (0, 0, true), "returned on zero");
         cpu.run(&code);
         assert_eq!((cpu.a, cpu.b, cpu.zero), (255, 1, false), "went on");
+    }
+
+    #[test]
+    fn test_register_pairs_stubs_and_trace() {
+        let mut asm = Asm::new();
+        asm.ld(
+            Operand::Reg(Register::HL),
+            Operand::Label("_OAMRAM".to_string()),
+        )
+        .ld_a(7)
+        .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A))
+        .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A))
+        .ld_a(9)
+        .ld(Operand::AddrReg(Register::HL), Operand::Reg(Register::A))
+        .call("Memcopy")
+        .ld_a(0)
+        .ld(Operand::Reg(Register::A), Operand::AddrReg(Register::HL));
+        let mut cpu = TestCpu::default();
+        cpu.stubs.insert("Memcopy".to_string());
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!(cpu.a, 9, "read back through hl");
+        assert_eq!(
+            cpu.trace,
+            [
+                Event::Write("_OAMRAM".to_string(), 7),
+                Event::Write("_OAMRAM+1".to_string(), 7),
+                Event::Write("_OAMRAM+2".to_string(), 9),
+                Event::Call("Memcopy".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "HL used without an address loaded")]
+    fn test_changing_half_of_a_pair_forgets_its_address() {
+        let mut asm = Asm::new();
+        asm.ld(
+            Operand::Reg(Register::HL),
+            Operand::Label("_OAMRAM".to_string()),
+        )
+        .ld(Operand::Reg(Register::L), Operand::Imm(4))
+        .ld(Operand::AddrReg(Register::HL), Operand::Reg(Register::A));
+        TestCpu::default().run(&asm.get_main_instrs());
     }
 
     #[test]

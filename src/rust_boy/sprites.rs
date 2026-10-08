@@ -621,41 +621,28 @@ impl SpriteManager {
         )
     }
 
-    /// Generate OAM initialization code
+    /// Generate the code that writes every sprite to OAM, at start-up
     pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
         let mut asm = Asm::new();
 
-        // Initialize OAM
-        asm.ld_a(0);
-        asm.ld_b(160);
-        asm.ld_hl_label("_OAMRAM");
-
-        // Clear OAM loop
-        asm.label("ClearOam");
-        asm.ld_hli_label("a");
-        asm.dec_label("b");
-        asm.jp_cond(Condition::NZ, "ClearOam");
-
-        // Draw all sprites to OAM (sorted by oam_index to ensure correct order)
+        // Draw all sprites to OAM (sorted by oam_index to ensure correct order); the
+        // OAM was cleared before (gb_std::graphics::sprites::clear_objects_screen)
         asm.ld_hl_label("_OAMRAM");
         let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
         sorted_sprites.sort_by_key(|s| s.oam_index);
+        let write = |asm: &mut Asm, value: u8| {
+            asm.ld_a(value);
+            asm.ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A));
+        };
         for sprite in sorted_sprites {
             // Y position (add 16 for screen offset)
-            asm.ld_a(sprite.y + 16);
-            asm.ld_hli_label("a");
-
+            write(&mut asm, sprite.y + 16);
             // X position (add 8 for screen offset)
-            asm.ld_a(sprite.x + 8);
-            asm.ld_hli_label("a");
-
+            write(&mut asm, sprite.x + 8);
             // Tile index
-            asm.ld_a(sprite.tile_index);
-            asm.ld_hli_label("a");
-
+            write(&mut asm, sprite.tile_index);
             // Flags
-            asm.ld_a(sprite.flags);
-            asm.ld_hli_label("a");
+            write(&mut asm, sprite.flags);
         }
 
         asm.get_main_instrs()

@@ -96,7 +96,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       (branch `refactor-p1-unique-labels`: `Anim_{sprite}_{animation}`; sprite, composite and animation names
       must be unique RGBDS identifiers)
 - [x] Builtins reached through `Call`/`IfCall`/`define_function_from` not auto-included → link error — [B26](CONTEXT.md#b26)
-      (branch `refactor-p1-builtins`: `build()` emits every function the generated code refers to, once)
+      (branch `refactor-p1-builtins`: `build()` emits every function the generated code refers to, once, with its
+      variables; `RustBoy::external_symbol` declares a routine defined outside, e.g. in an `INCLUDE`d file)
 - [x] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
       (branch `refactor-p1-builtins`: `RustBoy` skips empty raw blobs, `from_file(path, 0)` panics; `gb_std`'s
       `cp_in_memory` documents a non-empty blob)

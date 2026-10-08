@@ -67,6 +67,18 @@ impl TileSource {
     }
 }
 
+/// Panics if `source` is a file with a tile count of 0 (also built directly as
+/// `TileSource::File`): a file is copied whole, so its count cannot say "empty" (B27)
+fn check_source(name: &str, source: &TileSource) {
+    if let TileSource::File(path, 0) = source {
+        panic!(
+            "tiles \"{}\": the file \"{}\" has a tile count of 0; a tile file needs a tile \
+             count of at least 1 (the number of 16-byte tiles in the file)",
+            name, path
+        );
+    }
+}
+
 /// Internal tile data stored by TileManager
 #[derive(Debug, Clone)]
 pub(crate) struct TileData {
@@ -101,6 +113,7 @@ impl TileManager {
 
     /// Add sprite tiles (allocated from $8000)
     pub fn add_sprite(&mut self, name: &str, source: TileSource) -> TileId {
+        check_source(name, &source);
         let size = source.size_bytes();
         let addr = self.next_sprite_addr;
         self.next_sprite_addr += size;
@@ -124,6 +137,7 @@ impl TileManager {
 
     /// Add background tiles (allocated from $9000)
     pub fn add_background(&mut self, name: &str, source: TileSource) -> TileId {
+        check_source(name, &source);
         let size = source.size_bytes();
         let addr = self.next_bg_addr;
         self.next_bg_addr += size;

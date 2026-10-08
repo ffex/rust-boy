@@ -129,12 +129,13 @@ const KEYWORDS: [&str; 20] = [
 /// targets of `jp` / `jr` / `call`, variables, constants, `ld hl, Name`, `dw Name`, …).
 /// Comments and strings are skipped; local labels are left to [`label_errors`].
 pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
-    use super::labels::{code_lines, split_label, symbol_words};
+    use super::labels::{code_lines, split_def, split_label, symbol_words};
 
-    let hardware: BTreeSet<&str> = include_str!("../../include/hardware.inc")
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("DEF "))
-        .filter_map(|rest| rest.split_whitespace().next())
+    let hardware_code = code_lines(include_str!("../../include/hardware.inc"));
+    let hardware: BTreeSet<&str> = hardware_code
+        .iter()
+        .filter_map(|code| split_def(code))
+        .map(|(name, _)| name)
         .collect();
     let mut defined = BTreeSet::new();
     let mut used = Vec::new();
@@ -151,20 +152,24 @@ pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
                 rest = after.trim_start_matches(':').trim();
             }
         }
+        // `DEF NAME EQU value`, in every form
+        if let Some((name, value)) = split_def(rest) {
+            defined.insert(name.to_string());
+            used.extend(
+                symbol_words(value)
+                    .filter(|word| !KEYWORDS.contains(&word.to_ascii_lowercase().as_str()))
+                    .map(|word| (index + 1, word.to_string())),
+            );
+            continue;
+        }
         let (first, operands) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-        let operands = match first.to_ascii_uppercase().as_str() {
-            "" | "SECTION" | "INCLUDE" | "INCBIN" => continue,
-            // `DEF NAME EQU value`
-            "DEF" => {
-                let mut parts = operands.split_whitespace();
-                if let Some(name) = parts.next() {
-                    defined.insert(name.to_string());
-                }
-                parts.skip(1).collect::<Vec<_>>().join(" ")
-            }
-            _ => operands.to_string(),
-        };
-        for word in symbol_words(&operands) {
+        if matches!(
+            first.to_ascii_uppercase().as_str(),
+            "" | "SECTION" | "INCLUDE" | "INCBIN"
+        ) {
+            continue;
+        }
+        for word in symbol_words(operands) {
             if !KEYWORDS.contains(&word.to_ascii_lowercase().as_str()) {
                 used.push((index + 1, word.to_string()));
             }
@@ -182,22 +187,33 @@ pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
 /// With the environment variable `RGBDS_LINK_CHECK` set (and `rgbasm` / `rgblink` on the
 /// `PATH`), it also assembles and links `asm` with RGBDS, `include/` on the include path.
 pub(crate) fn assert_links(asm: &str) {
-    let mut errors = label_errors(asm);
-    errors.extend(undefined_symbols(asm));
+    assert_links_with(asm, &[]);
+}
+
+/// [`assert_links`] for a program that `INCLUDE`s other files: `files` are their
+/// (name, text). The checks read them after the program; RGBDS gets them next to it.
+pub(crate) fn assert_links_with(asm: &str, files: &[(&str, &str)]) {
+    let mut all = asm.to_string();
+    for (_, text) in files {
+        all.push('\n');
+        all.push_str(text);
+    }
+    let mut errors = label_errors(&all);
+    errors.extend(undefined_symbols(&all));
     assert!(
         errors.is_empty(),
         "link errors:\n{}\n\nin:\n{}",
         errors.join("\n"),
-        asm
+        all
     );
     if std::env::var_os("RGBDS_LINK_CHECK").is_some() {
-        rgbds_link(asm);
+        rgbds_link(asm, files);
     }
 }
 
-/// Assemble and link `asm` with RGBDS in a new temporary directory; panics with the
-/// RGBDS errors if it fails
-fn rgbds_link(asm: &str) {
+/// Assemble and link `asm`, with `files` next to it, with RGBDS in a new temporary
+/// directory; panics with the RGBDS errors if it fails
+fn rgbds_link(asm: &str, files: &[(&str, &str)]) {
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -209,6 +225,9 @@ fn rgbds_link(asm: &str) {
     ));
     std::fs::create_dir_all(&dir).expect("cannot create a temporary directory");
     std::fs::write(dir.join("main.asm"), asm).expect("cannot write main.asm");
+    for (name, text) in files {
+        std::fs::write(dir.join(name), text).expect("cannot write an included file");
+    }
     let include = concat!(env!("CARGO_MANIFEST_DIR"), "/include");
     let steps: [(&str, Vec<&str>); 2] = [
         ("rgbasm", vec!["-I", include, "-o", "main.o", "main.asm"]),

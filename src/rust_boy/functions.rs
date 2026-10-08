@@ -1,9 +1,9 @@
 //! Function registry: the builtin routines and the user functions, and which of them
 //! `build()` emits
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::gb_asm::labels::{code_lines, split_label, symbol_words};
+use crate::gb_asm::labels::{code_lines, split_def, split_label, symbol_words};
 use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 use crate::gb_std::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
 use crate::gb_std::inputs::update_keys;
@@ -104,6 +104,9 @@ pub struct FunctionRegistry {
     user_functions: Vec<(String, Vec<Instr>)>,
     /// User functions emitted even if no code calls them (`RustBoy::keep_function`)
     kept_user_functions: BTreeSet<String>,
+    /// Symbols defined outside the generated program (`RustBoy::external_symbol`): never
+    /// emitted, nor the variables of a builtin of that name
+    external_symbols: BTreeSet<String>,
 }
 
 impl FunctionRegistry {
@@ -130,6 +133,12 @@ impl FunctionRegistry {
             }
             None => false,
         }
+    }
+
+    /// The symbol `name` is defined outside the generated program (an `INCLUDE`d file):
+    /// a function of that name is never emitted
+    pub fn external_symbol(&mut self, name: &str) {
+        self.external_symbols.insert(name.to_string());
     }
 
     /// Register a user-defined function
@@ -195,7 +204,10 @@ impl FunctionRegistry {
         code: &[&[Instr]],
         names: impl IntoIterator<Item = &'a str>,
     ) -> UsedFunctions {
+        // Names defined outside the functions: variables, external symbols, then the
+        // labels and DEFs of the code
         let mut defined: BTreeSet<String> = names.into_iter().map(str::to_string).collect();
+        defined.extend(self.external_symbols.iter().cloned());
         let mut pending = Vec::new();
         for instrs in code {
             for instr in instrs.iter() {
@@ -203,6 +215,36 @@ impl FunctionRegistry {
             }
         }
         pending.extend(self.kept_user_functions.iter().cloned());
+
+        // Each user function's references and labels, read once; and each label that
+        // finds a user function: its name first, then the other labels of its body
+        let bodies: Vec<(Vec<String>, BTreeSet<String>)> = self
+            .user_functions
+            .iter()
+            .map(|(_, body)| {
+                let (mut refs, mut defs) = (Vec::new(), BTreeSet::new());
+                for instr in body {
+                    symbols(instr, &mut refs, &mut defs);
+                }
+                (refs, defs)
+            })
+            .collect();
+        let mut by_name: BTreeMap<&str, usize> = BTreeMap::new();
+        for (index, (name, _)) in self.user_functions.iter().enumerate() {
+            by_name.entry(name.as_str()).or_insert(index);
+        }
+        let mut by_entry: BTreeMap<&str, usize> = BTreeMap::new();
+        for (index, (_, defs)) in bodies.iter().enumerate() {
+            for label in defs {
+                by_entry.entry(label.as_str()).or_insert(index);
+            }
+        }
+        let resolve = |name: &str| match by_name.get(name) {
+            Some(&index) => Some(Function::User(index)),
+            None => BuiltinFunction::from_name(name)
+                .map(Function::Builtin)
+                .or_else(|| by_entry.get(name).map(|&index| Function::User(index))),
+        };
 
         let mut builtins = BTreeSet::new();
         let mut users = BTreeSet::new();
@@ -218,9 +260,8 @@ impl FunctionRegistry {
             }
             Function::User(index) => {
                 if users.insert(index) {
-                    for instr in &self.user_functions[index].1 {
-                        symbols(instr, pending, &mut user_labels);
-                    }
+                    pending.extend(bodies[index].0.iter().cloned());
+                    user_labels.extend(bodies[index].1.iter().cloned());
                 }
             }
         };
@@ -229,13 +270,16 @@ impl FunctionRegistry {
                 visit(Function::Builtin(func), &mut pending);
             }
         }
+        // Each name is handled once
+        let mut seen = BTreeSet::new();
         while let Some(name) = pending.pop() {
-            if defined.contains(&name) {
+            if defined.contains(&name) || seen.contains(&name) {
                 continue;
             }
-            if let Some(function) = self.resolve(&name) {
+            if let Some(function) = resolve(&name) {
                 visit(function, &mut pending);
             }
+            seen.insert(name);
         }
 
         let mut used = UsedFunctions {
@@ -301,6 +345,14 @@ fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
         if let Some(label) = label {
             defs.insert(label.to_string());
         }
+        // `DEF Name EQU value` (also in raw text): defines `Name`, refers to the value
+        let rest = match split_def(rest) {
+            Some((name, value)) => {
+                defs.insert(name.to_string());
+                value
+            }
+            None => rest,
+        };
         refs.extend(symbol_words(rest).map(str::to_string));
     }
 }

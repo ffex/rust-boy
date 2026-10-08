@@ -219,7 +219,8 @@ impl RustBoy {
     /// `dw Name`, raw lines (`Asm::raw`, one or several lines); not in comments or strings.
     /// The variables a builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are created
     /// with it. So keep only a function that is called from code `build()` does not see:
-    /// asm added to its output afterwards, or an `INCLUDE`d file.
+    /// asm added to its output afterwards, or an `INCLUDE`d file. For the opposite, a
+    /// routine *defined* where `build()` does not see, use [`RustBoy::external_symbol`].
     ///
     /// # Panics
     /// If there is no function `name`: define it first.
@@ -242,6 +243,44 @@ impl RustBoy {
         if !self.functions.keep_function(name) {
             self.unknown_function(name);
         }
+        self
+    }
+
+    /// Declare that the symbol `name` is defined outside the code `build()` generates,
+    /// for example by an `INCLUDE`d file
+    ///
+    /// `build()` takes every name the generated code defines (labels, `DEF`s, variables)
+    /// as the program's own, and never emits a function of that name; but it does not read
+    /// `INCLUDE`d files. A program that includes its own `UpdateKeys` (or another routine
+    /// with a builtin's name) declares it here, so the builtin is not emitted as well (that
+    /// would be a duplicate label), and neither are the variables that builtin needs
+    /// (`wCurKeys`, `wNewKeys`): the included code defines what it uses. The opposite of
+    /// [`RustBoy::keep_function`], which emits a function that only outside code calls.
+    ///
+    /// # Panics
+    /// If `name` is not a valid RGBDS identifier.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_std::flow::Call;
+    /// use rust_boy::rust_boy::RustBoy;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// gb.raw(|asm| {
+    ///     asm.include("my_input.inc"); // defines UpdateKeys
+    /// });
+    /// gb.add_to_main_loop(Call::new("UpdateKeys"));
+    /// gb.external_symbol("UpdateKeys");
+    /// assert!(!gb.build().contains("UpdateKeys:"));
+    /// ```
+    pub fn external_symbol(&mut self, name: &str) -> &mut Self {
+        if !is_identifier(name) {
+            panic!(
+                "invalid external symbol \"{}\": it must be a valid RGBDS identifier",
+                name
+            );
+        }
+        self.functions.external_symbol(name);
         self
     }
 
@@ -1850,6 +1889,128 @@ mod tests {
     fn test_a_tile_file_needs_tiles() {
         // B27: a file blob is copied whole, so a count of 0 cannot mean "skip it"
         TileSource::from_file("empty.2bpp", 0);
+    }
+
+    #[test]
+    fn test_a_def_in_raw_code_is_not_a_function() {
+        // A DEF in raw text defines its name, in every form: no builtin of that name is
+        // emitted (rgbasm: `Delay` already defined), nor its variables
+        for def in [
+            "DEF Delay EQU 5",
+            "DEF Delay = 5",
+            "def Delay equ 5",
+            "REDEF Delay EQU 5",
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(move |asm| {
+                asm.raw(&format!("{}\n    db Delay", def));
+            });
+            let out = gb.build();
+            assert_eq!(definitions(&out, "Delay"), 0, "{}:\n{}", def, out);
+            assert_links(&out);
+        }
+
+        // Memcopy, without tiles: nothing else calls it
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("DEF Memcopy EQU 3\n    db Memcopy");
+        });
+        let out = gb.build();
+        assert_eq!(definitions(&out, "Memcopy"), 0, "{}", out);
+        assert_links(&out);
+
+        // The UpdateKeys variables, defined as constants
+        let mut gb = RustBoy::new();
+        gb.use_function(BuiltinFunction::UpdateKeys);
+        gb.raw(|asm| {
+            asm.raw("DEF wCurKeys EQU $C100\n    DEF wNewKeys EQU $C101");
+        });
+        let out = gb.build();
+        assert_eq!(definitions(&out, "UpdateKeys"), 1);
+        assert!(!out.contains("wCurKeys: db"), "{}", out);
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_external_symbols_are_not_emitted() {
+        // The program's own routines with builtin names, in an INCLUDEd file that build()
+        // does not read: declared external, they are not emitted again (rgbasm: already
+        // defined), nor the UpdateKeys variables
+        use crate::gb_asm::label_check::assert_links_with;
+
+        let included = "UpdateKeys:\n    ret\nDelay:\n    ret\nMemcopy:\n    ret\n";
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.include("my_routines.inc");
+        });
+        for name in ["UpdateKeys", "Delay", "Memcopy"] {
+            gb.add_to_main_loop(Call::new(name));
+            gb.external_symbol(name);
+        }
+        let out = gb.build();
+        for name in ["UpdateKeys", "Delay", "Memcopy"] {
+            assert_eq!(definitions(&out, name), 0, "{}:\n{}", name, out);
+        }
+        assert!(!out.contains("wCurKeys"), "{}", out);
+        assert_links_with(&out, &[("my_routines.inc", included)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid external symbol \"my routine\"")]
+    fn test_an_external_symbol_is_an_identifier() {
+        RustBoy::new().external_symbol("my routine");
+    }
+
+    #[test]
+    #[should_panic(expected = "tiles \"Bg\": the file \"bg.2bpp\" has a tile count of 0")]
+    fn test_a_tile_file_built_directly_needs_tiles() {
+        // TileSource::File is public: the count is checked where the tiles are added
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("Bg", TileSource::File("bg.2bpp".to_string(), 0));
+    }
+
+    #[test]
+    fn test_a_large_program_builds_quickly() {
+        // The function scan once re-read every user function for each word of the
+        // program: 100 functions and a 5000-line main loop took minutes. Each body is now
+        // read once and each name handled once. The bound is generous on purpose (a
+        // debug build on a slow CI runner): it only catches that kind of regression.
+        let start = std::time::Instant::now();
+        let mut gb = RustBoy::new();
+        for v in 0..10 {
+            gb.vars.create_u8(&format!("wVar{}", v), 0);
+        }
+        for f in 0..100 {
+            let name = format!("Func{}", f);
+            let mut body = Asm::new();
+            body.label(&name);
+            for i in 0..48 {
+                body.ld_a_addr_def(&format!("wVar{}", i % 10))
+                    .inc(crate::gb_asm::Operand::Reg(crate::gb_asm::Register::A));
+            }
+            // Each function calls the next one
+            if f < 99 {
+                body.call(&format!("Func{}", f + 1));
+            }
+            body.ret();
+            gb.define_function(&name, body.get_main_instrs());
+        }
+        let mut main = Asm::new();
+        for i in 0..5000 {
+            main.ld_a_addr_def(&format!("wVar{}", i % 10));
+        }
+        main.call("Func0");
+        gb.add_to_main_loop(main.get_main_instrs());
+
+        let out = gb.build();
+        let elapsed = start.elapsed();
+        assert_eq!(definitions(&out, "Func99"), 1);
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "build() took {:?}",
+            elapsed
+        );
     }
 
     #[test]

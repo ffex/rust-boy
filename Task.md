@@ -87,8 +87,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [x] `basic_usage` + README header without `ds $150 - @, 0` — [B21](CONTEXT.md#b21) (branch `refactor-p0-readme`)
 - [ ] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22)
 - [x] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
-      (branch `refactor-p1-builtins`: one `GetTileByPixel`, in `gb_std`: `hl` = tile address and `a` = tile index;
-      `rust_boy` emits the `gb_std` routines)
+      (branch `refactor-p1-builtins`: one `GetTileByPixel` in the library, in `gb_std`: `hl` = tile address and
+      `a` = tile index; `rust_boy` emits the `gb_std` routines. Pending, the maintainer's choice: the raw-`gb_asm`
+      example `src/bin/unbricked.rs` keeps its own copies, and its `GetTileByPixel` keeps the old contract, `hl` only)
 - [x] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
       (branch `refactor-p1-builtins`: only used functions, transitively; `RustBoy::keep_function` forces one)
 - [x] Animation labels not namespaced by sprite; validate label names — [B25](CONTEXT.md#b25)
@@ -97,7 +98,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [x] Builtins reached through `Call`/`IfCall`/`define_function_from` not auto-included → link error — [B26](CONTEXT.md#b26)
       (branch `refactor-p1-builtins`: `build()` emits every function the generated code refers to, once)
 - [x] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
-      (branch `refactor-p1-builtins`: `RustBoy` skips empty blobs; `gb_std`'s `cp_in_memory` documents a non-empty blob)
+      (branch `refactor-p1-builtins`: `RustBoy` skips empty raw blobs, `from_file(path, 0)` panics; `gb_std`'s
+      `cp_in_memory` documents a non-empty blob)
 - [x] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
       (branch `refactor-p1-init-order`: `rOBP1` = `%11100100` like `rBGP`/`rOBP0`; the OAM is always cleared)
 - [x] Code-level doc errors (`inputs.rs` pressed bit, `RustBoy::call` example E0499, unsigned `If` note) — [B29](CONTEXT.md#b29) (branch `refactor-p0-readme`)

@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 139 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 144 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -88,7 +88,7 @@ rgbfix -v -p 0xFF main.gb
 - **Scratch-`Asm` idiom**: most `gb_std`/`rust_boy` helpers create a fresh `Asm`, emit into its default
   `Chunk::Main` and return `asm.get_main_instrs()`.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:412-567`, `build` prints what `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:414-569`, `build` prints what `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -337,7 +337,7 @@ writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init
 **Status: fixed** on `refactor-p1-init-order`. The start-up code now runs: LCD off → VRAM copies → OAM clear and
 initial sprites → default palettes → every variable set to its initial value (the animation variables
 `wFrameCounter`, `wAnim_{sprite}_Current` and `wAnim_{sprite}_Dir` are created first, so they are included) →
-**user `init()` code** → LCD on (`src/rust_boy/rustboy.rs:432-474`, put together at `:558-561`). So `gb.init(lives.set(3))`,
+**user `init()` code** → LCD on (`src/rust_boy/rustboy.rs:434-476`, put together at `:560-563`). So `gb.init(lives.set(3))`,
 `gb.init(gb.sprites.enable_animation(coin, 0))`, a `PingPong` direction or a palette set in `init()` survive.
 One difference from the fix above: **`rLCDC` stays after the user code**, because turning the LCD on ends
 the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
@@ -354,7 +354,7 @@ pair loaded with an address, and every register, pair and flag after a stub):
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
 animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:445-612`,
-`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:477-493`). OAM is only accessible in
+`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:479-495`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -467,7 +467,7 @@ constants (`TestCpu::consts16`).
 every `user_functions` body; `used_user_functions` (`:71`) is written but never read. Note: filtering on it
 today would break linking, because calls made through `Call`/`IfCall` are not tracked ([B26](#b26)) — fix B26 first.
 **Status: fixed** on `refactor-p1-builtins`, with B26: `FunctionRegistry::generate_used`
-(`src/rust_boy/functions.rs:202`) emits only the user functions the program refers to, from the start-up code,
+(`src/rust_boy/functions.rs:260`) emits only the user functions the program refers to, from the start-up code,
 the main loop, `raw()` code or the animation functions, then from those functions, and so on; in registration
 order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
 nothing. To emit one that only code `build()` does not
@@ -477,12 +477,19 @@ see calls (asm appended to its output, an `INCLUDE`d file), **`RustBoy::keep_fun
 its label, so `define_function(name, body)` panics if `body` does not define the label `name` (a body labelled
 otherwise used to be emitted anyway and could be called by its own label); another global label in a body (a
 second entry point) also finds the function. `define_function` and `define_function_from` panic on a name that
-is not an RGBDS identifier. No example changes (every example function is used, under its own name). Tests:
+is not an RGBDS identifier. `build()` panics if a user function's name is also defined elsewhere in the
+program: a variable, a constant or label of its code (`define_const`, a `DEF`, a label in raw code), or an external
+symbol (a function is defined either with `define_function`, or outside with `external_symbol`, not both); such a
+function used to be dropped silently, and `call Jump` reached the constant or the variable (on `refactor`, rgbasm
+reported the name defined twice). A user function with a builtin's name always replaces the builtin, also when
+`use_function` forces the builtin. No example changes (every example function is used, under its own name). Tests:
 `test_only_used_user_functions_are_emitted` (unused, an unused cycle, recursive, through another function, by
 address, by `jp`, from raw code, from a raw line after a comment and after a `;` in a string),
 `test_keep_function_emits_a_function_nothing_calls`, `test_keep_function_needs_a_function`,
 `test_define_function_needs_its_label`, `test_function_name_must_be_an_identifier`,
-`test_a_second_entry_point_of_a_function_is_found`.
+`test_a_second_entry_point_of_a_function_is_found`, `test_a_function_named_like_a_constant_panics` (and
+`_a_variable_`, `_a_raw_label_or_def_`, `test_a_function_cannot_be_external`),
+`test_a_user_function_replaces_a_forced_builtin`.
 
 #### B25
 **Animation labels are not namespaced by sprite.** `Anim_{name}` and `.skip_{name}`
@@ -512,29 +519,31 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:510-548`): the global
+Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:512-550`): the global
 symbols of every other chunk and of the animation functions are looked up (`symbols`,
-`src/rust_boy/functions.rs:325`, reads the text of each instruction line by line as RGBDS does, with
+`src/rust_boy/functions.rs:380`, reads the text of each instruction line by line as RGBDS does, with
 `gb_asm::labels::code_lines`: `;` and `/* … */` comments (also over several lines) and the contents of strings
 are skipped, a line ending with `\` continues on the next, a line starting with `Name:` defines `Name`; so
 `call`, `jp`, `ld hl, Name`, `dw Name`, `LOW(Name)` and raw lines of one or several lines count, and sections
 and file names do not; triple-quoted strings and macros are not handled); each builtin or user function found is
 emitted, and its body scanned the same way. Each one is emitted once, builtins in `BuiltinFunction` order then
 user functions in registration order; a user function with the name of a builtin replaces it. A name defined in
-the code `build()` generates is not taken for a function: a label (its own copy of a routine in `raw()` code), a
+the code `build()` generates is not taken for a builtin (for a user function it is an error, see [B24](#b24)): a label (its own copy of a routine in `raw()` code), a
 `DEF` (`define_const("Delay", 5)`, or a `DEF`/`REDEF` line of raw text in any form: `EQU`, `=`, `+=`, `EQUS`,
 `RB`…, through `gb_asm::labels::split_def`, which `label_check` uses too) or a variable (`create_u8("Delay", 0)`);
 before, each of these also emitted the builtin `Delay:`, which rgbasm rejected as defined twice. Names defined
 where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path depends on the assembler's
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
-**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:276`): a function of that name is never emitted,
+**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:277`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
 (`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
-and the Data chunk are emitted (`:550-564`), so `UpdateKeys` called without `add_inputs` links too. The scan is
-linear: each user function body is read once, a label → function map finds a function (its name, or another
-global label of its body), and each name is handled once (a 100-function, 5000-line program builds in about 10
-ms in release; `test_a_large_program_builds_quickly`). `build()` no longer registers
+and the Data chunk are emitted (`:552-566`), so `UpdateKeys` called without `add_inputs` links too. The scan is
+linear: each user function body is read once, when it is registered, and maps (name → function, and each other
+global label of a body → its function, kept up to date as functions are defined) find a function, also for
+`call` and `keep_function`; each name is handled once (a 100-function, 5000-line program builds in about 6 ms in
+release; `test_a_large_program_builds_quickly`). The animation functions are registered as generated names (known
+to `call`), not as user functions. `build()` no longer registers
 WaitVBlank, WaitNotVBlank, Memcopy and UpdateKeys itself, and `call`/`call_args` only check the name. No example
 ROM changes because of it. Tests: `test_builtins_are_emitted_whatever_calls_them` (`Call`, `IfCall`, a
 `define_function_from` body, a `define_function` body, a function called by a function, a function only `init()`

@@ -173,6 +173,9 @@ impl RustBoy {
     /// then LCD on. So the code here can change any variable, animation or palette, and
     /// runs with the LCD off (VRAM and OAM can be written freely). `rLCDC` is the
     /// exception: `build()` sets it after this code to turn the LCD on.
+    ///
+    /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
+    /// off, `rLY` stays 0 and the wait never ends.
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
         let instrs = code.emit(&mut self.if_counter);
         self.init_code.extend(instrs);

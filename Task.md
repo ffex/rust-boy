@@ -72,7 +72,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       (branch `refactor-p1-animations`: `jp` for every jump whose distance grows with the animations)
 - [x] `AnimationType::PingPong` / `Once` silently behave as `Loop` — [B10](CONTEXT.md#b10)
       (branch `refactor-p1-animations`: both implemented; `PingPong` keeps its direction in `wAnim_{sprite}_Dir`)
-- [ ] `gb.init()` code overwritten by variable initialisation — [B11](CONTEXT.md#b11)
+- [x] `gb.init()` code overwritten by variable initialisation — [B11](CONTEXT.md#b11)
+      (branch `refactor-p1-init-order`: variables and palettes are set before the user code, LCD on stays last)
 - [ ] Direct OAM access from the main loop (no shadow OAM / DMA) — [B12](CONTEXT.md#b12) *(implementation in Phase 3 graphics)*
 
 ### P2
@@ -92,7 +93,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       must be unique RGBDS identifiers)
 - [ ] Builtins reached through `Call`/`IfCall`/`define_function_from` not auto-included → link error — [B26](CONTEXT.md#b26)
 - [ ] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
-- [ ] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
+- [x] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
+      (branch `refactor-p1-init-order`: `rOBP1` = `%11100100` like `rBGP`/`rOBP0`; the OAM is always cleared)
 - [x] Code-level doc errors (`inputs.rs` pressed bit, `RustBoy::call` example E0499, unsigned `If` note) — [B29](CONTEXT.md#b29) (branch `refactor-p0-readme`)
 
 ## Phase 2 — Refactor the levels

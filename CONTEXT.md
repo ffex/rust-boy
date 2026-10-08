@@ -44,13 +44,14 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 98 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 105 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ✅ assembles; the 16×16 player moves as one block and stops at its limits (it collapsed at screen edges, fixed — [B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
 | Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
+| Start-up code | ✅ `gb.init()` code runs after the variables (animation variables included) and palettes are set, so what it sets survives (was overwritten, fixed — [B11](#b11)); the OAM is always cleared and `rOBP1` is set (fixed — [B28](#b28)); unit tests run the start-up code on `gb_asm::test_cpu` |
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4 |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
@@ -86,14 +87,17 @@ rgbfix -v -p 0xFF main.gb
 - **Scratch-`Asm` idiom**: most `gb_std`/`rust_boy` helpers create a fresh `Asm`, emit into its default
   `Chunk::Main` and return `asm.get_main_instrs()`.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:258-372`)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:312-438`, `build` prints what `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
 2. **Constants**: `DEF name EQU value` for each `define_const*`.
 3. **Init**: `EntryPoint:` → `call WaitVBlank` → LCD off → `Memcopy` every tile/tilemap blob to VRAM →
-   clear OAM + write initial sprites (only if sprites exist) → **user `init()` code** → create animation
-   variables → **variable initialisation** → LCD on (`LCDCF_ON|BGON|OBJON` + `OBJ8`, or `OBJ16` after `set_sprite_size(Size8x16)`) → `rBGP`, `rOBP0` = `%11100100`.
+   clear the whole OAM (always, with `gb_std`'s `initialize_objects_screen` + `clear_objects_screen`) and write
+   the initial sprites → `rBGP`, `rOBP0`, `rOBP1` = `%11100100` → create animation variables → **variable
+   initialisation** → **user `init()` code** → LCD on (`LCDCF_ON|BGON|OBJON` + `OBJ8`, or `OBJ16` after
+   `set_sprite_size(Size8x16)`). (Since [B11](#b11)/[B28](#b28); before, user code ran before the variables were
+   set, the palettes after LCD on, `rOBP1` was never set and the OAM was cleared only when sprites existed.)
 4. **MainLoop**: `Main:` → `call WaitNotVBlank` → `call WaitVBlank` → animation dispatcher → user main-loop
    code (incl. `UpdateKeys` + key checks) → `jp Main`.
 5. **Main (legacy)**: whatever was written through `RustBoy::raw()` (unreachable unless labelled, [B15](#b15)).
@@ -324,11 +328,24 @@ initialisation at `:310`, which writes every variable's initial value. `gb.init(
 `wLives = 0`; `gb.init(gb.sprites.enable_animation(coin, 0))` is reset to 255 (disabled). LCDC/palette
 writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init (and hardware defaults)
 **before** user init code.
+**Status: fixed** on `refactor-p1-init-order`. The start-up code now runs: LCD off → VRAM copies → OAM clear and
+initial sprites → default palettes → every variable set to its initial value (the animation variables
+`wFrameCounter`, `wAnim_{sprite}_Current` and `wAnim_{sprite}_Dir` are created first, so they are included) →
+**user `init()` code** → LCD on (`src/rust_boy/rustboy.rs:336-386`). So `gb.init(lives.set(3))`,
+`gb.init(gb.sprites.enable_animation(coin, 0))`, a `PingPong` direction or a palette set in `init()` survive.
+One difference from the fix above: **`rLCDC` stays after the user code**, because turning the LCD on ends
+the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
+`rLCDC` value written in `init()` is still replaced (documented on `RustBoy::init`; LCDC flags belong to the
+Phase 2 `RustBoyConfig`). Tests run the start-up code (`RustBoy::build_asm`, the `Init` chunk) on
+`gb_asm::test_cpu`, which now models the register pairs `bc`/`de`/`hl` as symbolic addresses
+(`ld hl, _OAMRAM` + `ld [hli], a`), stubbed routines (`Memcopy`) and an ordered trace of writes and calls:
+`test_init_code_runs_after_variable_initialisation` (a variable, the animation, the `PingPong` direction and
+`rBGP` set in `init()`) and `test_startup_order` (the order above).
 
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
 animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:445-612`,
-`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:325-339`). OAM is only accessible in
+`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:390-405`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -461,6 +478,12 @@ time, or test `BC` before the first copy.
 (`src/rust_boy/rustboy.rs:316-320`), so sprites with the OBP1 palette flag get a random palette on DMG. OAM is
 cleared only `if !self.sprites.is_empty()` (`:292`), yet `LCDCF_OBJON` is always set (`:313`) → a
 background-only program shows garbage objects on real hardware.
+**Status: fixed** on `refactor-p1-init-order`: `build()` always clears the 160 OAM bytes, with or without
+sprites, using `gb_std`'s `initialize_objects_screen` + `clear_objects_screen` (`rust_boy` had its own copy of
+that loop; it now only writes the initial sprites), and sets `rBGP`, `rOBP0` **and `rOBP1`** to `%11100100`
+(colour i is shade i, so a sprite with the OBP1 flag looks like one with OBP0 until the program changes it),
+before LCD on. Tests: `test_oam_is_cleared_without_sprites`, `test_oam_is_cleared_before_the_sprites_are_written`,
+`test_every_palette_is_set`. A palette API stays in Phase 3.
 
 #### B29
 **Documentation errors in code and README.**

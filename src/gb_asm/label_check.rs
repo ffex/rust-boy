@@ -7,7 +7,14 @@
 //! - a local label (`.name`) belongs to the current scope, so its full name is
 //!   `Scope.name`; a reference to `.name` is looked up in the scope where it appears.
 //!
-//! Only the targets of `jp`, `jr` and `call` are checked as references.
+//! [`label_errors`] checks the labels: each defined once, and the targets of `jp`, `jr`
+//! and `call` defined, local ones in their scope.
+//!
+//! [`undefined_symbols`] checks every other global symbol the code uses (variables,
+//! constants, `ld hl, Name`, `dw Name`, …): each must be defined in the program (a
+//! label, `name: db`, `DEF`) or by `hardware.inc`. Comments (`;`, `/* … */`) and strings
+//! are skipped. [`assert_links`] runs both checks, and with `RGBDS_LINK_CHECK` set also
+//! assembles and links the program with rgbasm and rgblink.
 //!
 //! [`jr_range_errors`] also checks that each `jr` reaches its target, which rgbasm
 //! requires: it works on instructions, whose sizes it knows.
@@ -122,7 +129,7 @@ const KEYWORDS: [&str; 20] = [
 /// targets of `jp` / `jr` / `call`, variables, constants, `ld hl, Name`, `dw Name`, …).
 /// Comments and strings are skipped; local labels are left to [`label_errors`].
 pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
-    use super::labels::{code_of_line, split_label, symbol_words};
+    use super::labels::{code_lines, split_label, symbol_words};
 
     let hardware: BTreeSet<&str> = include_str!("../../include/hardware.inc")
         .lines()
@@ -131,9 +138,8 @@ pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
         .collect();
     let mut defined = BTreeSet::new();
     let mut used = Vec::new();
-    for (index, line) in asm.lines().enumerate() {
-        let code = code_of_line(line);
-        let (label, rest) = split_label(&code);
+    for (index, code) in code_lines(asm).iter().enumerate() {
+        let (label, rest) = split_label(code);
         if let Some(label) = label {
             defined.insert(label.to_string());
         }

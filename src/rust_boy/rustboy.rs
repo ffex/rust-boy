@@ -1,10 +1,10 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
-use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator};
+use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator, is_identifier};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
 
-use super::functions::{BuiltinFunction, FunctionRegistry};
+use super::functions::{BuiltinFunction, FunctionRegistry, defines};
 use super::inputs::InputManager;
 use super::sprites::{SpriteManager, SpriteSize, check_name};
 use super::tiles::TileManager;
@@ -259,13 +259,26 @@ impl RustBoy {
     ///
     /// The function body should include its own label as the first instruction.
     /// `build()` emits it only if the program uses it (see [`RustBoy::keep_function`]).
+    /// A call to another global label of the body (a second entry point) uses it too.
     /// A function with the name of a builtin (`Memcopy`, ...) replaces that builtin.
+    ///
+    /// # Panics
+    /// If `name` is not a valid RGBDS identifier, or `body` does not define the global
+    /// label `name` (`build()` finds a function by its label).
     ///
     /// # Example
     /// ```ignore
     /// gb.define_function("IsWallTile", is_specific_tile("IsWallTile", &["$00", "$01"]));
     /// ```
     pub fn define_function(&mut self, name: &str, body: Vec<Instr>) -> &mut Self {
+        check_function_name(name);
+        if !defines(&body, name) {
+            panic!(
+                "define_function(\"{0}\"): the body does not define the label `{0}:`, so \
+                 calls to `{0}` could not reach it (start the body with `{0}:`)",
+                name
+            );
+        }
         self.functions.register_user_function(name, body);
         self
     }
@@ -276,6 +289,9 @@ impl RustBoy {
     /// Use this when building functions from control flow structures like If, IfConst, etc.
     /// `build()` emits it only if the program uses it (see [`RustBoy::keep_function`]).
     ///
+    /// # Panics
+    /// If `name` is not a valid RGBDS identifier: it becomes the function's label.
+    ///
     /// # Example
     /// ```ignore
     /// gb.define_function_from("CheckBrick", vec![
@@ -284,6 +300,7 @@ impl RustBoy {
     /// ]);
     /// ```
     pub fn define_function_from(&mut self, name: &str, mut body: impl Emittable) -> &mut Self {
+        check_function_name(name);
         let mut asm = Asm::new();
         asm.label(name);
         asm.emit_all(body.emit(&mut self.if_counter));
@@ -451,10 +468,21 @@ impl RustBoy {
             asm.emit_all(existing);
         }
 
+        // Add animation variables if animations are used
+        if self.sprites.has_animations() {
+            self.vars.create_u8("wFrameCounter", 0);
+
+            // Create enabled flag for each animation
+            for (var_name, initial_value) in self.sprites.get_animation_variables() {
+                self.vars.create_u8(&var_name, initial_value);
+            }
+        }
+
         // === FUNCTIONS CHUNK ===
         // Once all the code is known: the builtins and user functions that the program
         // refers to, directly or through other functions (B24, B26), then the animation
-        // functions. (Variables only hold data, so their code is not needed for this.)
+        // functions. (Variables only hold data, so their code is not needed for this, but
+        // their names are: a name the program defines is not a function.)
         let animations = self.sprites.generate_animation_functions();
         let mut code: Vec<&[Instr]> = [
             Chunk::Header,
@@ -470,7 +498,7 @@ impl RustBoy {
         .collect();
         code.extend([startup.as_slice(), finish.as_slice()]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
-        let functions = self.functions.generate_used(&code);
+        let functions = self.functions.generate_used(&code, self.vars.names());
         asm.chunk(Chunk::Functions);
         asm.emit_all(functions.code);
 
@@ -481,17 +509,9 @@ impl RustBoy {
         }
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
-        // Add animation variables if animations are used
-        if self.sprites.has_animations() {
-            self.vars.create_u8("wFrameCounter", 0);
-
-            // Create enabled flag for each animation
-            for (var_name, initial_value) in self.sprites.get_animation_variables() {
-                self.vars.create_u8(&var_name, initial_value);
-            }
-        }
         // The variables of the emitted builtins (`wCurKeys`, `wNewKeys` for UpdateKeys),
-        // however the program calls them
+        // however the program calls them, unless it defines them already (as variables or
+        // in raw code)
         for name in functions.variables {
             self.vars.create_u8(name, 0);
         }
@@ -643,6 +663,17 @@ impl RustBoy {
         // Group them as a composite sprite
         self.sprites
             .create_composite(name, vec![left_sprite, right_sprite])
+    }
+}
+
+/// Panics unless `name` can be a function's label
+fn check_function_name(name: &str) {
+    if !is_identifier(name) {
+        panic!(
+            "invalid function name \"{}\": it must be a valid RGBDS identifier (a letter or \
+             `_`, then letters, digits, `_`, `#`, `$` or `@`)",
+            name
+        );
     }
 }
 
@@ -1724,6 +1755,104 @@ mod tests {
     }
 
     #[test]
+    fn test_names_the_program_defines_are_not_functions() {
+        // A constant or a variable named like a builtin is not a call to it: the builtin
+        // was emitted too, and rgbasm reported `Delay` already defined
+        let read_delay = || {
+            let mut code = Asm::new();
+            code.ld_a_addr_def("Delay");
+            code.get_main_instrs()
+        };
+        let mut gb = RustBoy::new();
+        gb.define_const("Delay", 5);
+        gb.add_to_main_loop(Asm::new().ld_a_label("Delay").get_main_instrs());
+        let out = gb.build();
+        assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
+        assert_links(&out);
+
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("Delay", 0);
+        gb.add_to_main_loop(read_delay());
+        let out = gb.build();
+        assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
+        assert_eq!(out.matches("Delay: db").count(), 1);
+        assert_links(&out);
+
+        // A builtin's variables that the program defines already are not created again:
+        // in raw code (rgbasm: `wCurKeys` already defined), or as a variable of another
+        // type (create_u8 panicked)
+        let mut gb = RustBoy::new();
+        gb.use_function(BuiltinFunction::UpdateKeys);
+        gb.raw(|asm| {
+            asm.raw("wCurKeys: db\n    wNewKeys: db");
+        });
+        let out = gb.build();
+        assert_eq!(definitions(&out, "UpdateKeys"), 1);
+        assert_eq!(out.matches("wCurKeys:").count(), 1, "{}", out);
+        assert_eq!(out.matches("wNewKeys:").count(), 1, "{}", out);
+        assert_links(&out);
+
+        // A call in a block comment is no call
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("Commented: /* call Delay */ ret");
+        });
+        let out = gb.build();
+        assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
+        assert_links(&out);
+
+        let mut gb = RustBoy::new();
+        gb.vars.create_u16("wCurKeys", 0);
+        gb.vars.create_u8("wNewKeys", 0);
+        gb.use_function(BuiltinFunction::UpdateKeys);
+        let out = gb.build();
+        assert_eq!(out.matches("wCurKeys: dw").count(), 1, "{}", out);
+        assert_eq!(out.matches("wNewKeys: db").count(), 1, "{}", out);
+        assert_links(&out);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "define_function(\"Inner\"): the body does not define the label `Inner:`"
+    )]
+    fn test_define_function_needs_its_label() {
+        // The body is labelled `Other`: a call to `Inner` could never reach it
+        let mut gb = RustBoy::new();
+        gb.define_function("Inner", calling("Other", &[]));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid function name \"my func\"")]
+    fn test_function_name_must_be_an_identifier() {
+        RustBoy::new().define_function_from("my func", Vec::<Instr>::new());
+    }
+
+    #[test]
+    fn test_a_second_entry_point_of_a_function_is_found() {
+        // A body with two global labels: a call to the second one emits the function
+        let mut body = Asm::new();
+        body.label("Blank")
+            .ld_a(0)
+            .label("BlankWithA")
+            .ld_addr_def_a("wTile")
+            .ret();
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wTile", 0);
+        gb.define_function("Blank", body.get_main_instrs());
+        gb.add_to_main_loop(Call::new("BlankWithA"));
+        let out = gb.build();
+        assert_eq!(definitions(&out, "BlankWithA"), 1, "{}", out);
+        assert_links(&out);
+    }
+
+    #[test]
+    #[should_panic(expected = "TileSource::from_file(\"empty.2bpp\", 0)")]
+    fn test_a_tile_file_needs_tiles() {
+        // B27: a file blob is copied whole, so a count of 0 cannot mean "skip it"
+        TileSource::from_file("empty.2bpp", 0);
+    }
+
+    #[test]
     fn test_empty_blobs_are_not_copied() {
         // B27: Memcopy copies at least one byte, so an empty blob made it copy 64 KiB
         // over WRAM, the stack and the I/O registers
@@ -1732,14 +1861,12 @@ mod tests {
             .add_background("NoTiles", TileSource::from_raw(&[]));
         gb.tiles
             .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
-        gb.tiles
-            .add_background("NoFile", TileSource::from_file("none.2bpp", 0));
         gb.tiles.add_tilemap("NoMap", &[]);
-        assert_labels_ok(&gb.build());
+        assert_links(&gb.build());
 
         // Memcopy runs for real: only BgTiles is copied, to $9000
         let (code, mut cpu) = startup(&mut gb);
-        for (blob, size) in [("NoTiles", 0), ("BgTiles", 16), ("NoFile", 0), ("NoMap", 0)] {
+        for (blob, size) in [("NoTiles", 0), ("BgTiles", 16), ("NoMap", 0)] {
             cpu.consts16.insert(format!("{0}End - {0}", blob), size);
         }
         for i in 0..16 {

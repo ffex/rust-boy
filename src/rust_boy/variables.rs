@@ -124,6 +124,11 @@ impl VariableManager {
         }
     }
 
+    /// The names (WRAM labels) of every variable, in creation order
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.variables.values().map(|var| var.name.as_str())
+    }
+
     /// Create an unsigned 8-bit variable
     pub fn create_u8(&mut self, name: &str, initial: u8) -> Var {
         self.create_var(name, VarType::U8, initial as i32, "Variables")

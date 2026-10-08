@@ -64,41 +64,79 @@ pub fn is_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '#' | '$' | '@'))
 }
 
-/// The code of one line of assembly, as RGBDS reads it: without its comment (from a `;`
-/// outside a string) and with the contents of its strings (`"…"`, `'…'`) blanked, so
-/// that neither is taken for code
-pub(crate) fn code_of_line(line: &str) -> String {
-    let mut code = String::with_capacity(line.len());
-    let mut quote = None;
-    let mut escaped = false;
-    for c in line.chars() {
-        match quote {
-            Some(q) => {
-                if escaped {
-                    escaped = false;
-                } else if c == '\\' {
-                    escaped = true;
-                } else if c == q {
+/// The code of each line of `text`, as RGBDS reads it, one entry per line of `text`
+///
+/// Comments are removed: from a `;` to the end of the line, and `/* … */` block comments,
+/// which can span lines. The contents of strings (`"…"`, `'…'`, within one line) are
+/// blanked. So neither is taken for code. A line that ends with `\` (outside a string
+/// and a comment) continues on the next one: the joined code is the entry of its first
+/// line, and the entries of the lines it took are empty, so entries keep their line
+/// numbers. (Triple-quoted and raw strings, and macros, are not handled.)
+pub(crate) fn code_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut in_block = false;
+    // Index of the line a `\` continues, if any
+    let mut continued: Option<usize> = None;
+    for line in text.lines() {
+        let chars: Vec<char> = line.chars().collect();
+        let mut code = String::with_capacity(line.len());
+        let mut quote = None;
+        let mut escaped = false;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            let next = chars.get(i + 1).copied();
+            if in_block {
+                if c == '*' && next == Some('/') {
+                    in_block = false;
+                    code.push(' ');
+                    i += 1;
+                }
+            } else if let Some(q) = quote {
+                let closes = !escaped && c == q;
+                escaped = !escaped && c == '\\';
+                if closes {
                     quote = None;
                     code.push(c);
-                    continue;
+                } else {
+                    code.push(' ');
                 }
-                code.push(' ');
-            }
-            None => match c {
-                ';' => break,
-                '"' | '\'' => {
+            } else if c == ';' {
+                break;
+            } else if c == '/' && next == Some('*') {
+                in_block = true;
+                i += 1;
+            } else {
+                if c == '"' || c == '\'' {
                     quote = Some(c);
-                    code.push(c);
                 }
-                _ => code.push(c),
-            },
+                code.push(c);
+            }
+            i += 1;
         }
+        // A `\` at the end of the code continues the line
+        let continues = !in_block && quote.is_none() && code.trim_end().ends_with('\\');
+        if continues {
+            let end = code.trim_end().len() - 1;
+            code.truncate(end);
+        }
+        match continued {
+            Some(first) => {
+                lines[first] = format!("{} {}", lines[first], code);
+                lines.push(String::new());
+            }
+            None => lines.push(code),
+        }
+        continued = match (continues, continued) {
+            (true, Some(first)) => Some(first),
+            (true, None) => Some(lines.len() - 1),
+            (false, _) => None,
+        };
     }
-    code
+    lines
 }
 
-/// The global label a line of code (from [`code_of_line`]) starts with (`Name:`,
+/// The global label a line of code (from [`code_lines`]) starts with (`Name:`,
 /// `Name::`, `Name: db 1`), and the rest of the line
 pub(crate) fn split_label(code: &str) -> (Option<&str>, &str) {
     match code.split_once(':') {
@@ -109,7 +147,7 @@ pub(crate) fn split_label(code: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// The global symbols a piece of code (from [`code_of_line`]) names: each word made of
+/// The global symbols a piece of code (from [`code_lines`]) names: each word made of
 /// symbol characters that is an identifier. `Scope.local` names `Scope`; a local label
 /// (`.name`) and a number (`$FF`, `10`) name none. Mnemonics and registers are words too.
 pub(crate) fn symbol_words(code: &str) -> impl Iterator<Item = &str> {
@@ -122,8 +160,15 @@ pub(crate) fn symbol_words(code: &str) -> impl Iterator<Item = &str> {
 mod tests {
     use super::*;
 
+    /// The code of a single line
+    fn code_of_line(line: &str) -> String {
+        let lines = code_lines(line);
+        assert_eq!(lines.len(), 1);
+        lines[0].clone()
+    }
+
     #[test]
-    fn test_code_of_line() {
+    fn test_code_lines() {
         assert_eq!(code_of_line("ld a, 1 ; one"), "ld a, 1 ");
         assert_eq!(
             code_of_line("db \"a;b\", LOW(Delay)"),
@@ -132,6 +177,17 @@ mod tests {
         assert_eq!(
             code_of_line("db 'x', \"say \\\"hi\\\"\" ; c"),
             "db ' ', \"          \" "
+        );
+        // Block comments, on one line and over several; a `/*` in a string is not one
+        assert_eq!(code_of_line("R: /* call Delay */ ret"), "R:   ret");
+        assert_eq!(
+            code_lines("ld a, 1 /* call A\ncall B ; still\n*/ call C\ndb \"/*\", D"),
+            ["ld a, 1 ", "", "  call C", "db \"  \", D"]
+        );
+        // A `\` at the end of a line continues it; the entries keep their line numbers
+        assert_eq!(
+            code_lines("db 1, \\ ; first\n   Next, \\\n   Last\nret"),
+            ["db 1,     Next,     Last", "", "", "ret"]
         );
         assert_eq!(split_label("Name:: db 1"), (Some("Name"), " db 1"));
         assert_eq!(split_label(".local: ret"), (None, ".local: ret"));

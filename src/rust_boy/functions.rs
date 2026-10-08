@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::gb_asm::labels::{code_of_line, split_label, symbol_words};
+use crate::gb_asm::labels::{code_lines, split_label, symbol_words};
 use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
 use crate::gb_std::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
 use crate::gb_std::inputs::update_keys;
@@ -143,12 +143,19 @@ impl FunctionRegistry {
     }
 
     /// The function `name` refers to: a user function, or else a builtin (a user
-    /// function with the name of a builtin replaces it)
+    /// function with the name of a builtin replaces it), or else the user function whose
+    /// body defines the global label `name` (a second entry point)
     fn resolve(&self, name: &str) -> Option<Function> {
-        match self.user_functions.iter().position(|(n, _)| n == name) {
-            Some(index) => Some(Function::User(index)),
-            None => BuiltinFunction::from_name(name).map(Function::Builtin),
+        if let Some(index) = self.user_functions.iter().position(|(n, _)| n == name) {
+            return Some(Function::User(index));
         }
+        if let Some(func) = BuiltinFunction::from_name(name) {
+            return Some(Function::Builtin(func));
+        }
+        self.user_functions
+            .iter()
+            .position(|(_, body)| defines(body, name))
+            .map(Function::User)
     }
 
     /// Check if a function exists (builtin or user-defined)
@@ -175,13 +182,20 @@ impl FunctionRegistry {
     /// A function is found by its name anywhere in an instruction (`call`, `jp`, `jr`,
     /// `ld hl, Name`, `dw Name`, a raw line), so a call made through `Call`, `IfCall`, a
     /// user function body or raw code is seen. A name only counts once, so each function
-    /// is emitted once; and none is emitted whose label `code` already defines (its own
-    /// copy of a routine), nor a builtin whose label an emitted user function defines.
+    /// is emitted once. A name the program defines itself is not a function: a label or
+    /// `DEF` of `code` (its own copy of a routine, a constant) or one of `names` (its
+    /// variables); and a builtin whose label an emitted user function defines is not
+    /// emitted either.
     ///
     /// The order is fixed: builtins in [`BuiltinFunction`] order, then user functions in
-    /// registration order. The variables the emitted builtins need come with them.
-    pub fn generate_used(&self, code: &[&[Instr]]) -> UsedFunctions {
-        let mut defined = BTreeSet::new();
+    /// registration order. The variables the emitted builtins need come with them, but
+    /// not the ones the program already defines.
+    pub fn generate_used<'a>(
+        &self,
+        code: &[&[Instr]],
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> UsedFunctions {
+        let mut defined: BTreeSet<String> = names.into_iter().map(str::to_string).collect();
         let mut pending = Vec::new();
         for instrs in code {
             for instr in instrs.iter() {
@@ -231,7 +245,11 @@ impl FunctionRegistry {
         for func in builtins {
             if !user_labels.contains(func.label()) {
                 used.code.extend(func.generate());
-                used.variables.extend(func.variables());
+                used.variables.extend(
+                    func.variables()
+                        .iter()
+                        .filter(|name| !defined.contains(**name) && !user_labels.contains(**name)),
+                );
             }
         }
         for index in users {
@@ -242,14 +260,24 @@ impl FunctionRegistry {
     }
 }
 
+/// Whether `code` defines the global symbol `name`: a label (`Name:`, also in a raw line)
+/// or a `DEF`
+pub(crate) fn defines(code: &[Instr], name: &str) -> bool {
+    let mut defs = BTreeSet::new();
+    for instr in code {
+        symbols(instr, &mut Vec::new(), &mut defs);
+    }
+    defs.contains(name)
+}
+
 /// Add to `refs` the global symbols `instr` refers to, and to `defs` the global labels it
 /// defines
 ///
 /// The text of the instruction is read line by line (a raw instruction can hold several
-/// lines), as RGBDS reads it: comments and the contents of strings are skipped, and a
-/// line that starts with `Name:` defines `Name`. A local symbol (`.end_if_0`) is skipped,
-/// and `Scope.local` refers to `Scope`. Comments, sections and file names refer to
-/// nothing.
+/// lines), as RGBDS reads it ([`code_lines`]): comments (`;`, `/* … */`) and the contents
+/// of strings are skipped, and a line that starts with `Name:` defines `Name`, as does
+/// `DEF Name`. A local symbol (`.end_if_0`) is skipped, and `Scope.local` refers to
+/// `Scope`. Sections and file names refer to nothing.
 fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
     let text = match instr {
         Instr::Label { name } => {
@@ -262,11 +290,13 @@ fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
         | Instr::Section { .. }
         | Instr::Include { .. }
         | Instr::Incbin { .. } => return,
-        Instr::Def { value, .. } => value.clone(),
+        Instr::Def { label, value } => {
+            defs.insert(label.clone());
+            value.clone()
+        }
         other => other.to_string(),
     };
-    for line in text.lines() {
-        let code = code_of_line(line);
+    for code in code_lines(&text) {
         let (label, rest) = split_label(&code);
         if let Some(label) = label {
             defs.insert(label.to_string());
@@ -330,7 +360,7 @@ mod tests {
             calls.call(name);
         }
         assert_eq!(
-            labels(&registry.generate_used(&[&calls.get_main_instrs()]).code),
+            labels(&registry.generate_used(&[&calls.get_main_instrs()], []).code),
             [
                 "Golf:", "Alpha:", "EchoV2:", "Hotel:", "Bravo:", "Foxtrot:", "Charlie:", "Delta:",
             ]
@@ -386,7 +416,7 @@ mod tests {
         let mut main = Asm::new();
         main.label("Main").call("First").jp("Main");
 
-        let used = registry.generate_used(&[&main.get_main_instrs()]);
+        let used = registry.generate_used(&[&main.get_main_instrs()], []);
         let out = text(&used.code);
         let defined: Vec<&str> = out.lines().filter(|l| l.ends_with(':')).collect();
         assert_eq!(defined, ["Memcopy:", "Second:", "First:"]);
@@ -400,7 +430,7 @@ mod tests {
         });
         let mut main = Asm::new();
         main.call("Poll");
-        let used = registry.generate_used(&[&main.get_main_instrs()]);
+        let used = registry.generate_used(&[&main.get_main_instrs()], []);
         assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
     }
 
@@ -421,7 +451,10 @@ mod tests {
             // Several lines in one raw instruction: each read on its own (a comment ends
             // at its line), a `;` in a string is not a comment, strings are not code
             .raw("ld a, 1 ; one\n    call Helper\nSecond: jp Third")
-            .raw("db \"a;b\", LOW(Fourth), \"NotAReference\"");
+            .raw("db \"a;b\", LOW(Fourth), \"NotAReference\"")
+            // Block comments, also over several lines
+            .raw("Blocked: /* call NotAReference */ ret /* and\n call NotAReference */")
+            .def("CONSTANT", "Fifth + 1");
         let mut refs = Vec::new();
         let mut defs = BTreeSet::new();
         for instr in asm.get_main_instrs() {
@@ -439,6 +472,7 @@ mod tests {
             "Helper",
             "Third",
             "Fourth",
+            "Fifth",
         ] {
             assert!(refs.iter().any(|r| r == name), "{} not in {:?}", name, refs);
         }
@@ -455,7 +489,7 @@ mod tests {
         }
         assert_eq!(
             defs.into_iter().collect::<Vec<_>>(),
-            ["Raw", "Second", "Start"]
+            ["Blocked", "CONSTANT", "Raw", "Second", "Start"]
         );
     }
 }

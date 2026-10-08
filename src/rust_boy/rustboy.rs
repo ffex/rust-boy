@@ -258,7 +258,8 @@ impl RustBoy {
     /// [`RustBoy::keep_function`], which emits a function that only outside code calls.
     ///
     /// # Panics
-    /// If `name` is not a valid RGBDS identifier.
+    /// If `name` is not a valid RGBDS identifier; and `build()` panics if a user function
+    /// has the same name (a function is defined either here or outside, not both).
     ///
     /// # Example
     /// ```
@@ -303,7 +304,8 @@ impl RustBoy {
     ///
     /// # Panics
     /// If `name` is not a valid RGBDS identifier, or `body` does not define the global
-    /// label `name` (`build()` finds a function by its label).
+    /// label `name` (`build()` finds a function by its label). `build()` panics if `name`
+    /// is also a variable, a constant, a label of the program or an external symbol.
     ///
     /// # Example
     /// ```ignore
@@ -542,8 +544,8 @@ impl RustBoy {
         asm.emit_all(functions.code);
 
         for (name, body) in animations {
-            // Register function first so it's tracked (though we emit directly)
-            self.functions.register_user_function(&name, Vec::new());
+            // Known to `call` from now on; emitted here, not scanned as a user function
+            self.functions.register_generated(&name);
             asm.emit_all(body);
         }
 
@@ -1955,6 +1957,79 @@ mod tests {
         assert_links_with(&out, &[("my_routines.inc", included)]);
     }
 
+    /// A program with a user function `Jump`, called, and `other` defining `Jump` too
+    fn jump_also_defined(other: fn(&mut RustBoy)) -> String {
+        let mut gb = RustBoy::new();
+        other(&mut gb);
+        gb.define_function("Jump", calling("Jump", &[]));
+        let call = gb.call("Jump");
+        gb.add_to_main_loop(call);
+        gb.build()
+    }
+
+    #[test]
+    #[should_panic(expected = "function `Jump` is also a constant or a label of the program")]
+    fn test_a_function_named_like_a_constant_panics() {
+        // The function was dropped and `call Jump` went to address 1 (on refactor,
+        // rgbasm: `Jump` already defined)
+        jump_also_defined(|gb| {
+            gb.define_const("Jump", 1);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "function `Jump` is also a variable")]
+    fn test_a_function_named_like_a_variable_panics() {
+        // `call Jump` went into WRAM
+        jump_also_defined(|gb| {
+            gb.vars.create_u8("Jump", 0);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "function `Jump` is also a constant or a label of the program")]
+    fn test_a_function_named_like_a_raw_label_or_def_panics() {
+        jump_also_defined(|gb| {
+            gb.raw(|asm| {
+                asm.raw("DEF Jump EQU 2");
+            });
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "function `Jump` is also an external symbol")]
+    fn test_a_function_cannot_be_external() {
+        // A function is defined either here (define_function) or outside the generated
+        // code (external_symbol), not both
+        jump_also_defined(|gb| {
+            gb.external_symbol("Jump");
+        });
+    }
+
+    #[test]
+    fn test_a_user_function_replaces_a_forced_builtin() {
+        // use_function(B) with an uncalled user function B: the user's one was emitted
+        // for Delay (whose body names itself) but the builtin for GetTileByPixel
+        for builtin in [BuiltinFunction::Delay, BuiltinFunction::GetTileByPixel] {
+            let name = builtin.label();
+            let mut own = Asm::new();
+            own.label(name).ld_a(42).ret();
+            let mut gb = RustBoy::new();
+            gb.use_function(builtin);
+            gb.define_function(name, own.get_main_instrs());
+            let out = gb.build();
+            assert_eq!(definitions(&out, name), 1, "{}:\n{}", name, out);
+            let body = function(&out, name);
+            assert!(
+                body.contains("ld a, 42"),
+                "{}: not the user's:\n{}",
+                name,
+                body
+            );
+            assert_links(&out);
+        }
+    }
+
     #[test]
     #[should_panic(expected = "invalid external symbol \"my routine\"")]
     fn test_an_external_symbol_is_an_identifier() {
@@ -1974,7 +2049,8 @@ mod tests {
     fn test_a_large_program_builds_quickly() {
         // The function scan once re-read every user function for each word of the
         // program: 100 functions and a 5000-line main loop took minutes. Each body is now
-        // read once and each name handled once. The bound is generous on purpose (a
+        // read once, when it is registered, each name handled once, and a label map finds
+        // second entry points (`call` scanned every body). The bound is generous on purpose (a
         // debug build on a slow CI runner): it only catches that kind of regression.
         let start = std::time::Instant::now();
         let mut gb = RustBoy::new();
@@ -1989,11 +2065,11 @@ mod tests {
                 body.ld_a_addr_def(&format!("wVar{}", i % 10))
                     .inc(crate::gb_asm::Operand::Reg(crate::gb_asm::Register::A));
             }
-            // Each function calls the next one
+            // Each function calls the next one, and has a second entry point
             if f < 99 {
                 body.call(&format!("Func{}", f + 1));
             }
-            body.ret();
+            body.label(&format!("Func{}Entry", f)).ret();
             gb.define_function(&name, body.get_main_instrs());
         }
         let mut main = Asm::new();
@@ -2002,6 +2078,11 @@ mod tests {
         }
         main.call("Func0");
         gb.add_to_main_loop(main.get_main_instrs());
+        // `call` through second entry points: a lookup each, not a scan of every body
+        for i in 0..1000 {
+            let call = gb.call(&format!("Func{}Entry", i % 100));
+            gb.add_to_main_loop(call);
+        }
 
         let out = gb.build();
         let elapsed = start.elapsed();

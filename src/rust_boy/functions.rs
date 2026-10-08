@@ -128,9 +128,9 @@ pub struct FunctionRegistry {
     user_functions: Vec<UserFunction>,
     /// The index of each user function, by name
     by_name: BTreeMap<String, usize>,
-    /// The index of the user function whose body defines each global label (the first
-    /// one registered): a second entry point finds its function
-    by_label: BTreeMap<String, usize>,
+    /// The indexes of the user functions whose body defines each global label (the
+    /// first one registered wins): a second entry point finds its function
+    by_label: BTreeMap<String, BTreeSet<usize>>,
     /// User functions emitted even if no code calls them (`RustBoy::keep_function`)
     kept_user_functions: BTreeSet<String>,
     /// Symbols defined outside the generated program (`RustBoy::external_symbol`): never
@@ -153,8 +153,12 @@ impl FunctionRegistry {
     }
 
     /// Emit the function `name` (a user function, or else a builtin) even if no code
-    /// calls it. Returns false if there is no such function.
+    /// calls it. Returns false if there is no such function. A function `build()`
+    /// generates (an animation) is always emitted: keeping it does nothing.
     pub fn keep_function(&mut self, name: &str) -> bool {
+        if self.generated.contains(name) {
+            return true;
+        }
         match self.resolve(name) {
             Some(Function::User(_)) => {
                 self.kept_user_functions.insert(name.to_string());
@@ -179,26 +183,43 @@ impl FunctionRegistry {
     /// Registering the same name again replaces the body and keeps its position.
     pub fn register_user_function(&mut self, name: &str, body: Vec<Instr>) {
         let function = UserFunction::new(name, body);
-        match self.by_name.get(name) {
+        let index = match self.by_name.get(name) {
             Some(&index) => {
-                self.user_functions[index] = function;
-                // Its labels changed: map them all again
-                self.by_label.clear();
-                for (index, function) in self.user_functions.iter().enumerate() {
-                    for label in &function.labels {
-                        self.by_label.entry(label.clone()).or_insert(index);
+                // Forget the old body's labels, of this function only
+                for label in &self.user_functions[index].labels {
+                    if let Some(indexes) = self.by_label.get_mut(label) {
+                        indexes.remove(&index);
+                        if indexes.is_empty() {
+                            self.by_label.remove(label);
+                        }
                     }
                 }
+                self.user_functions[index] = function;
+                index
             }
             None => {
                 let index = self.user_functions.len();
-                for label in &function.labels {
-                    self.by_label.entry(label.clone()).or_insert(index);
-                }
                 self.by_name.insert(name.to_string(), index);
                 self.user_functions.push(function);
+                index
             }
+        };
+        for label in &self.user_functions[index].labels {
+            self.by_label
+                .entry(label.clone())
+                .or_default()
+                .insert(index);
         }
+    }
+
+    /// The user function `name` refers to: by its name, or else by another global label
+    /// of its body (a second entry point; the first function registered with it)
+    fn user_function(&self, name: &str) -> Option<usize> {
+        self.by_name.get(name).copied().or_else(|| {
+            self.by_label
+                .get(name)
+                .and_then(|indexes| indexes.first().copied())
+        })
     }
 
     /// Register a function that `build()` generates and emits itself, so `call` knows it
@@ -206,17 +227,14 @@ impl FunctionRegistry {
         self.generated.insert(name.to_string());
     }
 
-    /// The function `name` refers to: a user function, or else a builtin (a user
-    /// function with the name of a builtin replaces it), or else the user function whose
-    /// body defines the global label `name` (a second entry point)
+    /// The function `name` refers to: a user function (by its name, or by another global
+    /// label of its body), or else a builtin. A user function that defines a builtin's
+    /// name, as its name or as a second entry point, replaces the builtin.
     fn resolve(&self, name: &str) -> Option<Function> {
-        if let Some(&index) = self.by_name.get(name) {
-            return Some(Function::User(index));
+        match self.user_function(name) {
+            Some(index) => Some(Function::User(index)),
+            None => BuiltinFunction::from_name(name).map(Function::Builtin),
         }
-        if let Some(func) = BuiltinFunction::from_name(name) {
-            return Some(Function::Builtin(func));
-        }
-        self.by_label.get(name).map(|&index| Function::User(index))
     }
 
     /// Check if a function exists (builtin, user-defined, or generated by `build()`)
@@ -319,9 +337,9 @@ impl FunctionRegistry {
             if defined.contains(func.label()) {
                 continue;
             }
-            // A user function with the builtin's name replaces it, also when forced
-            match self.by_name.get(func.label()) {
-                Some(&index) => visit(Function::User(index), &mut pending),
+            // A user function that defines the builtin's name replaces it, also when forced
+            match self.user_function(func.label()) {
+                Some(index) => visit(Function::User(index), &mut pending),
                 None => visit(Function::Builtin(func), &mut pending),
             }
         }

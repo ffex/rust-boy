@@ -2031,6 +2031,87 @@ mod tests {
     }
 
     #[test]
+    fn test_a_second_entry_point_replaces_a_builtin() {
+        // A routine bundle whose body defines UpdateKeys as a second entry point: the
+        // builtin was found first, so it was emitted (with wCurKeys/wNewKeys) and the
+        // user's routine dropped. It linked, but ran other code.
+        let bundle = || {
+            let mut body = Asm::new();
+            body.label("MyLib").ret().label("UpdateKeys").ld_a(42).ret();
+            body.get_main_instrs()
+        };
+        let called = |gb: &mut RustBoy| {
+            gb.add_to_main_loop(Call::new("UpdateKeys"));
+        };
+        let forced = |gb: &mut RustBoy| {
+            gb.use_function(BuiltinFunction::UpdateKeys);
+        };
+        for (how, reach) in [
+            ("called", &called as &dyn Fn(&mut RustBoy)),
+            ("forced", &forced),
+        ] {
+            let mut gb = RustBoy::new();
+            gb.define_function("MyLib", bundle());
+            reach(&mut gb);
+            let out = gb.build();
+            assert_eq!(definitions(&out, "MyLib"), 1, "{}:\n{}", how, out);
+            assert_eq!(definitions(&out, "UpdateKeys"), 1, "{}:\n{}", how, out);
+            assert!(
+                function(&out, "UpdateKeys").contains("ld a, 42"),
+                "{}: not the user's UpdateKeys:\n{}",
+                how,
+                out
+            );
+            assert!(
+                !out.contains("wCurKeys"),
+                "{}: builtin variables:\n{}",
+                how,
+                out
+            );
+            assert_links(&out);
+        }
+    }
+
+    #[test]
+    fn test_keep_function_accepts_a_generated_function() {
+        // An animation function is always emitted: keeping it does nothing, it is not an
+        // "unknown function"
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(2), 80, 72, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+        let first = gb.build();
+        gb.keep_function("Anim_Coin_Spin");
+        let second = gb.build();
+        assert_eq!(definitions(&second, "Anim_Coin_Spin"), 1);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn test_redefining_a_function_moves_its_second_entry_point() {
+        // Two functions define the label Entry: the first registered owns it. When that
+        // one is redefined without Entry, the label belongs to the other one.
+        let with_entry = |name: &str, value: u8| {
+            let mut body = Asm::new();
+            body.label(name).ret().label("Entry").ld_a(value).ret();
+            body.get_main_instrs()
+        };
+        let mut gb = RustBoy::new();
+        gb.define_function("First", with_entry("First", 1));
+        gb.define_function("Second", with_entry("Second", 2));
+        gb.add_to_main_loop(Call::new("Entry"));
+        let out = gb.build();
+        assert_eq!(definitions(&out, "First"), 1, "{}", out);
+        assert_eq!(definitions(&out, "Second"), 0, "{}", out);
+
+        gb.define_function("First", calling("First", &[]));
+        let out = gb.build();
+        assert_eq!(definitions(&out, "First"), 0, "{}", out);
+        assert_eq!(definitions(&out, "Second"), 1, "{}", out);
+        assert_links(&out);
+    }
+
+    #[test]
     #[should_panic(expected = "invalid external symbol \"my routine\"")]
     fn test_an_external_symbol_is_an_identifier() {
         RustBoy::new().external_symbol("my routine");

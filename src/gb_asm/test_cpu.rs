@@ -106,21 +106,47 @@ impl Pointer {
     }
 }
 
-/// The value of an RGBDS number: `$9800`, `0x9800`, `%1001` or decimal
+/// The value of an RGBDS number
+///
+/// `None` for a symbol (text that does not start like a number). Every RGBDS form is
+/// read: `$FF`, `0xFF`, `%101`, `0b101`, `&17`, `0o17`, decimal, `_` between digits, and a
+/// leading `-` (a 16-bit two's complement: `-1` is `$FFFF`). Text that starts like a
+/// number but is none of these (`$98G0`, `$9800 + X`, `70000`) panics: the model does not
+/// guess.
 fn parse_number(text: &str) -> Option<u16> {
-    let (digits, radix) = if let Some(hex) = text.strip_prefix('$') {
-        (hex, 16)
-    } else if let Some(hex) = text.strip_prefix("0x") {
-        (hex, 16)
-    } else if let Some(binary) = text.strip_prefix('%') {
-        (binary, 2)
-    } else {
-        (text, 10)
+    let starts_like_a_number =
+        |text: &str| text.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '$' | '%' | '&'));
+    let (negative, unsigned) = match text.strip_prefix('-') {
+        Some(rest) if starts_like_a_number(rest) => (true, rest),
+        _ => (false, text),
     };
-    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+    if !starts_like_a_number(unsigned) {
         return None;
     }
-    u16::from_str_radix(digits, radix).ok()
+    let prefixes: [(&str, u32); 8] = [
+        ("$", 16),
+        ("0x", 16),
+        ("0X", 16),
+        ("%", 2),
+        ("0b", 2),
+        ("0B", 2),
+        ("&", 8),
+        ("0o", 8),
+    ];
+    let (digits, radix) = prefixes
+        .iter()
+        .find_map(|(prefix, radix)| unsigned.strip_prefix(prefix).map(|rest| (rest, *radix)))
+        .unwrap_or((unsigned, 10));
+    let digits: String = digits.chars().filter(|&c| c != '_').collect();
+    let value = u16::from_str_radix(&digits, radix)
+        .ok()
+        .filter(|_| !digits.is_empty() && !digits.starts_with('+'))
+        .unwrap_or_else(|| panic!("number {} not supported by the test CPU", text));
+    Some(if negative {
+        value.wrapping_neg()
+    } else {
+        value
+    })
 }
 
 /// The one name of the memory byte `symbol`: `_OAMRAM+4+1` is `_OAMRAM+5`
@@ -899,6 +925,35 @@ mod tests {
         assert_eq!(normalize("$9800+$21"), "$9821");
         assert_eq!(normalize("$9800 + 0x10 + 17"), "$9821");
         assert_eq!(normalize("_OAMRAM+%101"), "_OAMRAM+5");
+    }
+
+    #[test]
+    fn test_every_rgbds_number_form() {
+        for (text, value) in [
+            ("$9821", 0x9821),
+            ("0x9821", 0x9821),
+            ("0X9821", 0x9821),
+            ("%1001", 9),
+            ("0b1001", 9),
+            ("&17", 15),
+            ("0o17", 15),
+            ("38945", 38945),
+            ("$98_21", 0x9821),
+            ("1_000", 1000),
+            ("-1", 0xFFFF),
+            ("-$10", 0xFFF0),
+        ] {
+            assert_eq!(parse_number(text), Some(value), "{}", text);
+        }
+        // Symbols are not numbers
+        for text in ["_OAMRAM", "wCurKeys", "TilesEnd - Tiles", "-Offset"] {
+            assert_eq!(parse_number(text), None, "{}", text);
+        }
+        // Text that starts like a number but is not one panics
+        for text in ["$98G0", "$9800 + X", "70000", "0b102", "$", "1+2"] {
+            let result = std::panic::catch_unwind(|| parse_number(text));
+            assert!(result.is_err(), "{} should panic", text);
+        }
     }
 
     #[test]

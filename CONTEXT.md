@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 126 unit tests and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 128 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -54,7 +54,7 @@ rgbfix -v -p 0xFF main.gb
 | Start-up code | ✅ `gb.init()` code runs after the variables (animation variables included) and palettes are set, so what it sets survives (was overwritten, fixed — [B11](#b11)); the OAM is always cleared and `rOBP1` is set (fixed — [B28](#b28)); unit tests run the start-up code on `gb_asm::test_cpu` |
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | Functions and routines | ✅ `build()` emits every builtin and user function the program refers to, through any path, once each (a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), and only those (unused user functions were emitted, fixed — [B24](#b24); `RustBoy::keep_function` forces one); one `GetTileByPixel` with one contract (fixed — [B23](#b23)); empty tile data is not copied (fixed — [B27](#b27)) |
-| CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4 |
+| CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
 ---
@@ -88,7 +88,7 @@ rgbfix -v -p 0xFF main.gb
 - **Scratch-`Asm` idiom**: most `gb_std`/`rust_boy` helpers create a fresh `Asm`, emit into its default
   `Chunk::Main` and return `asm.get_main_instrs()`.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:354-494`, `build` prints what `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:356-507`, `build` prints what `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -102,9 +102,11 @@ rgbfix -v -p 0xFF main.gb
 4. **MainLoop**: `Main:` → `call WaitNotVBlank` → `call WaitVBlank` → animation dispatcher → user main-loop
    code (incl. `UpdateKeys` + key checks) → `jp Main`.
 5. **Main (legacy)**: whatever was written through `RustBoy::raw()` (unreachable unless labelled, [B15](#b15)).
-6. **Functions** (built last, since [B24](#b24)/[B26](#b26)): the builtins, then the user functions, that the other
-   chunks and the animation functions refer to, directly or through other functions, plus the ones forced with
-   `use_function` / `keep_function`; then the `Anim_*` functions.
+6. **Functions** (since [B24](#b24)/[B26](#b26), worked out once all the code is known, before the variables): the
+   builtins, then the user functions, that the code and the animation functions refer to, directly or through
+   other functions, plus the ones forced with `use_function` / `keep_function`; then the `Anim_*` functions. The
+   variables an emitted builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are then created, so the
+   variable initialisation (step 3) and the Data chunk include them.
 7. **Tiles / Tilemap**: `Label:` + `dw`/`INCBIN` + `LabelEnd:`; **Data**: `SECTION "Variables", WRAM0` + `name: db/dw`.
 
 ---
@@ -335,7 +337,7 @@ writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init
 **Status: fixed** on `refactor-p1-init-order`. The start-up code now runs: LCD off → VRAM copies → OAM clear and
 initial sprites → default palettes → every variable set to its initial value (the animation variables
 `wFrameCounter`, `wAnim_{sprite}_Current` and `wAnim_{sprite}_Dir` are created first, so they are included) →
-**user `init()` code** → LCD on (`src/rust_boy/rustboy.rs:378-424`). So `gb.init(lives.set(3))`,
+**user `init()` code** → LCD on (`src/rust_boy/rustboy.rs:376-418`, put together at `:499-502`). So `gb.init(lives.set(3))`,
 `gb.init(gb.sprites.enable_animation(coin, 0))`, a `PingPong` direction or a palette set in `init()` survive.
 One difference from the fix above: **`rLCDC` stays after the user code**, because turning the LCD on ends
 the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
@@ -352,7 +354,7 @@ pair loaded with an address, and every register, pair and flag after a stub):
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
 animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:445-612`,
-`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:429-442`). OAM is only accessible in
+`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:421-437`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -443,7 +445,7 @@ label, two contracts. Memcopy, WaitVBlank, WaitNotVBlank and UpdateKeys are also
 (`src/gb_std/graphics/utility.rs:129`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
 the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them);
 out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it changes `bc` and the flags and keeps
-`de` (documented on the function). `BuiltinFunction::generate` (`src/rust_boy/functions.rs:59`) returns the
+`de` (documented on the function). `BuiltinFunction::generate` (`src/rust_boy/functions.rs:60`) returns the
 `gb_std` routine for Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel (the other four were
 identical), and `TileManager` copies with `gb_std`'s `cp_in_memory`; only `Delay` is `rust_boy`'s own. `gb_std`'s
 Memcopy passes its registers typed instead of as strings (same text). Every caller follows the contract:
@@ -463,15 +465,16 @@ constants (`TestCpu::consts16`).
 every `user_functions` body; `used_user_functions` (`:71`) is written but never read. Note: filtering on it
 today would break linking, because calls made through `Call`/`IfCall` are not tracked ([B26](#b26)) — fix B26 first.
 **Status: fixed** on `refactor-p1-builtins`, with B26: `FunctionRegistry::generate_used`
-(`src/rust_boy/functions.rs:165`) emits only the user functions the program refers to, from the start-up code,
+(`src/rust_boy/functions.rs:183`) emits only the user functions the program refers to, from the start-up code,
 the main loop, `raw()` code or the animation functions, then from those functions, and so on; in registration
-order. A function called only from `raw()` code needs nothing. To emit one that only code `build()` does not
+order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
+nothing. To emit one that only code `build()` does not
 see calls (asm appended to its output, an `INCLUDE`d file), **`RustBoy::keep_function(name)`**
-(`src/rust_boy/rustboy.rs:239`; it takes a builtin name too, and panics on an unknown name, like `call`);
+(`src/rust_boy/rustboy.rs:241`; it takes a builtin name too, and panics on an unknown name, like `call`);
 `use_function(BuiltinFunction)` still forces a builtin. `used_user_functions` is gone. No example changes (every
 example function is used). Tests: `test_only_used_user_functions_are_emitted` (unused, an unused cycle,
-recursive, through another function, by address, by `jp`, from raw code),
-`test_keep_function_emits_a_function_nothing_calls`, `test_keep_function_needs_a_function`.
+recursive, through another function, by address, by `jp`, from raw code, from a raw line after a comment and
+after a `;` in a string), `test_keep_function_emits_a_function_nothing_calls`, `test_keep_function_needs_a_function`.
 
 #### B25
 **Animation labels are not namespaced by sprite.** `Anim_{name}` and `.skip_{name}`
@@ -501,18 +504,26 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is built last (`src/rust_boy/rustboy.rs:463-491`): the global symbols of every other chunk and
-of the animation functions are looked up (`symbols`, `src/rust_boy/functions.rs:227`, takes the words of each
-instruction's text, so `call`, `jp`, `ld hl, Name`, `dw Name` and raw lines count; comments, sections and file
-names do not); each builtin or user function found is emitted, and its body scanned the same way. Each one is
-emitted once, builtins in `BuiltinFunction` order then user functions in registration order; a user function
-with the name of a builtin replaces it, and a routine whose label the program already defines (its own copy in
-`raw()` code) is not emitted again. `build()` no longer registers WaitVBlank, WaitNotVBlank, Memcopy and
-UpdateKeys itself, and `call`/`call_args` only check the name. A name in a string (`db "Delay"`) also counts:
-harmless over-inclusion. No example ROM changes because of it. Tests: `test_builtins_are_emitted_whatever_calls_them`
-(`Call`, `IfCall`, a `define_function_from` body, a `define_function` body, a function called by a function,
-`raw()` code), `test_a_builtin_called_from_everywhere_is_emitted_once`, `test_a_routine_is_never_emitted_twice`,
-`test_get_tile_by_pixel_callers_follow_its_contract`, all checked with `gb_asm::label_check`.
+Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:454-481`): the global
+symbols of every other chunk and of the animation functions are looked up (`symbols`,
+`src/rust_boy/functions.rs:253`, reads the text of each instruction line by line as RGBDS does: comments, and the
+contents of strings, are skipped, a line starting with `Name:` defines `Name`; so `call`, `jp`, `ld hl, Name`,
+`dw Name`, `LOW(Name)` and raw lines of one or several lines count, and sections and file names do not); each
+builtin or user function found is emitted, and its body scanned the same way. Each one is emitted once,
+builtins in `BuiltinFunction` order then user functions in registration order; a user function with the name of
+a builtin replaces it, and a routine whose label the program already defines (its own copy in `raw()` code) is
+not emitted again. Then the variables the emitted builtins need (`BuiltinFunction::variables`: `wCurKeys`,
+`wNewKeys` for `UpdateKeys`) are created, before the variable initialisation and the Data chunk are emitted
+(`:483-505`), so `UpdateKeys` called without `add_inputs` links too. `build()` no longer registers WaitVBlank,
+WaitNotVBlank, Memcopy and UpdateKeys itself, and `call`/`call_args` only check the name. No example ROM changes
+because of it. Tests: `test_builtins_are_emitted_whatever_calls_them` (`Call`, `IfCall`, a `define_function_from`
+body, a `define_function` body, a function called by a function, a function only `init()` calls, `raw()` code, a
+multi-line raw instruction with a comment, a `db` with a `;` in a string),
+`test_a_builtin_called_from_everywhere_is_emitted_once`, `test_a_routine_is_never_emitted_twice`,
+`test_get_tile_by_pixel_callers_follow_its_contract`. They check that the program links with
+`gb_asm::label_check::assert_links`: no label error, and no symbol used but not defined (`undefined_symbols`:
+labels, variables, constants; `hardware.inc` names allowed). With `RGBDS_LINK_CHECK` set it also assembles and
+links each program with rgbasm/rgblink; CI's `assemble` job runs `cargo test --lib` that way.
 
 #### B27
 **`Memcopy` with length 0 copies 64 KiB.** (Lines at `4601a5c`.) Memcopy is a do-while loop (`src/gb_std/graphics/utility.rs:54-70`;

@@ -117,11 +117,81 @@ pub(crate) fn assert_labels_ok(asm: &str) {
     );
 }
 
-/// Words that are not symbols: registers, conditions and the RGBDS functions the
-/// generated code uses (compared without case)
-const KEYWORDS: [&str; 20] = [
-    "a", "b", "c", "d", "e", "h", "l", "af", "bc", "de", "hl", "sp", "hli", "hld", "z", "nz", "nc",
-    "low", "high", "bank",
+/// Words of an operand that are not symbols, compared without case: registers,
+/// conditions, and every function and section keyword of the RGBDS 1.0.4 lexer
+/// (`src/asm/lexer.cpp`, the `OP_*` and section tokens)
+const KEYWORDS: &[&str] = &[
+    // Registers and conditions
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "h",
+    "l",
+    "af",
+    "bc",
+    "de",
+    "hl",
+    "sp",
+    "hli",
+    "hld",
+    "z",
+    "nz",
+    "nc",
+    // Symbols and sections
+    "def",
+    "bank",
+    "sizeof",
+    "startof",
+    "fragment",
+    "align",
+    "isconst",
+    "high",
+    "low",
+    // Fixed-point math
+    "round",
+    "ceil",
+    "floor",
+    "div",
+    "mul",
+    "fmod",
+    "pow",
+    "log",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "bitwidth",
+    "tzcount",
+    // Strings and charmaps
+    "bytelen",
+    "readfile",
+    "strbyte",
+    "strcat",
+    "strchar",
+    "strcmp",
+    "strfind",
+    "strfmt",
+    "strin",
+    "strlen",
+    "strlwr",
+    "strrfind",
+    "strrin",
+    "strrpl",
+    "strslice",
+    "strsub",
+    "strupr",
+    "charcmp",
+    "charlen",
+    "charsize",
+    "charsub",
+    "charval",
+    "incharmap",
+    "revchar",
 ];
 
 /// Every global symbol that `asm` uses but neither defines (a label, `name: db`, `DEF`)
@@ -386,6 +456,7 @@ mod tests {
             ld hl, Table + 2
             db \"call Quoted\", LOW(Main)
             ld a, [hli]
+            dw MUL(3.0, 2.0), STRLEN(\"abc\"), SIZEOF(\"Code\"), BANK(Main), high(Main)
             jp Main
             SECTION \"Variables\", WRAM0
             wCount: db

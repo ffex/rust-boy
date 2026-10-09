@@ -2,7 +2,7 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, LabelAllocator, R8},
+    gb_asm::{Asm, Block, LabelAllocator, R8},
     gb_std::{
         flow::{Emittable, If},
         graphics::{
@@ -137,34 +137,34 @@ fn main() {
 
         // Helper: get ball Y + 5 (for collision offset)
         let ball_y_plus_5 = {
-            let mut a = Asm::new();
+            let mut a = Block::new();
             a.emit_all(ball.get_y());
             a.add(5);
-            a.get_main_instrs()
+            a.into_instrs()
         };
 
         // Helper: get paddle X - 8 (left edge)
         let paddle_x_minus_8 = {
-            let mut a = Asm::new();
+            let mut a = Block::new();
             a.emit_all(paddle.get_x());
             a.sub(8);
-            a.get_main_instrs()
+            a.into_instrs()
         };
 
         // Helper: get paddle X + 16 (right edge)
         let paddle_x_plus_16 = {
-            let mut a = Asm::new();
+            let mut a = Block::new();
             a.emit_all(paddle.get_x());
             a.add(16);
-            a.get_main_instrs()
+            a.into_instrs()
         };
 
         // Bounce body: set Y momentum to -1
         let bounce = {
-            let mut a = Asm::new();
+            let mut a = Block::new();
             a.ld(R8::A, -1);
             a.ld_addr_def_a("wBallMomentumY");
-            a.get_main_instrs()
+            a.into_instrs()
         };
 
         // Nested if structure using the new clean API

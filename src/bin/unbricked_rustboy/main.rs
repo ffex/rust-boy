@@ -7,7 +7,7 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::Asm,
+    gb_asm::Block,
     gb_std::{
         flow::{Call, If, IfA, IfCall, IfConst, InstrOps, boxed},
         graphics::{tile_ref::TileRef, utility::is_specific_tile},
@@ -115,9 +115,9 @@ fn main() {
     gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(-1)));
     gb.add_to_main_loop({
         // make a debug label in as API
-        let mut lbl_debug = Asm::new();
+        let mut lbl_debug = Block::new();
         lbl_debug.label("PaddleBounce");
-        lbl_debug.get_main_instrs()
+        lbl_debug.into_instrs()
     });
     // Paddle bounce: ball_y + 5 == paddle_y and paddle_x - 8 < ball_x <= paddle_x + 16
     let paddle_bounce = If::eq(
@@ -134,9 +134,9 @@ fn main() {
     gb.add_to_main_loop(paddle_bounce);
     gb.add_to_main_loop({
         // make a debug label in as API
-        let mut lbl_debug = Asm::new();
+        let mut lbl_debug = Block::new();
         lbl_debug.label("PaddleBounceEND");
-        lbl_debug.get_main_instrs()
+        lbl_debug.into_instrs()
     });
     // Input handling: the paddle stays between the walls, at OAM X 16 to 104 (limits included)
     let mut inputs = InputManager::new();

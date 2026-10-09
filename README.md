@@ -102,9 +102,10 @@ Operands are typed: registers are `R8` (`a` … `l`, and `[hl]`) and `R16`, memo
 variables, `DEF` constants) and arithmetic on them. A Rust integer or a symbol name can be passed directly:
 
 ```rust
-use rust_boy::gb_asm::{Asm, Expr, Mem, R8, R16};
+use rust_boy::gb_asm::{Block, Expr, Mem, R8, R16};
 
-let mut asm = Asm::new();
+// A Block is a piece of code, built with the same methods as an Asm
+let mut asm = Block::new();
 asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4) // ld hl, _OAMRAM+4
     .ld(R8::A, Mem::addr("wScore")) // ld a, [wScore]
     .add(R8::B) // add a, b
@@ -112,7 +113,7 @@ asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4) // ld hl, _OAMRAM+4
     .ld(Mem::Hli, R8::A) // ld [hli], a
     .ld(R8::A, Expr::sym("LCDCF_ON") | "LCDCF_BGON") // ld a, LCDCF_ON | LCDCF_BGON
     .sub(-1); // sub a, -1
-let text: Vec<String> = asm.get_main_instrs().iter().map(|i| i.to_string()).collect();
+let text: Vec<String> = asm.iter().map(|i| i.to_string()).collect();
 assert_eq!(text[0], "ld hl, _OAMRAM+4");
 assert_eq!(text[5], "ld a, LCDCF_ON | LCDCF_BGON");
 ```

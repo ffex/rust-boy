@@ -24,14 +24,14 @@ macro_rules! instruction_builders {
         /// `ld(Mem::Hli, R8::A)`, `ld(Mem::addr("wScore"), R8::A)`
         ///
         /// ```
-        /// use rust_boy::gb_asm::{Asm, Expr, Mem, R8, R16};
+        /// use rust_boy::gb_asm::{Block, Expr, Mem, R8, R16};
         ///
-        /// let mut asm = Asm::new();
+        /// let mut asm = Block::new();
         /// asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4)
         ///     .ld(R8::A, -1)
         ///     .ld(Mem::Hli, R8::A)
         ///     .ld(R8::B, R8::AtHl);
-        /// let text: Vec<String> = asm.get_main_instrs().iter().map(|i| i.to_string()).collect();
+        /// let text: Vec<String> = asm.iter().map(|i| i.to_string()).collect();
         /// assert_eq!(text, ["ld hl, _OAMRAM+4", "ld a, -1", "ld [hli], a", "ld b, [hl]"]);
         /// ```
         ///

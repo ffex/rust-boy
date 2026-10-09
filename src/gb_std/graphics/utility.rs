@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Expr, Instr, Mem, R8, R16};
+use crate::gb_asm::{Block, Condition, Expr, Instr, Mem, R8, R16};
 use crate::hw;
 
 //TODO
@@ -6,7 +6,7 @@ use crate::hw;
 // - punt in the form of builder (like cp_in_memory)
 
 pub fn add_tiles(label: &str, tiles: &[[&str; 8]]) -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label(label);
     for tile in tiles {
         for line in tile {
@@ -14,34 +14,34 @@ pub fn add_tiles(label: &str, tiles: &[[&str; 8]]) -> Vec<Instr> {
         }
     }
     asm.label(&format!("{}End", label));
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 pub fn add_tiles_2bpp(label: &str, path: &str) -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label(label);
     asm.incbin(path);
     asm.label(&format!("{}End", label));
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 pub fn add_tiles_tilemap(label: &str, path: &str) -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label(label);
     asm.incbin(path);
     asm.label(&format!("{}End", label));
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 pub fn add_tilemap(label: &str, tilemap: &[[u8; 32]]) -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label(label);
     for row in tilemap {
         let values: Vec<String> = row.iter().map(|&val| format!("${:02X}", val)).collect();
         asm.db(&values.join(", "));
     }
     asm.label(&format!("{}End", label));
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 /// Copy the data between `label` and `{label}End` to `addr` with [`memcopy`]
@@ -56,12 +56,12 @@ pub fn add_tilemap(label: &str, tilemap: &[[u8; 32]]) -> Vec<Instr> {
 pub fn cp_in_memory(label: &str, addr: impl Into<Expr>) -> Vec<Instr> {
     let start = Expr::sym(label);
     let end = Expr::sym(format!("{}End", label));
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.ld(R16::DE, start.clone())
         .ld(R16::HL, addr.into())
         .ld(R16::BC, end - start)
         .call("Memcopy");
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 /// The `Memcopy` routine: copy `bc` bytes from `de` to `hl`
@@ -74,7 +74,7 @@ pub fn cp_in_memory(label: &str, addr: impl Into<Expr>) -> Vec<Instr> {
 /// copies at least one byte, so a length of 0 used to wrap to `$FFFF` and copy 64 KiB
 /// over WRAM, the stack and the I/O registers (B27).
 pub fn memcopy() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.comment("Copy bytes from one area to another");
     asm.comment("@param de: source");
     asm.comment("@param hl: destination");
@@ -92,38 +92,40 @@ pub fn memcopy() -> Vec<Instr> {
     asm.or(R8::C);
     asm.jp_cond(Condition::NZ, ".copy");
     asm.ret();
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 pub fn turn_off_screen() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     // Turn off LCD
-    asm.ld_a(0).ld_addr_def_a("rLCDC").get_main_instrs()
+    asm.ld_a(0).ld_addr_def_a(hw::LCDC);
+    asm.into_instrs()
 }
 
 pub fn turn_on_screen() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     // Turn on LCD
     let on = Expr::sym(hw::LCDCF_ON) | hw::LCDCF_BGON | hw::LCDCF_OBJON;
-    asm.ld(R8::A, on).ld_addr_def_a(hw::LCDC).get_main_instrs()
+    asm.ld(R8::A, on).ld_addr_def_a(hw::LCDC);
+    asm.into_instrs()
 }
 
 pub fn wait_vblank() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label("WaitVBlank");
     asm.ld_a_addr_def("rLY");
     asm.cp_imm(144);
     asm.jp_cond(Condition::C, "WaitVBlank");
     asm.ret();
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 pub fn wait_not_vblank() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label("WaitNotVBlank");
     asm.ld_a_addr_def("rLY");
     asm.cp_imm(144);
     asm.jp_cond(Condition::NC, "WaitNotVBlank");
     asm.ret();
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 /// The `GetTileByPixel` routine: the background tile under a pixel
@@ -140,7 +142,7 @@ pub fn wait_not_vblank() -> Vec<Instr> {
 ///
 /// It reads VRAM: call it while VRAM is accessible (in VBlank, or with the LCD off).
 pub fn get_tile_by_pixel() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
 
     asm.comment("Convert a pixel position to a tilemap address and read the tile there");
     asm.comment("hl = $9800 + X / 8 + (Y / 8) * 32");
@@ -184,7 +186,7 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     asm.ld(R8::A, R8::AtHl);
     asm.ret();
 
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 /// A routine `label` that sets the Z flag when `a` is one of the tiles `tiles_ids`
@@ -196,7 +198,7 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
 /// If a tile id is neither a symbol nor a number.
 #[track_caller]
 pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label(label);
     for (index, tile_id) in tiles_ids.iter().enumerate() {
         asm.cp(*tile_id); //TODO understand the tile id and how to manage it!
@@ -205,7 +207,7 @@ pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
         }
     }
     asm.ret();
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 #[cfg(test)]
@@ -255,9 +257,9 @@ mod tests {
         // that tests the tile in a, with no `ld a, [hl]` in between
         let ball = Sprite::new(1, 0, 0, 0, 0);
         let mut code = ball.get_pivot(0, 1);
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.call("GetTileByPixel").call("IsWallTile").ret();
-        code.extend(asm.get_main_instrs());
+        code.extend(asm.into_instrs());
         code.extend(get_tile_by_pixel());
         code.extend(is_specific_tile("IsWallTile", &["WALL"]));
 
@@ -277,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_memcopy_copies_bc_bytes() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.emit_all(cp_in_memory("Data", "$C000")).ret();
         asm.emit_all(memcopy());
         let mut cpu = TestCpu::default();
@@ -285,7 +287,7 @@ mod tests {
         for i in 0..4 {
             cpu.mem.insert(format!("Data+{}", i), 10 + i);
         }
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm.into_instrs());
         let written: Vec<_> = ["$C000", "$C001", "$C002"]
             .iter()
             .map(|addr| cpu.mem.get(addr).copied())
@@ -298,7 +300,7 @@ mod tests {
     /// Run `cp_in_memory("Data", "$C000")` then `Memcopy` with a blob of `len` bytes;
     /// the source holds 4 bytes, `Data+0` to `Data+3`
     fn run_memcopy(len: u16) -> TestCpu {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.emit_all(cp_in_memory("Data", "$C000")).ret();
         asm.emit_all(memcopy());
         let mut cpu = TestCpu::default();
@@ -306,7 +308,7 @@ mod tests {
         for i in 0..4 {
             cpu.mem.insert(format!("Data+{}", i), 10 + i);
         }
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm.into_instrs());
         cpu
     }
 

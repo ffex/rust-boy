@@ -475,6 +475,7 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gb_asm::Block;
     use crate::gb_asm::{Condition, IncDec, R8};
 
     #[test]
@@ -550,17 +551,17 @@ mod tests {
 
     #[test]
     fn test_code_is_checked_after_a_global_label() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.jp_cond(Condition::NZ, ".skip").ld_a(1).label(".skip");
-        assert_code_labels_ok(&asm.get_main_instrs());
+        assert_code_labels_ok(&asm);
     }
 
     #[test]
     #[should_panic(expected = "label Main.skip defined twice")]
     fn test_code_with_a_duplicate_label_fails() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.label(".skip").label(".skip");
-        assert_code_labels_ok(&asm.get_main_instrs());
+        assert_code_labels_ok(&asm);
     }
 
     #[test]
@@ -621,7 +622,7 @@ mod tests {
     #[test]
     fn test_jr_range_counts_instruction_sizes() {
         // ld a, [n16] 3 + cp n8 2 + call 3 + jp 3 + ld a, n8 2 = 13 bytes
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.jr_cond(Condition::Z, ".end")
             .ld_a_addr_def("wCount")
             .cp_imm(1)
@@ -629,7 +630,7 @@ mod tests {
             .jp("Main")
             .ld_a(0)
             .label(".end");
-        let code = asm.get_main_instrs();
+        let code = asm.into_instrs();
         let sizes: usize = code.iter().map(instr_size).sum();
         assert_eq!(sizes, 2 + 13);
         assert_eq!(jr_range_errors(&code), Vec::<String>::new());
@@ -639,24 +640,18 @@ mod tests {
     fn test_jr_range_resolves_local_labels_in_their_scope() {
         // Two routines with their own `.end`: each `jr .end` reaches the `.end` of its
         // routine, 2 bytes ahead, not the other one (which would be out of range)
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.label("First").jr(".end").ld_a(1).label(".end").ret();
         for _ in 0..70 {
             asm.ld_a(0); // 140 bytes
         }
         asm.label("Second").jr(".end").ld_a(2).label(".end").ret();
-        assert_eq!(
-            jr_range_errors(&asm.get_main_instrs()),
-            Vec::<String>::new()
-        );
+        assert_eq!(jr_range_errors(&asm), Vec::<String>::new());
 
         // A local label of another scope is not found
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.label("First").label(".end").label("Second").jr(".end");
-        assert_eq!(
-            jr_range_errors(&asm.get_main_instrs()),
-            vec!["jr .end: target not found"]
-        );
+        assert_eq!(jr_range_errors(&asm), vec!["jr .end: target not found"]);
     }
 
     #[test]

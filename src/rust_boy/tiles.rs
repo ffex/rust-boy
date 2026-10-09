@@ -327,9 +327,9 @@ impl TileManager {
 
     /// Generate tile data instructions for the Tiles chunk
     pub(crate) fn generate_tile_data(&self) -> Vec<Instr> {
-        use crate::gb_asm::Asm;
+        use crate::gb_asm::Block;
 
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         // Generate sprite tiles first
         for tile in self.tiles.values().filter(|t| t.is_sprite && !t.is_tilemap) {
@@ -371,14 +371,14 @@ impl TileManager {
             asm.label(&format!("{}End", tile.name));
         }
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Generate tilemap data instructions for the Tilemap chunk
     pub(crate) fn generate_tilemap_data(&self) -> Vec<Instr> {
-        use crate::gb_asm::Asm;
+        use crate::gb_asm::Block;
 
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         for tile in self.tiles.values().filter(|t| t.is_tilemap) {
             asm.label(&tile.name);
@@ -394,7 +394,7 @@ impl TileManager {
             asm.label(&format!("{}End", tile.name));
         }
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Generate the code that copies every blob to VRAM, in creation order

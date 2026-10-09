@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Expr, Instr, LabelAllocator, Mem, R8, R16};
+use crate::gb_asm::{Block, Condition, Expr, Instr, LabelAllocator, Mem, R8, R16};
 use crate::hw;
 
 /// The address of byte `byte` (`hw::OAMA_Y`, `hw::OAMA_X`, ...) of OAM entry `index`:
@@ -11,20 +11,20 @@ pub(crate) fn oam_address(index: u8, byte: u8) -> Expr {
 /// `ClearOam`. Set the registers with [`initialize_objects_screen`] first, which clears
 /// the whole OAM (every sprite at Y 0, so hidden).
 pub fn clear_objects_screen() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label("ClearOam")
         .ld(Mem::Hli, R8::A)
         .dec(R8::B)
         .jp_cond(Condition::NZ, "ClearOam");
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 /// Set the registers for [`clear_objects_screen`] to clear the whole OAM: `a = 0`,
 /// `b = 160` (40 sprites of 4 bytes), `hl = _OAMRAM`
 pub fn initialize_objects_screen() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.ld_a(0).ld_b(160).ld(R16::HL, hw::OAMRAM);
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 /// Which way a limited move changes a sprite coordinate
@@ -65,7 +65,7 @@ pub(crate) fn move_coord_limit(
     let label = labels.local(stem);
     let store = format!("{}_store", label);
     let end = format!("{}_end", label);
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
 
     // Work on the offset from the limit, A = coord - limit, so the limit is at 0 and
     // the carry flag of each step tells on which side of it the coordinate is
@@ -104,7 +104,7 @@ pub(crate) fn move_coord_limit(
     }
 
     asm.label(&end);
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 /// The code of `get_pivot` for the sprite of OAM entry `oam_index` (both the `gb_std`
@@ -133,14 +133,14 @@ pub(crate) fn pivot(oam_index: u8, x_offset: i16, y_offset: i16) -> Vec<Instr> {
         }
         (i16::from(screen_offset) + offset).rem_euclid(256) as u8
     };
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.ld_a_addr_def(oam_address(oam_index, hw::OAMA_Y))
         .sub(sub(hw::OAM_Y_OFFSET, y_offset))
         .ld(R8::C, R8::A)
         .ld_a_addr_def(oam_address(oam_index, hw::OAMA_X))
         .sub(sub(hw::OAM_X_OFFSET, x_offset))
         .ld(R8::B, R8::A);
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 pub struct SpriteManager {
@@ -166,12 +166,12 @@ impl SpriteManager {
         self.current_sprite_index += 1;
     }
     pub fn draw(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld(R16::HL, hw::OAMRAM);
         for sprite in &self.sprites {
             asm.emit_all(sprite.draw());
         }
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
     pub fn get_sprite(&self, id: u8) -> Option<&Sprite> {
         self.sprites.iter().find(|s| s.id == id)
@@ -199,7 +199,7 @@ impl Sprite {
         }
     }
     pub fn draw(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         asm.ld_a(self.y + 16)
             .ld(Mem::Hli, R8::A)
@@ -209,7 +209,7 @@ impl Sprite {
             .ld(Mem::Hli, R8::A)
             .ld_a(self.flags)
             .ld(Mem::Hli, R8::A);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move the sprite left by `distance` pixels, with no limit
@@ -217,38 +217,38 @@ impl Sprite {
     /// The plain moves emit no labels, so they can be used any number of times and
     /// inside an `If` (they used to emit the global labels `Left:` / `LeftEnd:`, B7).
     pub fn move_left(&mut self, distance: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(oam_address(self.id, hw::OAMA_X))
             .sub(distance)
             .ld_addr_def_a(oam_address(self.id, hw::OAMA_X));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move the sprite right by `distance` pixels, with no limit; see [`Sprite::move_left`]
     pub fn move_right(&mut self, distance: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(oam_address(self.id, hw::OAMA_X))
             .add(distance)
             .ld_addr_def_a(oam_address(self.id, hw::OAMA_X));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move the sprite up by `distance` pixels, with no limit; see [`Sprite::move_left`]
     pub fn move_up(&mut self, distance: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(oam_address(self.id, hw::OAMA_Y))
             .sub(distance)
             .ld_addr_def_a(oam_address(self.id, hw::OAMA_Y));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move the sprite down by `distance` pixels, with no limit; see [`Sprite::move_left`]
     pub fn move_down(&mut self, distance: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(oam_address(self.id, hw::OAMA_Y))
             .add(distance)
             .ld_addr_def_a(oam_address(self.id, hw::OAMA_Y));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move the sprite left by `distance` pixels, but never left of `limit` (an OAM
@@ -320,25 +320,25 @@ impl Sprite {
     }
 
     pub fn move_x_var(&mut self, var_name: &str) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(var_name)
             .ld(R8::B, R8::A)
             .ld_a_addr_def(oam_address(self.id, hw::OAMA_X))
             .add(R8::B)
             .ld_addr_def_a(oam_address(self.id, hw::OAMA_X));
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     pub fn move_y_var(&mut self, var_name: &str) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(var_name)
             .ld(R8::B, R8::A)
             .ld_a_addr_def(oam_address(self.id, hw::OAMA_Y))
             .add(R8::B)
             .ld_addr_def_a(oam_address(self.id, hw::OAMA_Y));
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// The sprite's pixel offset by (`x_offset`, `y_offset`) into `b` (x) and `c` (y),
@@ -353,15 +353,15 @@ impl Sprite {
 
     /// Get sprite Y position into register A (for use with If statements)
     pub fn get_y(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(oam_address(self.id, hw::OAMA_Y));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
     /// Get sprite X position into register A (for use with If statements)
     pub fn get_x(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(oam_address(self.id, hw::OAMA_X));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }
 

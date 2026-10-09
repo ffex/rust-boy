@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Expr, Instr, R8};
+use crate::gb_asm::{Block, Condition, Expr, Instr, R8};
 use crate::gb_std::graphics::sprites::oam_address;
 use crate::hw;
 
@@ -68,7 +68,7 @@ impl Animation {
     }
 
     /// `a` = the next frame's tile
-    fn step_forward(&self, asm: &mut Asm) {
+    fn step_forward(&self, asm: &mut Block) {
         if self.frame_step == 1 {
             asm.inc(R8::A);
         } else {
@@ -77,7 +77,7 @@ impl Animation {
     }
 
     /// `a` = the previous frame's tile
-    fn step_backward(&self, asm: &mut Asm) {
+    fn step_backward(&self, asm: &mut Block) {
         if self.frame_step == 1 {
             asm.dec(R8::A);
         } else {
@@ -92,7 +92,7 @@ impl Animation {
     /// frame_step`, which is 256 when the last frame is tile 255 (8x8) or 254 (8x16), so
     /// the animation froze on its first frame (B17). The code has the same size as before.
     fn generate_loop_func(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         let label_reset = format!(".reset_{}", self.name);
         let label_next = format!(".next_{}", self.name);
@@ -115,12 +115,12 @@ impl Animation {
         self.step_forward(&mut asm);
         asm.ld_addr_def_a(&oam_tile_addr); // store updated sprite tile index
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Forward to the last frame, which stays (B10)
     fn generate_once_func(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         let label_reset = format!(".reset_{}", self.name);
         let label_store = format!(".store_{}", self.name);
@@ -141,7 +141,7 @@ impl Animation {
         asm.label(&label_store);
         asm.ld_addr_def_a(&oam_tile_addr);
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Forward to the last frame, backward to the first one, and again (B10)
@@ -150,7 +150,7 @@ impl Animation {
     /// forward and the last one backward, so the ends are shown once per turn and a
     /// direction left over from another animation does no harm.
     fn generate_ping_pong_func(&self, direction_var: &str) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         let oam_tile_addr = self.oam_tile_addr();
         let (abs_start, abs_end) = self.abs_frames();
@@ -159,7 +159,7 @@ impl Animation {
             // One frame: nowhere to go
             asm.ld_a(abs_start);
             asm.ld_addr_def_a(&oam_tile_addr);
-            return asm.get_main_instrs();
+            return asm.into_instrs();
         }
 
         let label = |stem: &str| format!(".{}_{}", stem, self.name);
@@ -201,6 +201,6 @@ impl Animation {
         asm.label(&store);
         asm.ld_addr_def_a(&oam_tile_addr);
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }

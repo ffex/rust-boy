@@ -1,7 +1,9 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
 use crate::gb_asm::labels::code_lines;
-use crate::gb_asm::{Asm, Chunk, Expr, Instr, JumpTarget, LabelAllocator, R8, is_identifier};
+use crate::gb_asm::{
+    Asm, Block, Chunk, Expr, Instr, JumpTarget, LabelAllocator, R8, is_identifier,
+};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
 use crate::hw;
@@ -309,13 +311,13 @@ impl RustBoy {
     ///
     /// # Example
     /// ```
-    /// use rust_boy::gb_asm::Asm;
+    /// use rust_boy::gb_asm::Block;
     /// use rust_boy::rust_boy::RustBoy;
     ///
     /// let mut gb = RustBoy::new();
-    /// let mut body = Asm::new();
+    /// let mut body = Block::new();
     /// body.label("OnInterrupt").ret();
-    /// gb.define_function("OnInterrupt", body.get_main_instrs());
+    /// gb.define_function("OnInterrupt", body.into_instrs());
     /// assert!(!gb.build().contains("OnInterrupt:"), "never called");
     ///
     /// gb.keep_function("OnInterrupt");
@@ -424,12 +426,12 @@ impl RustBoy {
     /// ```
     pub fn define_function_from(&mut self, name: &str, mut body: impl Emittable) -> &mut Self {
         check_function_name(name);
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.label(name);
         asm.emit_all(body.emit(&mut self.if_counter));
         asm.ret();
         self.functions
-            .register_user_function(name, asm.get_main_instrs());
+            .register_user_function(name, asm.into_instrs());
         self
     }
 
@@ -519,7 +521,7 @@ impl RustBoy {
         // === INIT CHUNK ===
         // In two parts, before and after the variable initialisation, which is emitted
         // once the functions are known: a builtin may need variables (B26)
-        let mut startup = Asm::new();
+        let mut startup = Block::new();
 
         // Entry point
         startup.label("EntryPoint");
@@ -549,7 +551,7 @@ impl RustBoy {
         // Then the variables (below), then the user init code, after every default it
         // may want to change: variables, animations, palettes, OAM (B11). The LCD is
         // still off, so it can write VRAM.
-        let mut finish = Asm::new();
+        let mut finish = Block::new();
         finish.emit_all(self.init_code.clone());
         finish.emit_all(self.raw_chunk(Chunk::Init));
 
@@ -565,8 +567,8 @@ impl RustBoy {
         }
         finish.ld(R8::A, lcdc);
         finish.ld_addr_def_a(hw::LCDC);
-        let startup = startup.get_main_instrs();
-        let finish = finish.get_main_instrs();
+        let startup = startup.into_instrs();
+        let finish = finish.into_instrs();
 
         // === MAIN LOOP CHUNK ===
         asm.chunk(Chunk::MainLoop);
@@ -688,7 +690,7 @@ impl RustBoy {
     /// # Example
     /// ```ignore
     /// // Raw instructions
-    /// gb.add_to_main_loop(asm.get_main_instrs());
+    /// gb.add_to_main_loop(asm.into_instrs());
     ///
     /// // If statement (counter managed automatically)
     /// gb.add_to_main_loop(If::eq(left, right, body));
@@ -985,9 +987,9 @@ mod tests {
         gb.vars.create_u8("wXray", 4);
 
         for name in ["FuncB", "FuncA"] {
-            let mut body = Asm::new();
+            let mut body = Block::new();
             body.label(name).ret();
-            gb.define_function(name, body.get_main_instrs());
+            gb.define_function(name, body.into_instrs());
         }
         // Called in the other order: functions are emitted in registration order
         gb.add_to_main_loop(crate::gb_std::flow::Call::new("FuncA"));
@@ -1841,12 +1843,12 @@ mod tests {
         gb.init(lives.set(3));
         let enable = gb.sprites.enable_animation(coin, 1);
         gb.init(enable);
-        let mut own = Asm::new();
+        let mut own = Block::new();
         own.ld_a(1)
             .ld_addr_def_a("wAnim_Coin_Dir")
             .ld_a(0b00011011)
             .ld_addr_def_a("rBGP");
-        gb.init(own.get_main_instrs());
+        gb.init(own.into_instrs());
 
         let cpu = run_startup(&mut gb);
         assert_mem(&cpu, "wLives", 3);
@@ -1863,9 +1865,9 @@ mod tests {
             .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
         gb.vars.create_u8("wScore", 7);
         gb.add_sprite("Ball", tiles(1), 16, 16, 0);
-        let mut user = Asm::new();
+        let mut user = Block::new();
         user.ld_a(5).ld_addr_def_a("rSCX");
-        gb.init(user.get_main_instrs());
+        gb.init(user.into_instrs());
 
         let cpu = run_startup(&mut gb);
         // Each side effect, by the start-up step it belongs to
@@ -2122,13 +2124,13 @@ mod tests {
 
     /// A function `name` that calls each of `callees`
     fn calling(name: &str, callees: &[&str]) -> Vec<Instr> {
-        let mut body = Asm::new();
+        let mut body = Block::new();
         body.label(name);
         for callee in callees {
             body.call(callee);
         }
         body.ret();
-        body.get_main_instrs()
+        body.into_instrs()
     }
 
     #[test]
@@ -2170,9 +2172,9 @@ mod tests {
             }),
             // A raw instruction of several lines, a comment before the call
             ("raw text after a comment", "Delay", |gb| {
-                let mut code = Asm::new();
+                let mut code = Block::new();
                 code.raw("ld a, 1 ; one\n    call Delay");
-                gb.add_to_main_loop(code.get_main_instrs());
+                gb.add_to_main_loop(code.into_instrs());
             }),
             // A `;` in a string is not a comment
             ("a db with a string", "Delay", |gb| {
@@ -2229,13 +2231,13 @@ mod tests {
         gb.define_function("FromRawText", calling("FromRawText", &[]));
         gb.define_function("InTable", calling("InTable", &[]));
         gb.add_to_main_loop(Call::new("Called"));
-        let mut table = Asm::new();
+        let mut table = Block::new();
         table
             .ld(crate::gb_asm::R16::HL, "ByAddress")
             .jp_cond(crate::gb_asm::Condition::Z, "Jumped")
             // Raw text of several lines, the call after a comment
             .raw("ld a, 1 ; one\n    call FromRawText");
-        gb.add_to_main_loop(table.get_main_instrs());
+        gb.add_to_main_loop(table.into_instrs());
         gb.raw(|asm| {
             asm.label("RawCode")
                 .call("FromRaw")
@@ -2371,9 +2373,9 @@ mod tests {
         gb.add_to_main_loop(Call::new("CheckAndHandleBrick"));
         let asm = gb.build_asm();
         assert_links(&asm.to_asm());
-        let mut code = Asm::new();
+        let mut code = Block::new();
         code.call("CheckAndHandleBrick").ret();
-        let mut code = code.get_main_instrs();
+        let mut code = code.into_instrs();
         code.extend(asm.get_chunk(Chunk::Functions).cloned().unwrap());
 
         // The ball at OAM X 48, Y 57: the pixel above it is (40, 40), map tile (5, 5)
@@ -2419,13 +2421,13 @@ mod tests {
         // A constant or a variable named like a builtin is not a call to it: the builtin
         // was emitted too, and rgbasm reported `Delay` already defined
         let read_delay = || {
-            let mut code = Asm::new();
+            let mut code = Block::new();
             code.ld_a_addr_def("Delay");
-            code.get_main_instrs()
+            code.into_instrs()
         };
         let mut gb = RustBoy::new();
         gb.define_const("Delay", 5);
-        gb.add_to_main_loop(Asm::new().ld(R8::A, "Delay").get_main_instrs());
+        gb.add_to_main_loop(Block::new().ld(R8::A, "Delay").to_vec());
         let out = gb.build();
         assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
         assert_links(&out);
@@ -2490,7 +2492,7 @@ mod tests {
     #[test]
     fn test_a_second_entry_point_of_a_function_is_found() {
         // A body with two global labels: a call to the second one emits the function
-        let mut body = Asm::new();
+        let mut body = Block::new();
         body.label("Blank")
             .ld_a(0)
             .label("BlankWithA")
@@ -2498,7 +2500,7 @@ mod tests {
             .ret();
         let mut gb = RustBoy::new();
         gb.vars.create_u8("wTile", 0);
-        gb.define_function("Blank", body.get_main_instrs());
+        gb.define_function("Blank", body.into_instrs());
         gb.add_to_main_loop(Call::new("BlankWithA"));
         let out = gb.build();
         assert_eq!(definitions(&out, "BlankWithA"), 1, "{}", out);
@@ -2631,11 +2633,11 @@ mod tests {
         // for Delay (whose body names itself) but the builtin for GetTileByPixel
         for builtin in [BuiltinFunction::Delay, BuiltinFunction::GetTileByPixel] {
             let name = builtin.label();
-            let mut own = Asm::new();
+            let mut own = Block::new();
             own.label(name).ld_a(42).ret();
             let mut gb = RustBoy::new();
             gb.use_function(builtin);
-            gb.define_function(name, own.get_main_instrs());
+            gb.define_function(name, own.into_instrs());
             let out = gb.build();
             assert_eq!(definitions(&out, name), 1, "{}:\n{}", name, out);
             let body = function(&out, name);
@@ -2655,9 +2657,9 @@ mod tests {
         // builtin was found first, so it was emitted (with wCurKeys/wNewKeys) and the
         // user's routine dropped. It linked, but ran other code.
         let bundle = || {
-            let mut body = Asm::new();
+            let mut body = Block::new();
             body.label("MyLib").ret().label("UpdateKeys").ld_a(42).ret();
-            body.get_main_instrs()
+            body.into_instrs()
         };
         let called = |gb: &mut RustBoy| {
             gb.add_to_main_loop(Call::new("UpdateKeys"));
@@ -2711,9 +2713,9 @@ mod tests {
         // Two functions define the label Entry: the first registered owns it. When that
         // one is redefined without Entry, the label belongs to the other one.
         let with_entry = |name: &str, value: u8| {
-            let mut body = Asm::new();
+            let mut body = Block::new();
             body.label(name).ret().label("Entry").ld_a(value).ret();
-            body.get_main_instrs()
+            body.into_instrs()
         };
         let mut gb = RustBoy::new();
         gb.define_function("First", with_entry("First", 1));
@@ -2759,7 +2761,7 @@ mod tests {
         }
         for f in 0..100 {
             let name = format!("Func{}", f);
-            let mut body = Asm::new();
+            let mut body = Block::new();
             body.label(&name);
             for i in 0..48 {
                 body.ld_a_addr_def(format!("wVar{}", i % 10)).inc(R8::A);
@@ -2769,14 +2771,14 @@ mod tests {
                 body.call(&format!("Func{}", f + 1));
             }
             body.label(&format!("Func{}Entry", f)).ret();
-            gb.define_function(&name, body.get_main_instrs());
+            gb.define_function(&name, body.into_instrs());
         }
-        let mut main = Asm::new();
+        let mut main = Block::new();
         for i in 0..5000 {
             main.ld_a_addr_def(format!("wVar{}", i % 10));
         }
         main.call("Func0");
-        gb.add_to_main_loop(main.get_main_instrs());
+        gb.add_to_main_loop(main.into_instrs());
         // `call` through second entry points: a lookup each, not a scan of every body
         for i in 0..1000 {
             let call = gb.call(&format!("Func{}Entry", i % 100));

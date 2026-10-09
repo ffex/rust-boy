@@ -310,7 +310,7 @@ impl fmt::Display for Expr {
 
 /// The value of an RGBDS number literal (`$FF`, `0xFF`, `%101`, `0b101`, `&17`, `0o17`,
 /// decimal, `_` between digits), and how to write it again; `None` if it is not one
-fn parse_number(text: &str) -> Option<(i32, Radix)> {
+pub(crate) fn parse_number(text: &str) -> Option<(i32, Radix)> {
     let prefixes: [(&str, u32); 8] = [
         ("$", 16),
         ("0x", 16),

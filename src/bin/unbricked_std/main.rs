@@ -2,9 +2,9 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, Block, LabelAllocator, R8},
+    gb_asm::{Asm, Block, R8},
     gb_std::{
-        flow::{Emittable, If},
+        flow::If,
         graphics::{
             sprites::{SpriteManager, clear_objects_screen, initialize_objects_screen},
             utility::{
@@ -46,7 +46,7 @@ fn main() {
     asm.emit_all(cp_in_memory("Tilemap", "$9800"));
 
     asm.emit_all(initialize_objects_screen());
-    asm.emit_all(clear_objects_screen());
+    asm.emit_all(clear_objects_screen(asm.labels()));
 
     // Sprite management
     let mut sprite_manager = SpriteManager::new();
@@ -175,19 +175,19 @@ fn main() {
         let middle_if = If::lt(paddle_x_minus_8, ball.get_x(), inner_if);
 
         // Outer: ball_y + 5 == paddle_y (Y alignment)
-        let mut paddle_bounce = If::eq(ball_y_plus_5, paddle.get_y(), middle_if);
+        let paddle_bounce = If::eq(ball_y_plus_5, paddle.get_y(), middle_if);
 
-        // Emit with counter management
-        let mut counter = 0;
-        asm.emit_all(paddle_bounce.emit(&mut counter));
+        // Its labels come from the program's allocator
+        asm.emit_code(paddle_bounce);
     }
     asm.comment("PaddleBounceDone");
 
     asm.call("UpdateKeys");
 
     // Input handling: the paddle stays between the walls, at OAM X 16 to 104 (limits included).
-    // Key checks and limited moves number their local labels with one allocator
-    let labels = LabelAllocator::new();
+    // Key checks and limited moves take their local labels from the program's allocator,
+    // like the Ifs
+    let labels = asm.labels().clone();
     let left_pressed = sprite_manager
         .get_sprite_mut(0)
         .unwrap()

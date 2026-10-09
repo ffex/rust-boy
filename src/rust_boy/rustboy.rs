@@ -65,7 +65,9 @@ fn opens_section(code: &[Instr]) -> bool {
 /// println!("{}", gb.build());
 /// ```
 pub struct RustBoy {
-    /// Internal assembly generator (hidden from user)
+    /// The code written with [`RustBoy::raw`], in chunks; it owns the program's label
+    /// allocator ([`RustBoy::labels`]), shared with the sprite manager, so every
+    /// generated label comes from one sequence
     asm: Asm,
 
     /// Tile manager with automatic VRAM allocation
@@ -79,13 +81,6 @@ pub struct RustBoy {
 
     /// Function registry for auto-including builtin functions
     functions: FunctionRegistry,
-
-    /// Counter for generating unique if-statement labels
-    if_counter: usize,
-
-    /// Numbers every other generated label (key checks, sprite moves, `unique_label`);
-    /// shared with the sprite manager, so they never clash (B7)
-    labels: LabelAllocator,
 
     /// Custom constants defined by the user
     constants: Vec<(String, String)>,
@@ -106,15 +101,13 @@ pub struct RustBoy {
 impl RustBoy {
     /// Create a new RustBoy instance
     pub fn new() -> Self {
-        let labels = LabelAllocator::new();
+        let asm = Asm::new();
         Self {
-            asm: Asm::new(),
+            sprites: SpriteManager::new(asm.labels().clone()),
+            asm,
             tiles: TileManager::new(),
             vars: VariableManager::new(),
-            sprites: SpriteManager::new(labels.clone()),
             functions: FunctionRegistry::new(),
-            if_counter: 0,
-            labels,
             constants: Vec::new(),
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
@@ -179,17 +172,10 @@ impl RustBoy {
         self
     }
 
-    /// Get the next if-statement label counter (auto-increments)
-    pub fn next_if_counter(&mut self) -> usize {
-        let c = self.if_counter;
-        self.if_counter += 1;
-        c
-    }
-
-    /// Get the next general-purpose label counter (auto-increments); the sequence is
-    /// shared with the labels of the generated key checks and sprite moves
+    /// Get the next number of the program's label sequence ([`RustBoy::labels`]), which
+    /// every generated label uses: `If`s, key checks, sprite moves
     pub fn next_label_counter(&mut self) -> usize {
-        self.labels.next_id()
+        self.labels().next_id()
     }
 
     /// Generate a unique label with prefix
@@ -197,12 +183,14 @@ impl RustBoy {
         format!("{}_{}", prefix, self.next_label_counter())
     }
 
-    /// The allocator that numbers this program's generated local labels (key checks,
-    /// sprite moves)
+    /// The allocator of this program's generated labels: the `If`s, the key checks, the
+    /// sprite moves, the start-up code and the animation dispatcher all take their labels
+    /// from it, so every label is unique
     ///
     /// Pass it to the `gb_std` snippets you mix into a `RustBoy` program
-    /// (`check_key`, `Sprite::move_*_limit`): a separate allocator starts again at 0
-    /// and would repeat labels that `RustBoy` already emitted.
+    /// (`check_key`, `Sprite::move_*_limit`), and to [`Emittable::emit`] if you emit code
+    /// yourself: a separate allocator starts again at 0 and would repeat labels that
+    /// `RustBoy` already emitted. In a [`RustBoy::raw`] closure it is `asm.labels()`.
     ///
     /// # Example
     /// ```
@@ -213,7 +201,7 @@ impl RustBoy {
     /// gb.add_to_main_loop(check_key(gb.labels(), PadButton::A, Vec::new()));
     /// ```
     pub fn labels(&self) -> &LabelAllocator {
-        &self.labels
+        self.asm.labels()
     }
 
     /// Add initialization code (runs once at startup)
@@ -228,7 +216,7 @@ impl RustBoy {
     /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
     /// off, `rLY` stays 0 and the wait never ends.
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(&mut self.if_counter);
+        let instrs = code.emit(self.asm.labels());
         self.init_code.extend(instrs);
         self
     }
@@ -428,7 +416,7 @@ impl RustBoy {
         check_function_name(name);
         let mut asm = Block::new();
         asm.label(name);
-        asm.emit_all(body.emit(&mut self.if_counter));
+        asm.emit_all(body.emit(self.asm.labels()));
         asm.ret();
         self.functions
             .register_user_function(name, asm.into_instrs());
@@ -501,8 +489,11 @@ impl RustBoy {
 
     /// The program [`build`](Self::build) prints, as instructions in chunks
     pub(crate) fn build_asm(&mut self) -> Asm {
-        // Start fresh assembly
-        let mut asm = Asm::new();
+        // Start fresh assembly. The code generated here takes its labels after every
+        // label handed out so far, from a fork of the program's allocator, so a second
+        // build gives the same labels (B14)
+        let mut asm = Asm::with_labels(self.labels().fork());
+        let labels = asm.labels().clone();
 
         // === HEADER CHUNK ===
         asm.chunk(Chunk::Header);
@@ -537,7 +528,7 @@ impl RustBoy {
         // Clear the whole OAM, with or without sprites: objects are always turned on
         // below, and OAM holds garbage at power-on (B28)
         startup.emit_all(initialize_objects_screen());
-        startup.emit_all(clear_objects_screen());
+        startup.emit_all(clear_objects_screen(&labels));
         if !self.sprites.is_empty() {
             startup.emit_all(self.sprites.generate_init_code());
         }
@@ -579,7 +570,10 @@ impl RustBoy {
 
         // Generate animation calls at start of main loop
         if self.sprites.has_animations() {
-            asm.emit_all(self.sprites.generate_animation_calls(self.animation_delay));
+            asm.emit_all(
+                self.sprites
+                    .generate_animation_calls(&labels, self.animation_delay),
+            );
         }
 
         // Emit main loop code, then the raw main loop code
@@ -692,11 +686,11 @@ impl RustBoy {
     /// // Raw instructions
     /// gb.add_to_main_loop(asm.into_instrs());
     ///
-    /// // If statement (counter managed automatically)
+    /// // If statement (its labels come from the program's allocator, `labels()`)
     /// gb.add_to_main_loop(If::eq(left, right, body));
     /// ```
     pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(&mut self.if_counter);
+        let instrs = code.emit(self.asm.labels());
         self.main_loop_code.extend(instrs);
         self
     }
@@ -732,7 +726,7 @@ impl RustBoy {
 
         // Add the input handling code
         self.main_loop_code
-            .extend(inputs.generate_code(&self.labels));
+            .extend(inputs.generate_code(self.asm.labels()));
 
         self
     }
@@ -917,15 +911,6 @@ mod tests {
         let gb = RustBoy::new();
         assert!(gb.tiles.is_empty());
         assert!(gb.vars.is_empty());
-    }
-
-    #[test]
-    fn test_if_counter() {
-        let mut gb = RustBoy::new();
-
-        assert_eq!(gb.next_if_counter(), 0);
-        assert_eq!(gb.next_if_counter(), 1);
-        assert_eq!(gb.next_if_counter(), 2);
     }
 
     #[test]
@@ -1272,7 +1257,9 @@ mod tests {
         assert!(out.contains("PlayerMore:"), "the tiles are copied: {}", out);
 
         // The animation plays the four frames: tiles 2 (its own), then 3, 4, 5 (the others)
-        let mut code = gb.sprites.generate_animation_calls(1);
+        let mut code = gb
+            .sprites
+            .generate_animation_calls(&LabelAllocator::new(), 1);
         code.push(Instr::Ret);
         for (_, body) in gb.sprites.generate_animation_functions() {
             code.extend(body);
@@ -2847,5 +2834,284 @@ mod tests {
             out.contains("NoTiles:") && out.contains("NoMapEnd:"),
             "labels kept"
         );
+    }
+
+    // ==================== One label allocator, relaxed jumps (Phase 2) ====================
+
+    use crate::gb_asm::Condition;
+    use crate::gb_asm::label_check::{assert_links_with, jr_range_errors};
+
+    /// Every label the allocator handed out in `out` (a local `.{stem}_{n}`): each one is
+    /// defined once in the whole program, whatever its scope. Returns them.
+    fn generated_labels(out: &str) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for line in out.lines() {
+            let Some(name) = line.trim().strip_suffix(':') else {
+                continue;
+            };
+            let Some((_, number)) = name.strip_prefix('.').and_then(|n| n.rsplit_once('_')) else {
+                continue;
+            };
+            if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            assert!(
+                seen.insert(name.to_string()),
+                "{} is defined twice in:\n{}",
+                name,
+                out
+            );
+        }
+        seen.into_iter().collect()
+    }
+
+    /// Panics if a `jr` of the program `gb` builds does not reach its target, as RGBDS
+    /// would (the relaxed program, as `build()` prints it)
+    fn assert_jumps_in_range(gb: &mut RustBoy) {
+        let program = gb.build_asm().program();
+        assert_eq!(jr_range_errors(&program), Vec::<String>::new());
+    }
+
+    /// A program that makes up labels in every way: `If`, `IfConst`, `IfA` and `IfCall`
+    /// (nested, with else, in `init`, the main loop, a function and `raw()` code), key
+    /// checks, single and composite moves, `gb_std` snippets, animations on several
+    /// sprites, and the start-up code
+    fn labelled_program() -> RustBoy {
+        use crate::gb_std::graphics::sprites::Sprite;
+        use crate::gb_std::inputs::check_key;
+
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let player = gb.add_sprite_16x16("Player", tiles(4), tiles(4), 80, 72, 0);
+        gb.sprites
+            .add_composite_animation(player, "Walk", 0, 1, AnimationType::Loop);
+        let coin = gb.add_sprite("Coin", tiles(4), 16, 16, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::PingPong);
+        gb.sprites
+            .add_animation(coin, "Flash", 0, 1, AnimationType::Once);
+        let score = gb.vars.create_u8("wScore", 0);
+
+        gb.init(If::le(score.get(), score.get(), score.set(1)).or_else(score.set(2)));
+        let inner = If::lt(
+            gb.sprites.get_x(coin),
+            gb.sprites.get_y(coin),
+            gb.sprites.move_left_limit(coin, 1, 16),
+        )
+        .or_else(gb.sprites.move_composite_right_limit(player, 1, 140));
+        gb.add_to_main_loop(If::gt(score.get(), score.get(), inner));
+        gb.add_to_main_loop(IfConst::eq(
+            score.get(),
+            3,
+            IfA::ne(4, gb.sprites.move_down_limit(coin, 1, 140)),
+        ));
+
+        let mut inputs = InputManager::new();
+        inputs.on_press(
+            PadButton::Left,
+            gb.sprites.move_composite_left_limit(player, 1, 8),
+        );
+        inputs.on_press(PadButton::Left, gb.sprites.move_up_limit(coin, 1, 16));
+        gb.add_inputs(inputs);
+
+        // gb_std snippets, with the program's allocator
+        let mut oam_4 = Sprite::new(4, 0, 0, 0, 0);
+        let body = oam_4.move_right_limit(gb.labels(), 1, 140);
+        gb.add_to_main_loop(check_key(gb.labels(), PadButton::Right, body));
+
+        gb.define_function_from("Bump", IfA::eq(5, score.set(2)).or_else(score.set(3)));
+        gb.add_to_main_loop(IfCall::is_true("Bump", score.set(4)).or_else(score.set(5)));
+
+        // raw() code takes the same allocator, through its Asm
+        let (get, set) = (score.get(), score.set(6));
+        gb.raw(move |asm| {
+            asm.chunk(Chunk::MainLoop)
+                .emit_code(If::ne(get.clone(), get, set));
+        });
+        gb
+    }
+
+    #[test]
+    fn test_every_generated_label_is_unique() {
+        let mut gb = labelled_program();
+        let out = gb.build();
+        assert_labels_ok(&out);
+        assert_links(&out);
+        // Unique in the whole program, not only in their scope: one sequence for all
+        let labels = generated_labels(&out);
+        for kind in [
+            ".end_if_",
+            ".else_",
+            ".then_",
+            ".check_left_",
+            ".check_left_end_",
+            ".check_right_",
+            "_limit_store_",
+            "_limit_end_",
+            ".clear_oam_",
+            ".anim_end_",
+            ".anim_Coin_end_",
+            ".skip_Coin_Flash_",
+            ".skip_Player_left_Walk_",
+        ] {
+            assert!(
+                labels.iter().any(|label| label.contains(kind)),
+                "no {} label in:\n{}",
+                kind,
+                out
+            );
+        }
+        // The fixed global labels of the snippets are gone (B7, Phase 2)
+        assert!(
+            !out.contains("ClearOam") && !out.contains("AnimEnd"),
+            "{}",
+            out
+        );
+        assert_jumps_in_range(&mut gb);
+    }
+
+    #[test]
+    fn test_a_generated_label_never_repeats_a_number() {
+        // Labels taken by hand from the program's allocator (RustBoy::labels,
+        // unique_label) and by the generators never share a number
+        let mut gb = RustBoy::new();
+        let mine = gb.labels().local("mine");
+        let score = gb.vars.create_u8("wScore", 0);
+        gb.add_to_main_loop(If::eq(score.get(), score.get(), score.set(1)));
+        let unique = gb.unique_label("Loop");
+        assert_eq!((mine.as_str(), unique.as_str()), (".mine_0", "Loop_2"));
+        let mut body = Block::new();
+        body.label(&mine).jr(&mine);
+        gb.add_to_main_loop(body);
+        let out = gb.build();
+        assert!(out.contains(".end_if_1:"), "{}", out);
+        assert!(
+            out.contains(".clear_oam_3:"),
+            "after every label so far: {}",
+            out
+        );
+        assert_labels_ok(&out);
+        generated_labels(&out);
+    }
+
+    /// The file `far_jumps_program` includes: `External`, a routine `build()` does not see
+    const EXTERNAL_INC: (&str, &str) = ("external.inc", "External:\n    ret\n");
+
+    /// A program whose own code has jumps out of reach of a `jr`, and jumps in reach
+    fn far_jumps_program() -> RustBoy {
+        let mut gb = RustBoy::new();
+        let (paddle, ball) = paddle_and_ball(&mut gb);
+        let score = gb.vars.create_u8("wScore", 0);
+
+        // A jr over an If whose body is long (four moves, 22 bytes each, and more)
+        let skip = gb.labels().local("skip");
+        let mut test = Block::new();
+        test.ld_a_addr_def("wScore")
+            .and(R8::A)
+            .jr_cond(Condition::Z, &skip);
+        gb.add_to_main_loop(test);
+        let mut moves = Vec::new();
+        for _ in 0..2 {
+            moves.extend(gb.sprites.move_left_limit(paddle, 1, 16));
+            moves.extend(gb.sprites.move_right_limit(paddle, 1, 104));
+            moves.extend(gb.sprites.move_up_limit(ball, 1, 16));
+            moves.extend(gb.sprites.move_down_limit(ball, 1, 144));
+        }
+        gb.add_to_main_loop(If::lt(score.get(), score.get(), moves));
+        let mut end = Block::new();
+        end.label(&skip);
+        gb.add_to_main_loop(end);
+
+        // A jr in reach, in the start-up code
+        let near = gb.labels().local("near");
+        let mut init = Block::new();
+        init.jr(&near).ld_a(1).label(&near);
+        gb.init(init);
+
+        // A routine whose loop jumps back over more than 128 bytes
+        let mut wait = Block::new();
+        wait.label("LongWait").label(".loop");
+        for _ in 0..130 {
+            wait.nop();
+        }
+        wait.dec(R8::B).jr_cond(Condition::NZ, ".loop").ret();
+        gb.define_function("LongWait", wait.into_instrs());
+        gb.add_to_main_loop(Call::new("LongWait"));
+
+        // A jr to a routine the program does not define (an INCLUDEd file)
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Functions)
+                .label("Helper")
+                .jr("External")
+                .chunk(Chunk::Header)
+                .include("external.inc");
+        });
+        gb.external_symbol("External");
+        gb
+    }
+
+    #[test]
+    fn test_out_of_range_jumps_become_jp() {
+        let mut gb = far_jumps_program();
+        // As written, two jumps are out of range (rgbasm would reject the program)
+        let asm = gb.build_asm();
+        let written: Vec<Instr> = [Chunk::MainLoop, Chunk::Functions]
+            .iter()
+            .flat_map(|chunk| asm.get_chunk(*chunk).cloned().unwrap_or_default())
+            .collect();
+        let errors = jr_range_errors(&written);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.starts_with("jr z, .skip_0: offset"))
+                && errors
+                    .iter()
+                    .any(|e| e.starts_with("jr nz, .loop: offset -")),
+            "{:?}",
+            errors
+        );
+        let out = gb.build();
+        // The jr over the If and the loop are out of range: jp; the near one stays jr
+        assert!(out.contains("jp z, .skip_0\n"), "{}", out);
+        assert!(out.contains("jp nz, .loop\n"), "{}", out);
+        assert!(out.contains("jr .near_"), "{}", out);
+        // A target the program does not define: jp, whatever the distance
+        assert!(out.contains("jp External\n"), "{}", out);
+        // The generated code's own jr stay jr (Loop/Once/PingPong functions, Memcopy...)
+        assert_jumps_in_range(&mut gb);
+        assert_links_with(&out, &[EXTERNAL_INC]);
+    }
+
+    #[test]
+    fn test_generated_programs_have_no_jr_out_of_range() {
+        // No program build() makes reports a jr out of range: these use every generator
+        // (and the examples are assembled by CI)
+        for mut gb in [
+            sample_rustboy(),
+            labelled_program(),
+            far_jumps_program(),
+            RustBoy::new(),
+        ] {
+            assert_jumps_in_range(&mut gb);
+        }
+    }
+
+    #[test]
+    fn test_the_same_program_gives_the_same_output() {
+        // Labels and relaxation depend only on the program: built twice from scratch, or
+        // twice in a row, it prints the same text
+        for make in [labelled_program, far_jumps_program] {
+            let mut first = make();
+            let out = first.build();
+            assert_eq!(out, make().build(), "two programs built the same way");
+            assert_eq!(out, first.build(), "a second build()");
+            // Code added after a build takes new numbers: the next build is still unique
+            let score = first.vars.create_u8("wScore", 0);
+            first.add_to_main_loop(If::eq(score.get(), score.get(), score.set(9)));
+            let again = first.build();
+            assert_ne!(again, out);
+            generated_labels(&again);
+            assert_links_with(&again, &[EXTERNAL_INC]);
+        }
     }
 }

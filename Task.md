@@ -141,9 +141,12 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       every family, with all the operands of the regular families, checked with rgbasm against the SM83 opcode table in `gb_asm::isa_tests`)
 - [ ] First-class sections (type, bank, `ALIGN`, `ds n` without fill for RAM); move `Chunk` and the game
       layout out of `gb_asm` into the engine
-- [ ] Label allocator owned by the asm layer; automatic `jr` → `jp` when out of range
-      (`gb_asm::LabelAllocator` exists since [B7](CONTEXT.md#b7) for snippet labels; `If` still has its own counter;
-      since [B9](CONTEXT.md#b9) tests can check that each `jr` reaches its target with `gb_asm::label_check::jr_range_errors`)
+- [x] Label allocator owned by the asm layer; automatic `jr` → `jp` when out of range
+      (branch `refactor-p2-labels`: the program's `Asm` owns its `LabelAllocator` (`Asm::labels`, `Asm::emit_code`),
+      `Emittable::emit` takes it instead of the `If` counter, and every generated label (`If*`, key checks, moves, the OAM
+      clear loop, the animation dispatcher) is a local `.{stem}_N` from it, unique by construction; `Asm::to_asm` turns
+      each `jr` that does not provably reach its target into a `jp`, iterating until every `jr` left is in range
+      (`gb_asm::relax`, sizes from `Instr::size`); the 6 example ROMs are byte-identical, only label names changed)
 - [ ] Routines as values: `Routine { name, body, deps, clobbers }` → automatic inclusion of dependencies
       and a documented calling convention (which registers each routine clobbers). ([B26](CONTEXT.md#b26) is fixed
       since by scanning the generated code for function names in `build()`; `GetTileByPixel` documents its registers since [B23](CONTEXT.md#b23))
@@ -214,6 +217,10 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 ### Tooling
 - [ ] One-command build & run: produce `.gb` + `.sym` + `.map` via rgbasm/rgblink/rgbfix and open an emulator
 - [ ] Snapshot tests of generated asm (after [B13](CONTEXT.md#b13))
+- [ ] The committed example asm files (`examples/fosdem/main.asm`, `examples/coin-anim/main.asm`,
+      `examples/unbricked/generated/`, `generated-std/`, `unbricked-rustboy/`) are old snapshots from `main`: they still
+      show `ClearOam`, `AnimEnd` and other code the library no longer generates. Regenerate them (and keep them in sync,
+      e.g. as the snapshot tests above), delete them, or mark them as old snapshots — the maintainer's choice
 - [ ] Headless-emulator tests (run the ROM, assert on memory/registers)
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")

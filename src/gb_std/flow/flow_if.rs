@@ -1,4 +1,6 @@
-use crate::gb_asm::{Block, Condition as AsmCondition, Expr, Instr, JumpTarget, R8};
+use crate::gb_asm::{
+    Block, Condition as AsmCondition, Expr, Instr, JumpTarget, LabelAllocator, R8,
+};
 
 use super::emittable::Emittable;
 
@@ -188,23 +190,23 @@ impl If {
     fn emit_simple(
         &mut self,
         asm: &mut Block,
-        counter: &mut usize,
+        labels: &LabelAllocator,
         end_label: &str,
         else_label: &str,
     ) {
         if self.else_branch.is_some() {
             // Jump to else branch if condition is false
             asm.jp_cond(self.op.inverted_asm_condition(), else_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
             asm.jp(end_label);
             asm.label(else_label);
             if let Some(ref mut else_instrs) = self.else_branch {
-                asm.emit_all(else_instrs.emit(counter));
+                asm.emit_all(else_instrs.emit(labels));
             }
         } else {
             // Jump to end if condition is false (skip then branch)
             asm.jp_cond(self.op.inverted_asm_condition(), end_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
         }
     }
 
@@ -212,7 +214,7 @@ impl If {
     fn emit_le(
         &mut self,
         asm: &mut Block,
-        counter: &mut usize,
+        labels: &LabelAllocator,
         end_label: &str,
         else_label: &str,
         then_label: &str,
@@ -226,12 +228,12 @@ impl If {
             asm.jp(else_label);
             // Then branch
             asm.label(then_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
             asm.jp(end_label);
             // Else branch
             asm.label(else_label);
             if let Some(ref mut else_instrs) = self.else_branch {
-                asm.emit_all(else_instrs.emit(counter));
+                asm.emit_all(else_instrs.emit(labels));
             }
         } else {
             // Jump to then if C (A < B)
@@ -242,12 +244,18 @@ impl If {
             asm.jp(end_label);
             // Then branch
             asm.label(then_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
         }
     }
 
     /// Generate assembly for GT (A > B): true if NC && NZ
-    fn emit_gt(&mut self, asm: &mut Block, counter: &mut usize, end_label: &str, else_label: &str) {
+    fn emit_gt(
+        &mut self,
+        asm: &mut Block,
+        labels: &LabelAllocator,
+        end_label: &str,
+        else_label: &str,
+    ) {
         let else_or_end = if self.else_branch.is_some() {
             else_label
         } else {
@@ -259,12 +267,12 @@ impl If {
         // Skip to else/end if Z (A == B)
         asm.jp_cond(AsmCondition::Z, else_or_end);
         // Fall through to then branch (only if NC && NZ, i.e., A > B)
-        asm.emit_all(self.then_branch.emit(counter));
+        asm.emit_all(self.then_branch.emit(labels));
 
         if let Some(ref mut else_instrs) = self.else_branch {
             asm.jp(end_label);
             asm.label(else_label);
-            asm.emit_all(else_instrs.emit(counter));
+            asm.emit_all(else_instrs.emit(labels));
         }
     }
 }
@@ -282,25 +290,20 @@ impl Emittable for If {
     /// ; then branch
     /// .end_if_N:
     /// ```
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, labels: &LabelAllocator) -> Vec<Instr> {
         let mut asm = Block::new();
 
-        // Get unique counter for this if
-        let my_counter = *counter;
-        *counter += 1;
-
-        let end_label = format!(".end_if_{}", my_counter);
-        let else_label = format!(".else_{}", my_counter);
-        let then_label = format!(".then_{}", my_counter);
+        // One number from the program's allocator for the labels of this if
+        let [end_label, else_label, then_label] = labels.locals(["end_if", "else", "then"]);
 
         // Step 1: Execute right instructions (result in A)
-        asm.emit_all(self.right.emit(counter));
+        asm.emit_all(self.right.emit(labels));
 
         // Step 2: Save right value to B
         asm.ld(R8::B, R8::A);
 
         // Step 3: Execute left instructions (result in A)
-        asm.emit_all(self.left.emit(counter));
+        asm.emit_all(self.left.emit(labels));
 
         // Step 4: Compare A (left) with B (right): the flags describe left - right
         asm.cp(R8::B);
@@ -308,13 +311,13 @@ impl Emittable for If {
         // Step 5: Handle conditional jumps based on operator type
         match self.op {
             ComparisonOp::E | ComparisonOp::NE | ComparisonOp::LT | ComparisonOp::GE => {
-                self.emit_simple(&mut asm, counter, &end_label, &else_label);
+                self.emit_simple(&mut asm, labels, &end_label, &else_label);
             }
             ComparisonOp::LE => {
-                self.emit_le(&mut asm, counter, &end_label, &else_label, &then_label);
+                self.emit_le(&mut asm, labels, &end_label, &else_label, &then_label);
             }
             ComparisonOp::GT => {
-                self.emit_gt(&mut asm, counter, &end_label, &else_label);
+                self.emit_gt(&mut asm, labels, &end_label, &else_label);
             }
         }
 
@@ -461,21 +464,21 @@ impl IfConst {
     fn emit_simple(
         &mut self,
         asm: &mut Block,
-        counter: &mut usize,
+        labels: &LabelAllocator,
         end_label: &str,
         else_label: &str,
     ) {
         if self.else_branch.is_some() {
             asm.jp_cond(self.op.inverted_asm_condition(), else_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
             asm.jp(end_label);
             asm.label(else_label);
             if let Some(ref mut else_instrs) = self.else_branch {
-                asm.emit_all(else_instrs.emit(counter));
+                asm.emit_all(else_instrs.emit(labels));
             }
         } else {
             asm.jp_cond(self.op.inverted_asm_condition(), end_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
         }
     }
 
@@ -483,7 +486,7 @@ impl IfConst {
     fn emit_le(
         &mut self,
         asm: &mut Block,
-        counter: &mut usize,
+        labels: &LabelAllocator,
         end_label: &str,
         else_label: &str,
         then_label: &str,
@@ -493,23 +496,29 @@ impl IfConst {
             asm.jp_cond(AsmCondition::Z, then_label);
             asm.jp(else_label);
             asm.label(then_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
             asm.jp(end_label);
             asm.label(else_label);
             if let Some(ref mut else_instrs) = self.else_branch {
-                asm.emit_all(else_instrs.emit(counter));
+                asm.emit_all(else_instrs.emit(labels));
             }
         } else {
             asm.jp_cond(AsmCondition::C, then_label);
             asm.jp_cond(AsmCondition::Z, then_label);
             asm.jp(end_label);
             asm.label(then_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
         }
     }
 
     /// Generate assembly for GT (A > const): true if NC && NZ
-    fn emit_gt(&mut self, asm: &mut Block, counter: &mut usize, end_label: &str, else_label: &str) {
+    fn emit_gt(
+        &mut self,
+        asm: &mut Block,
+        labels: &LabelAllocator,
+        end_label: &str,
+        else_label: &str,
+    ) {
         let else_or_end = if self.else_branch.is_some() {
             else_label
         } else {
@@ -518,12 +527,12 @@ impl IfConst {
 
         asm.jp_cond(AsmCondition::C, else_or_end);
         asm.jp_cond(AsmCondition::Z, else_or_end);
-        asm.emit_all(self.then_branch.emit(counter));
+        asm.emit_all(self.then_branch.emit(labels));
 
         if let Some(ref mut else_instrs) = self.else_branch {
             asm.jp(end_label);
             asm.label(else_label);
-            asm.emit_all(else_instrs.emit(counter));
+            asm.emit_all(else_instrs.emit(labels));
         }
     }
 }
@@ -539,18 +548,13 @@ impl Emittable for IfConst {
     /// ; then branch
     /// .end_if_N:
     /// ```
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, labels: &LabelAllocator) -> Vec<Instr> {
         let mut asm = Block::new();
 
-        let my_counter = *counter;
-        *counter += 1;
-
-        let end_label = format!(".end_if_{}", my_counter);
-        let else_label = format!(".else_{}", my_counter);
-        let then_label = format!(".then_{}", my_counter);
+        let [end_label, else_label, then_label] = labels.locals(["end_if", "else", "then"]);
 
         // Step 1: Execute value instructions (result in A)
-        asm.emit_all(self.value.emit(counter));
+        asm.emit_all(self.value.emit(labels));
 
         // Step 2: Compare A with constant label
         asm.cp(self.constant.clone());
@@ -558,13 +562,13 @@ impl Emittable for IfConst {
         // Step 3: Handle conditional jumps based on operator type
         match self.op {
             ComparisonOp::E | ComparisonOp::NE | ComparisonOp::LT | ComparisonOp::GE => {
-                self.emit_simple(&mut asm, counter, &end_label, &else_label);
+                self.emit_simple(&mut asm, labels, &end_label, &else_label);
             }
             ComparisonOp::LE => {
-                self.emit_le(&mut asm, counter, &end_label, &else_label, &then_label);
+                self.emit_le(&mut asm, labels, &end_label, &else_label, &then_label);
             }
             ComparisonOp::GT => {
-                self.emit_gt(&mut asm, counter, &end_label, &else_label);
+                self.emit_gt(&mut asm, labels, &end_label, &else_label);
             }
         }
 
@@ -669,21 +673,21 @@ impl IfA {
     fn emit_simple(
         &mut self,
         asm: &mut Block,
-        counter: &mut usize,
+        labels: &LabelAllocator,
         end_label: &str,
         else_label: &str,
     ) {
         if self.else_branch.is_some() {
             asm.jp_cond(self.op.inverted_asm_condition(), else_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
             asm.jp(end_label);
             asm.label(else_label);
             if let Some(ref mut else_instrs) = self.else_branch {
-                asm.emit_all(else_instrs.emit(counter));
+                asm.emit_all(else_instrs.emit(labels));
             }
         } else {
             asm.jp_cond(self.op.inverted_asm_condition(), end_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
         }
     }
 
@@ -691,7 +695,7 @@ impl IfA {
     fn emit_le(
         &mut self,
         asm: &mut Block,
-        counter: &mut usize,
+        labels: &LabelAllocator,
         end_label: &str,
         else_label: &str,
         then_label: &str,
@@ -701,23 +705,29 @@ impl IfA {
             asm.jp_cond(AsmCondition::Z, then_label);
             asm.jp(else_label);
             asm.label(then_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
             asm.jp(end_label);
             asm.label(else_label);
             if let Some(ref mut else_instrs) = self.else_branch {
-                asm.emit_all(else_instrs.emit(counter));
+                asm.emit_all(else_instrs.emit(labels));
             }
         } else {
             asm.jp_cond(AsmCondition::C, then_label);
             asm.jp_cond(AsmCondition::Z, then_label);
             asm.jp(end_label);
             asm.label(then_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
         }
     }
 
     /// Generate assembly for GT (A > const): true if NC && NZ
-    fn emit_gt(&mut self, asm: &mut Block, counter: &mut usize, end_label: &str, else_label: &str) {
+    fn emit_gt(
+        &mut self,
+        asm: &mut Block,
+        labels: &LabelAllocator,
+        end_label: &str,
+        else_label: &str,
+    ) {
         let else_or_end = if self.else_branch.is_some() {
             else_label
         } else {
@@ -726,12 +736,12 @@ impl IfA {
 
         asm.jp_cond(AsmCondition::C, else_or_end);
         asm.jp_cond(AsmCondition::Z, else_or_end);
-        asm.emit_all(self.then_branch.emit(counter));
+        asm.emit_all(self.then_branch.emit(labels));
 
         if let Some(ref mut else_instrs) = self.else_branch {
             asm.jp(end_label);
             asm.label(else_label);
-            asm.emit_all(else_instrs.emit(counter));
+            asm.emit_all(else_instrs.emit(labels));
         }
     }
 }
@@ -746,15 +756,10 @@ impl Emittable for IfA {
     /// ; then branch
     /// .end_if_N:
     /// ```
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, labels: &LabelAllocator) -> Vec<Instr> {
         let mut asm = Block::new();
 
-        let my_counter = *counter;
-        *counter += 1;
-
-        let end_label = format!(".end_if_{}", my_counter);
-        let else_label = format!(".else_{}", my_counter);
-        let then_label = format!(".then_{}", my_counter);
+        let [end_label, else_label, then_label] = labels.locals(["end_if", "else", "then"]);
 
         // Compare A with constant label (A already loaded)
         asm.cp(self.constant.clone());
@@ -762,13 +767,13 @@ impl Emittable for IfA {
         // Handle conditional jumps based on operator type
         match self.op {
             ComparisonOp::E | ComparisonOp::NE | ComparisonOp::LT | ComparisonOp::GE => {
-                self.emit_simple(&mut asm, counter, &end_label, &else_label);
+                self.emit_simple(&mut asm, labels, &end_label, &else_label);
             }
             ComparisonOp::LE => {
-                self.emit_le(&mut asm, counter, &end_label, &else_label, &then_label);
+                self.emit_le(&mut asm, labels, &end_label, &else_label, &then_label);
             }
             ComparisonOp::GT => {
-                self.emit_gt(&mut asm, counter, &end_label, &else_label);
+                self.emit_gt(&mut asm, labels, &end_label, &else_label);
             }
         }
 
@@ -921,18 +926,14 @@ impl Emittable for IfCall {
     /// ; else branch
     /// .end_if_N:
     /// ```
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, labels: &LabelAllocator) -> Vec<Instr> {
         let mut asm = Block::new();
 
-        let my_counter = *counter;
-        *counter += 1;
-
-        let end_label = format!(".end_if_{}", my_counter);
-        let else_label = format!(".else_{}", my_counter);
+        let [end_label, else_label] = labels.locals(["end_if", "else"]);
 
         // Step 1: Emit setup instructions (if any)
         if let Some(ref mut setup) = self.setup {
-            asm.emit_all(setup.emit(counter));
+            asm.emit_all(setup.emit(labels));
         }
 
         // Step 2: Call the function
@@ -944,16 +945,16 @@ impl Emittable for IfCall {
         if self.else_branch.is_some() {
             // Jump to else if condition is false
             asm.jp_cond(self.inverted_condition(), &else_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
             asm.jp(&end_label);
             asm.label(&else_label);
             if let Some(ref mut else_instrs) = self.else_branch {
-                asm.emit_all(else_instrs.emit(counter));
+                asm.emit_all(else_instrs.emit(labels));
             }
         } else {
             // Jump to end if condition is false
             asm.jp_cond(self.inverted_condition(), &end_label);
-            asm.emit_all(self.then_branch.emit(counter));
+            asm.emit_all(self.then_branch.emit(labels));
         }
 
         asm.label(&end_label);
@@ -975,11 +976,11 @@ mod tests {
             src: Operand::from(42),
         }];
 
-        let mut counter = 0;
-        let result = instrs.emit(&mut counter);
+        let labels = LabelAllocator::new();
+        let result = instrs.emit(&labels);
 
         assert_eq!(result.len(), 1);
-        assert_eq!(counter, 0); // Vec doesn't increment counter
+        assert_eq!(labels.next_id(), 0); // plain code takes no label number
     }
 
     #[test]
@@ -998,11 +999,11 @@ mod tests {
         }];
 
         let mut if_stmt = If::eq(left, right, then_body);
-        let mut counter = 0;
-        let result = if_stmt.emit(&mut counter);
+        let labels = LabelAllocator::new();
+        let result = if_stmt.emit(&labels);
 
         assert!(!result.is_empty());
-        assert_eq!(counter, 1); // If increments counter
+        assert_eq!(labels.next_id(), 1); // the If took one number
     }
 
     #[test]
@@ -1025,11 +1026,11 @@ mod tests {
         }];
 
         let mut if_stmt = If::eq(left, right, then_body).or_else(else_body);
-        let mut counter = 0;
-        let result = if_stmt.emit(&mut counter);
+        let labels = LabelAllocator::new();
+        let result = if_stmt.emit(&labels);
 
         assert!(!result.is_empty());
-        assert_eq!(counter, 1);
+        assert_eq!(labels.next_id(), 1);
     }
 
     #[test]
@@ -1059,15 +1060,19 @@ mod tests {
         let inner_if = If::lt(inner_left, inner_right, inner_body);
         let mut outer_if = If::eq(outer_left, outer_right, inner_if);
 
-        let mut counter = 0;
-        let result = outer_if.emit(&mut counter);
+        let labels = LabelAllocator::new();
+        let result = outer_if.emit(&labels);
 
         assert!(!result.is_empty());
-        assert_eq!(counter, 2); // Both ifs increment counter
+        assert_eq!(labels.next_id(), 2); // each if took one number
+        // The outer If takes its number first
+        let text: Vec<String> = result.iter().map(|instr| instr.to_string()).collect();
+        assert_eq!(text.last().map(String::as_str), Some(".end_if_0:"));
+        assert!(text.contains(&".end_if_1:".to_string()));
     }
 
     #[test]
-    fn test_counter_increments_correctly() {
+    fn test_each_if_takes_the_next_label_number() {
         let make_if = || {
             If::eq(
                 vec![Instr::Ld {
@@ -1085,19 +1090,20 @@ mod tests {
             )
         };
 
-        let mut counter = 0;
+        // Numbers are shared with every other user of the allocator (snippets, ...)
+        let labels = LabelAllocator::new();
 
         let mut if1 = make_if();
-        if1.emit(&mut counter);
-        assert_eq!(counter, 1);
+        assert!(if1.emit(&labels).contains(&Instr::Label {
+            name: ".end_if_0".to_string()
+        }));
+        assert_eq!(labels.local("check_left"), ".check_left_1");
 
         let mut if2 = make_if();
-        if2.emit(&mut counter);
-        assert_eq!(counter, 2);
-
-        let mut if3 = make_if();
-        if3.emit(&mut counter);
-        assert_eq!(counter, 3);
+        assert!(if2.emit(&labels).contains(&Instr::Label {
+            name: ".end_if_2".to_string()
+        }));
+        assert_eq!(labels.next_id(), 3);
     }
 
     /// Runs the code emitted by `If` on the test CPU and returns register C
@@ -1144,12 +1150,12 @@ mod tests {
 
                     // Without else: C becomes 1 only when the condition holds
                     let mut if_stmt = make(load_a(l), load_a(r), set_c(1));
-                    let ran_then = run(&if_stmt.emit(&mut 0)) == 1;
+                    let ran_then = run(&if_stmt.emit(&LabelAllocator::new())) == 1;
                     assert_eq!(ran_then, want, "If::{}({}, {})", name, l, r);
 
                     // With else: C becomes 1 (then) or 2 (else)
                     let mut if_stmt = make(load_a(l), load_a(r), set_c(1)).or_else(set_c(2));
-                    let branch = run(&if_stmt.emit(&mut 0));
+                    let branch = run(&if_stmt.emit(&LabelAllocator::new()));
                     let want_branch = if want { 1 } else { 2 };
                     assert_eq!(branch, want_branch, "If::{}({}, {}) with else", name, l, r);
                 }

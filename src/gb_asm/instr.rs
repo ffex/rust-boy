@@ -26,7 +26,8 @@
 
 use std::fmt;
 
-use super::expr::Expr;
+use super::expr::{Expr, parse_number};
+use super::labels::code_lines;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Instr {
@@ -302,6 +303,135 @@ impl Instr {
         }
     }
 
+    /// Size in bytes once assembled, or `None` when only RGBDS can know it
+    ///
+    /// Every SM83 instruction has a size (checked against rgbasm, family by family, in
+    /// `gb_asm::isa_tests`): `cp a, b` 1 byte, `cp a, n8` 2, `jr` 2, `jp` and `call` 3, ...
+    /// Labels, comments, `DEF` and `SECTION` take no room. The directives have a size when
+    /// it is written as plain numbers: `ds 4`, `db 1, 2, $FF` (3), `dw 1, $8000` (4),
+    /// `INCBIN` with a length, a raw line with no code (empty or a comment). The others are
+    /// `None`:
+    /// - `ds $150 - @`, `INCLUDE`, `INCBIN` without a length, a raw line with code;
+    /// - a `db` / `dw` with a string (its bytes depend on the charmap), an expression or a
+    ///   symbol: a symbol can be an `EQUS` that expands to several values (`dw Label` is a
+    ///   label's address, 2 bytes, but `db S` with `DEF S EQUS "1, 2, 3"` is 3);
+    /// - anything whose text has a line break (a comment or a label written with `\n`
+    ///   prints the next line as code).
+    ///
+    /// The jump relaxation of [`Asm::to_asm`](super::Asm::to_asm) never keeps a `jr` over
+    /// one of them. An instruction's operand is taken as written: a symbol is a value (an
+    /// `EQUS` that expands to a register, `cp a, S` with `DEF S EQUS "b"`, is not seen).
+    pub fn size(&self) -> Option<usize> {
+        if self.check().is_ok() && self.to_string().contains('\n') {
+            return None;
+        }
+        let size = match self {
+            Instr::Label { .. }
+            | Instr::Comment { .. }
+            | Instr::Def { .. }
+            | Instr::Section { .. } => 0,
+            Instr::Ld { dst, src } => match (dst, src) {
+                (Dst::R8(_), Operand::R8(_)) | (Dst::R16(R16::SP), Operand::R16(R16::HL)) => 1,
+                (Dst::R8(_), Operand::Imm(_)) => 2,
+                (Dst::R16(_), Operand::Imm(_)) => 3,
+                (Dst::Mem(Mem::Addr(_)), _) | (_, Operand::Mem(Mem::Addr(_))) => 3,
+                (Dst::Mem(_), Operand::R8(_)) | (Dst::R8(_), Operand::Mem(_)) => 1,
+                // Not an SM83 instruction: `check` rejects it
+                _ => return None,
+            },
+            // `ldh a, [c]` / `ldh [c], a` 1 byte, `ldh a, [n8]` / `ldh [n8], a` 2
+            Instr::Ldh {
+                dst: Dst::Mem(Mem::C),
+                ..
+            }
+            | Instr::Ldh {
+                src: Operand::Mem(Mem::C),
+                ..
+            } => 1,
+            Instr::Ldh { .. } => 2,
+            // `op a, src`: register or [hl] 1 byte, value 2
+            Instr::Add { src }
+            | Instr::Adc { src }
+            | Instr::Sub { src }
+            | Instr::Sbc { src }
+            | Instr::And { src }
+            | Instr::Xor { src }
+            | Instr::Or { src }
+            | Instr::Cp { src } => match src {
+                AluOperand::R8(_) => 1,
+                AluOperand::Imm(_) => 2,
+            },
+            Instr::Inc { .. }
+            | Instr::Dec { .. }
+            | Instr::AddHl { .. }
+            | Instr::Push { .. }
+            | Instr::Pop { .. }
+            | Instr::Rlca
+            | Instr::Rrca
+            | Instr::Rla
+            | Instr::Rra
+            | Instr::Daa
+            | Instr::Cpl
+            | Instr::Scf
+            | Instr::Ccf
+            | Instr::Nop
+            | Instr::Halt
+            | Instr::Di
+            | Instr::Ei
+            | Instr::JpHl
+            | Instr::Ret
+            | Instr::RetCond { .. }
+            | Instr::Reti
+            | Instr::Rst { .. } => 1,
+            // rgbasm follows `stop` with a $00 byte
+            Instr::Stop | Instr::AddSp { .. } | Instr::LdHlSp { .. } => 2,
+            // The `$CB`-prefixed instructions
+            Instr::Rlc { .. }
+            | Instr::Rrc { .. }
+            | Instr::Rl { .. }
+            | Instr::Rr { .. }
+            | Instr::Sla { .. }
+            | Instr::Sra { .. }
+            | Instr::Swap { .. }
+            | Instr::Srl { .. }
+            | Instr::Bit { .. }
+            | Instr::Set { .. }
+            | Instr::Res { .. } => 2,
+            Instr::Jr { .. } | Instr::JrCond { .. } => 2,
+            Instr::Jp { .. }
+            | Instr::JpCond { .. }
+            | Instr::Call { .. }
+            | Instr::CallCond { .. } => 3,
+            Instr::Ds { num_bytes, .. } => plain_number(num_bytes)?,
+            Instr::Db { values } => data_items(values)?,
+            Instr::Dw { value } => 2 * data_items(value)?,
+            Instr::Incbin {
+                length: Some(length),
+                ..
+            } => usize::try_from(*length).ok()?,
+            Instr::Incbin { length: None, .. } | Instr::Include { .. } => return None,
+            Instr::Raw { line } => {
+                if code_lines(line).iter().all(|code| code.trim().is_empty()) {
+                    0
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some(size)
+    }
+
+    /// The size of a `dw` whose items are plain numbers or names for which `is_label` is
+    /// true: 2 bytes each. A name the program defines as a label is an address, never an
+    /// `EQUS` (RGBDS rejects a name defined twice), which [`Instr::size`] cannot know alone.
+    /// `None` for any other instruction or item.
+    pub(crate) fn dw_size_with(&self, is_label: impl Fn(&str) -> bool) -> Option<usize> {
+        match self {
+            Instr::Dw { value } => Some(2 * data_items_with(value, is_label)?),
+            _ => None,
+        }
+    }
+
     /// The mnemonic of an instruction with operands, for messages
     fn mnemonic(&self) -> &'static str {
         match self {
@@ -318,6 +448,37 @@ impl Instr {
             Instr::Res { .. } => "res",
             _ => "instruction",
         }
+    }
+}
+
+/// The value of `text` if it is a plain, non-negative RGBDS number (`4`, `$10`)
+fn plain_number(text: &str) -> Option<usize> {
+    let (value, _) = parse_number(text.trim())?;
+    usize::try_from(value).ok()
+}
+
+/// How many values a `db` / `dw` line lists, if each is a plain number (`1, $FF, %101`);
+/// `None` with a symbol (it can be an `EQUS` of several values), a string, a character, an
+/// expression or no value
+fn data_items(values: &str) -> Option<usize> {
+    data_items_with(values, |_| false)
+}
+
+/// [`data_items`], also counting each item for which `is_label` is true (a name the
+/// program defines as a label, so not an `EQUS`)
+fn data_items_with(values: &str, is_label: impl Fn(&str) -> bool) -> Option<usize> {
+    if values.contains('\n') {
+        return None;
+    }
+    let code = code_lines(values).join(" ");
+    let items: Vec<&str> = code.split(',').map(str::trim).collect();
+    if items
+        .iter()
+        .all(|item| plain_number(item).is_some() || is_label(item))
+    {
+        Some(items.len())
+    } else {
+        None
     }
 }
 

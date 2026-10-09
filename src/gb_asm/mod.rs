@@ -10,6 +10,7 @@ mod isa_tests;
 #[cfg(test)]
 pub(crate) mod label_check;
 pub mod labels;
+mod relax;
 #[cfg(test)]
 pub(crate) mod test_cpu;
 

@@ -1,6 +1,20 @@
 use super::asm::{Asm, Chunk};
 use super::instr::{Condition, Instr, JumpTarget};
+use super::relax::relax_jumps;
 use std::fmt;
+
+/// The order in which the chunks appear in the program
+const CHUNK_ORDER: [Chunk; 9] = [
+    Chunk::Header,    // INCLUDE, SECTION Header
+    Chunk::Constants, // DEF statements
+    Chunk::Init,      // Initialization code
+    Chunk::MainLoop,  // Main game loop
+    Chunk::Main,      // Legacy (backwards compatibility)
+    Chunk::Functions, // Function definitions
+    Chunk::Tiles,     // Tile data
+    Chunk::Tilemap,   // Tilemap data
+    Chunk::Data,      // Variables (WRAM sections)
+];
 
 // Code generation implementation for Asm
 impl Asm {
@@ -10,35 +24,82 @@ impl Asm {
         self.chunks.get(&Chunk::Main).cloned().unwrap_or_default()
     }
 
-    /// Generate assembly code from the instruction chunks
+    /// The whole program, as [`Asm::to_asm`] prints it: the chunks in their order
+    /// (`Header`, `Constants`, `Init`, `MainLoop`, `Main`, `Functions`, `Tiles`, `Tilemap`,
+    /// `Data`), with the jumps relaxed
+    ///
+    /// Each `jr` / `jr cc` that does not reach its target becomes a `jp` / `jp cc`: one
+    /// whose target is more than 127 bytes ahead or 128 behind (counted from the end of
+    /// the `jr`), in another section, or not a label of the program (an external symbol),
+    /// or whose distance only RGBDS knows (a raw line, an `INCLUDE`, a `db` with a string
+    /// in between). It is done on the whole program, so a `jr` that grows and pushes
+    /// another one out of range makes that one grow too. A `jp` stays a `jp`.
+    ///
+    /// A target written from `@` (`jr nz, @+4`, also on a `jp` or a `call`) is the
+    /// instruction that many bytes from the jump: its offset is written again when a jump
+    /// in between, or the jump itself, grows. If that instruction cannot be found (an offset
+    /// inside an instruction, a size only RGBDS knows in between), or a jump's target is
+    /// another expression (`Label + 2`), or `@` appears anywhere else in the code (a raw
+    /// line, data, an operand; but not the padding `ds N - @`), the program is printed as
+    /// written, with no jump changed: rgbasm then reports a `jr` out of range. See
+    /// `gb_asm::relax` for every rule.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_asm::{Asm, Instr, JumpTarget};
+    ///
+    /// let mut asm = Asm::new();
+    /// asm.label("Main").jr(".far");
+    /// for _ in 0..128 {
+    ///     asm.nop();
+    /// }
+    /// asm.label(".far").jr("Main");
+    /// let program = asm.program();
+    /// // 128 bytes ahead is out of reach of a jr; 133 bytes back too, once it is a jp
+    /// assert_eq!(program[1], Instr::Jp { target: JumpTarget::Label(".far".into()) });
+    /// assert_eq!(program[131], Instr::Jp { target: JumpTarget::Label("Main".into()) });
+    /// ```
+    pub fn program(&self) -> Vec<Instr> {
+        self.relaxed_chunks()
+            .into_iter()
+            .flat_map(|(_, instrs)| instrs)
+            .collect()
+    }
+
+    /// The non-empty chunks in their order, with the jumps of the whole program relaxed
+    fn relaxed_chunks(&self) -> Vec<(Chunk, Vec<Instr>)> {
+        let chunks: Vec<(Chunk, &Vec<Instr>)> = CHUNK_ORDER
+            .iter()
+            .filter_map(|chunk| {
+                self.chunks
+                    .get(chunk)
+                    .filter(|instrs| !instrs.is_empty())
+                    .map(|instrs| (*chunk, instrs))
+            })
+            .collect();
+        let all: Vec<Instr> = chunks
+            .iter()
+            .flat_map(|(_, instrs)| instrs.iter().cloned())
+            .collect();
+        let mut relaxed = relax_jumps(&all).into_iter();
+        chunks
+            .into_iter()
+            .map(|(chunk, instrs)| (chunk, relaxed.by_ref().take(instrs.len()).collect()))
+            .collect()
+    }
+
+    /// The program's RGBDS assembly: [`Asm::program`], a blank line between chunks
     pub fn to_asm(&self) -> String {
         let mut asm = String::new();
-
-        // Define the order in which chunks should appear in the output
-        let chunk_order = [
-            Chunk::Header,    // INCLUDE, SECTION Header
-            Chunk::Constants, // DEF statements
-            Chunk::Init,      // Initialization code
-            Chunk::MainLoop,  // Main game loop
-            Chunk::Main,      // Legacy (backwards compatibility)
-            Chunk::Functions, // Function definitions
-            Chunk::Tiles,     // Tile data
-            Chunk::Tilemap,   // Tilemap data
-            Chunk::Data,      // Variables (WRAM sections)
-        ];
-
-        for chunk in &chunk_order {
-            if let Some(instructions) = self.chunks.get(chunk).filter(|i| !i.is_empty()) {
-                // Write instructions with indentation
-                for instruction in instructions {
-                    asm.push_str(&format!("    {}\n", instruction));
-                }
-
-                // Add blank line between chunks
-                asm.push('\n');
+        for (_, instructions) in self.relaxed_chunks() {
+            // Write instructions with indentation
+            for instruction in instructions {
+                asm.push_str(&format!("    {}\n", instruction));
             }
-        }
 
+            // Add blank line between chunks
+            asm.push('\n');
+        }
         asm
     }
 }

@@ -13,6 +13,7 @@ use super::expr::Expr;
 use super::instr::{
     AluOperand, Condition, Dst, IncDec, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
 };
+use super::labels::LabelAllocator;
 use std::fmt::Display;
 
 /// A sequence of instructions, built with the same methods as [`Asm`](super::Asm)
@@ -117,23 +118,26 @@ impl IntoIterator for Block {
 /// Anything that emits instructions: plain code ([`Block`], `Vec<Instr>`) and the
 /// control-flow structures of `gb_std` (`If`, `IfConst`, `Call`, ...)
 ///
-/// `counter` numbers the labels of the `If` structures (`.end_if_N`): each takes the
-/// next number.
+/// `labels` is the program's label allocator ([`Asm::labels`](super::Asm::labels)): every
+/// label the code makes up comes from it (an `If` takes one number for its `.end_if_N`,
+/// `.else_N` and `.then_N`), so the labels are unique in the whole program. Give every
+/// piece of code of a program the same allocator; [`Asm::emit_code`](super::Asm::emit_code)
+/// does it.
 pub trait Emittable {
-    /// The instructions, using `counter` for unique `If` labels
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr>;
+    /// The instructions, with their labels taken from `labels`
+    fn emit(&mut self, labels: &LabelAllocator) -> Vec<Instr>;
 }
 
 /// The instructions of the block
 impl Emittable for Block {
-    fn emit(&mut self, _counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, _labels: &LabelAllocator) -> Vec<Instr> {
         std::mem::take(&mut self.instrs)
     }
 }
 
 /// The instructions, as they are
 impl Emittable for Vec<Instr> {
-    fn emit(&mut self, _counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, _labels: &LabelAllocator) -> Vec<Instr> {
         std::mem::take(self)
     }
 }
@@ -147,7 +151,7 @@ impl Emittable for Vec<Instr> {
 /// ]
 /// ```
 impl Emittable for Vec<Vec<Instr>> {
-    fn emit(&mut self, _counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, _labels: &LabelAllocator) -> Vec<Instr> {
         std::mem::take(self).into_iter().flatten().collect()
     }
 }
@@ -160,8 +164,8 @@ impl Emittable for Vec<Vec<Instr>> {
 /// ]
 /// ```
 impl Emittable for Vec<Box<dyn Emittable>> {
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
-        self.iter_mut().flat_map(|e| e.emit(counter)).collect()
+    fn emit(&mut self, labels: &LabelAllocator) -> Vec<Instr> {
+        self.iter_mut().flat_map(|e| e.emit(labels)).collect()
     }
 }
 
@@ -229,8 +233,8 @@ mod tests {
         all.emit_all(first.clone()).emit_all(second.into_instrs());
         assert_eq!(all.len(), 2);
 
-        let mut counter = 0;
-        let instrs = boxed(first).emit(&mut counter);
+        let labels = LabelAllocator::new();
+        let instrs = boxed(first).emit(&labels);
         assert_eq!(
             instrs,
             [Instr::Ld {
@@ -238,6 +242,6 @@ mod tests {
                 src: Operand::from(1u8),
             }]
         );
-        assert_eq!(counter, 0, "plain code takes no If number");
+        assert_eq!(labels.next_id(), 0, "plain code takes no label number");
     }
 }

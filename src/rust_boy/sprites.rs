@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use super::memory::{MemoryAllocator, MemoryRegion};
 use super::tiles::TileId;
 use crate::{
     gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register, is_identifier},
@@ -112,7 +113,6 @@ pub(crate) struct SpriteData {
     /// Tile index of the sprite's first tile, from the tile manager (B18)
     pub tile_index: u8,
     /// Number of tiles of the sprite (its frames are among them)
-    #[cfg_attr(not(test), allow(dead_code))] // read by the animation checks (B17)
     pub tile_count: u16,
     pub flags: u8,
     pub animations: Vec<Animation>,
@@ -229,7 +229,8 @@ pub struct SpriteManager {
     composite_sprites: BTreeMap<CompositeSpriteId, CompositeSpriteData>,
     next_id: usize,
     next_composite_id: usize,
-    next_oam_index: u8,
+    /// OAM entries: 40 sprites of 4 bytes (B17)
+    oam: MemoryAllocator,
     size: SpriteSize,
     /// Numbers the local labels of the moves; shared with the rest of the program (B7)
     labels: LabelAllocator,
@@ -243,7 +244,7 @@ impl SpriteManager {
             composite_sprites: BTreeMap::new(),
             next_id: 0,
             next_composite_id: 0,
-            next_oam_index: 0,
+            oam: MemoryAllocator::new(MemoryRegion::Oam),
             size: SpriteSize::default(),
             labels,
         }
@@ -282,6 +283,8 @@ impl SpriteManager {
     /// - In 8x16 mode, if the sprite has an odd number of tiles (the bottom half of the
     ///   last frame would be the next tile in VRAM, which is not this sprite's), or starts
     ///   on an odd tile (the hardware ignores bit 0 of the index).
+    /// - If `x` is above 247 or `y` above 239: OAM X = x + 8 and OAM Y = y + 16 are bytes.
+    /// - If OAM is full: it holds 40 sprites.
     pub(crate) fn add(
         &mut self,
         name: &str,
@@ -313,11 +316,36 @@ impl SpriteManager {
                 name, tiles.first
             );
         }
-        let oam_index = self.next_oam_index;
+        // OAM X = x + 8 and OAM Y = y + 16 are bytes (B17)
+        for (axis, value, offset) in [("x", x, hw::OAM_X_OFFSET), ("y", y, hw::OAM_Y_OFFSET)] {
+            if value.checked_add(offset).is_none() {
+                panic!(
+                    "sprite \"{}\": {} = {} is too large: its OAM coordinate, {} + {}, must fit \
+                     in a byte, so {} is at most {}",
+                    name,
+                    axis,
+                    value,
+                    axis,
+                    offset,
+                    axis,
+                    u8::MAX - offset
+                );
+            }
+        }
+        let entry = self
+            .oam
+            .allocate(hw::OAM_ENTRY_SIZE.into())
+            .unwrap_or_else(|| {
+                panic!(
+                    "sprite \"{}\" does not fit in OAM, which holds {} sprites (B17)",
+                    name,
+                    hw::OAM_COUNT
+                )
+            });
+        let oam_index = ((entry - hw::OAM_START) / u16::from(hw::OAM_ENTRY_SIZE)) as u8;
 
         let id = SpriteId(self.next_id);
         self.next_id += 1;
-        self.next_oam_index += 1;
 
         self.sprites.insert(
             id,
@@ -430,6 +458,10 @@ impl SpriteManager {
     /// - In 8x16 mode, if `frame_step` is odd: every frame must start on an even tile.
     /// - If the sprite already has 255 animations: the index is a `u8`, and 255 is
     ///   [`ANIM_DISABLED`].
+    /// - If `start_frame` is after `end_frame`, `frame_step` is 0, or a frame is not among
+    ///   the sprite's tiles: frame `f` shows the tiles from `f * frame_step` on (one tile
+    ///   in 8x8 mode, two in 8x16 mode), counted from the sprite's first tile, and they
+    ///   must all be the sprite's (B17).
     pub fn add_animation_with_step(
         &mut self,
         sprite_id: SpriteId,
@@ -449,6 +481,7 @@ impl SpriteManager {
         }
         let sprite = self.sprite(sprite_id);
         self.check_animation_label(sprite, name);
+        self.check_frames(sprite, name, start_frame, end_frame, frame_step);
         if sprite.animations.len() >= usize::from(ANIM_DISABLED) {
             panic!(
                 "sprite \"{}\" already has 255 animations, the most a sprite can have: \
@@ -470,6 +503,29 @@ impl SpriteManager {
         };
         sprite.animations.push(animation);
         index
+    }
+
+    /// Panics unless the frames `start..=end`, `step` tiles apart, are all among the
+    /// tiles of `sprite` (B17): a frame past them showed another sprite's tiles, and past
+    /// tile 255 the frame arithmetic overflowed
+    fn check_frames(&self, sprite: &SpriteData, name: &str, start: u8, end: u8, step: u8) {
+        let what = format!("animation \"{}\" of sprite \"{}\"", name, sprite.name);
+        if start > end {
+            panic!("{}: start_frame {} is after end_frame {}", what, start, end);
+        }
+        if step == 0 {
+            panic!("{}: frame_step must be at least 1", what);
+        }
+        // The tiles of the last frame, from the sprite's first tile
+        let per_frame = u16::from(self.size.tiles_per_sprite());
+        let last_tile = u16::from(end) * u16::from(step) + per_frame - 1;
+        if last_tile >= sprite.tile_count {
+            panic!(
+                "{}: frame {} would show tile {} of the sprite, but it has {} tiles (frame f \
+                 starts on tile f * {}, and is {} tile(s))",
+                what, end, last_tile, sprite.tile_count, step, per_frame
+            );
+        }
     }
 
     /// Panics if animation `name` of `sprite` would get the label of an existing animation
@@ -789,10 +845,10 @@ impl SpriteManager {
             asm.ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A));
         };
         for sprite in sorted_sprites {
-            // Y position (add 16 for screen offset)
-            write(&mut asm, sprite.y + 16);
+            // Y position (add 16 for screen offset; `add` checked that it fits, B17)
+            write(&mut asm, sprite.y + hw::OAM_Y_OFFSET);
             // X position (add 8 for screen offset)
-            write(&mut asm, sprite.x + 8);
+            write(&mut asm, sprite.x + hw::OAM_X_OFFSET);
             // Tile index
             write(&mut asm, sprite.tile_index);
             // Flags
@@ -1566,6 +1622,84 @@ mod tests {
     }
 
     const SIZES: [SpriteSize; 2] = [SpriteSize::Size8x8, SpriteSize::Size8x16];
+
+    #[test]
+    fn test_loop_animation_ending_on_the_last_sprite_tile() {
+        // B17: the Loop code compared with `last frame + frame_step`, which is 256 when
+        // the last frame is tile 255 (8x8) or 254 (8x16): it overflowed (a panic when
+        // generated in debug, `cp 0` in release: the animation froze on its first frame)
+        for size in SIZES {
+            let per_frame = size.tiles_per_sprite();
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            sm.set_size(size);
+            // 248 (8x8) or 240 (8x16) tiles before the coin's 8 frames
+            let other = (256 - 8 * u16::from(per_frame)) as u8;
+            sm.add_for_test("Other", 0, 0, 0, other);
+            let coin = sm.add_for_test("Coin", 16, 16, 0, 8 * per_frame);
+            let spin = sm.add_animation(coin, "Spin", 0, 7, AnimationType::Loop);
+            sm.set_initial_animation(coin, spin);
+            // The last frame is tile 255 (8x8) or 254 and 255 (8x16)
+            let last_tile = sm.get(coin).unwrap().tile_index + 7 * per_frame;
+            assert_eq!(u16::from(last_tile), 256 - u16::from(per_frame));
+            let mut cpu = animation_cpu(&sm);
+            assert_eq!(
+                play(&sm, &mut cpu, coin, 10),
+                [1, 2, 3, 4, 5, 6, 7, 0, 1, 2],
+                "{:?}",
+                size
+            );
+        }
+    }
+
+    #[test]
+    fn test_animation_frames_must_be_the_sprite_tiles() {
+        // B17: frames past the sprite's tiles showed the next sprite's tiles, and past
+        // tile 255 the frame arithmetic overflowed
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let coin = sm.add_for_test("Coin", 0, 0, 0, 4);
+        sm.add_animation(coin, "All", 0, 3, AnimationType::Loop);
+        let message = panic_message(|| {
+            sm.add_animation(coin, "Past", 2, 4, AnimationType::Loop);
+        });
+        assert!(
+            message.contains("animation \"Past\" of sprite \"Coin\"")
+                && message.contains("frame 4")
+                && message.contains("4 tiles"),
+            "{}",
+            message
+        );
+        let message = panic_message(|| {
+            sm.add_animation(coin, "Backward", 3, 1, AnimationType::Loop);
+        });
+        assert!(
+            message.contains("start_frame 3 is after end_frame 1"),
+            "{}",
+            message
+        );
+        let message = panic_message(|| {
+            sm.add_animation_with_step(coin, "Still", 0, 2, AnimationType::Loop, 0);
+        });
+        assert!(
+            message.contains("frame_step must be at least 1"),
+            "{}",
+            message
+        );
+        // A step of 2 in 8x8 mode: frames 0 and 2, 4 would be past the 4 tiles
+        sm.add_animation_with_step(coin, "Even", 0, 1, AnimationType::Loop, 2);
+        let message = panic_message(|| {
+            sm.add_animation_with_step(coin, "TooFar", 0, 2, AnimationType::Loop, 2);
+        });
+        assert!(message.contains("frame 2"), "{}", message);
+
+        // In 8x16 mode a frame is two tiles: frame 1 of a 2-tile sprite is past it
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        sm.set_size(SpriteSize::Size8x16);
+        let player = sm.add_for_test("Player", 0, 0, 0, 2);
+        let message = panic_message(|| {
+            sm.add_animation(player, "Walk", 0, 1, AnimationType::Loop);
+        });
+        assert!(message.contains("frame 1"), "{}", message);
+    }
 
     #[test]
     fn test_loop_animation_frames() {

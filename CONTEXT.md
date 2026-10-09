@@ -127,7 +127,7 @@ The problems are where each layer reaches across the line:
    `AdcA` vs `Adc`).
 3. **Hardware facts are hardcoded in every layer.** `_OAMRAM+{id*4+1}` strings in both sprite managers,
    `$9800` in three places, VRAM bases in `tiles.rs`, LCDC flags written as strings in each layer
-   (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) exist but are unused.
+   (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) existed but were unused (used since [B17](#b17)); a first `hw` module (`src/hw.rs`, pure data) exists since [B22](#b22).
 4. **L3 re-implements L2 instead of using it.** `src/rust_boy/functions.rs:152-311` (at `4601a5c`) duplicated Memcopy,
    WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel from `gb_std`, and they had already
    diverged ([B23](#b23)). *Since B23* `rust_boy` emits the `gb_std` routines (only `Delay` is its own), and its
@@ -421,6 +421,42 @@ failed before: the high byte was not written, `hl` not loaded), `test_set_panics
 - `MemoryAllocator` (`src/rust_boy/memory.rs:36`) exists, with overflow checks, but nothing uses it.
 
 *Fix:* use the allocator, `u16` counters + `checked_add`, clear errors.
+**Status: fixed** on `refactor-p1-api-safety`. The managers allocate through `MemoryAllocator` (`src/rust_boy/memory.rs`,
+with the regions from the new `hw` module), whose `allocate_or_panic` panics with "no room for {what}: N bytes needed,
+but {region} (…) has M bytes left":
+- `TileManager`: sprite tiles in `MemoryRegion::SpriteTiles` ($8000-$8FFF, 256 tiles), background tiles in
+  `MemoryRegion::BackgroundTiles` ($9000-$97FF, 128 tiles, before the tilemaps). Sizes are counted in `usize`
+  (`TileSource::size_bytes` panics past 65535 bytes instead of wrapping); the sprite tile index comes from the VRAM
+  address ([B18](#b18)), so the `u8` counter that overflowed at 256 tiles is gone (two FOSDEM characters, 2 × 128 tiles,
+  now fit exactly, tested).
+- `VariableManager`: `MemoryRegion::Wram0` ($C000-$CFFF): every variable section is a `WRAM0` section, so all of them
+  share its 4 KiB (rgblink rejected a bigger section; the counter could also wrap).
+- `SpriteManager`: `MemoryRegion::Oam`, 40 entries; a 41st sprite panics (it was written past `$FE9F`). `x` above 247
+  or `y` above 239 panics (OAM X = x + 8 and OAM Y = y + 16 are bytes); `add_sprite_16x16` checks its right half,
+  x + 8, first (x at most 239). `oam_index * 4` cannot overflow any more (at most 159).
+- Animations: `add_animation_with_step` panics when `start_frame` > `end_frame`, `frame_step` is 0, or a frame is not
+  among the sprite's own tiles (it showed the next sprite's tiles, and past tile 255 the `u8` frame arithmetic overflowed).
+  The `Loop` code compares the current tile with the first and the last frame themselves (like `Once` and `PingPong`):
+  `cp first` / `jr c, .reset` / `cp last` / `jr c, .next` / `.reset: ld a, first - step` / `.next: inc a` (or
+  `add a, step`) / store. The reset loads the tile *before* the first frame (modulo 256: 255 for frame 0) and falls into
+  the step, so the code has exactly the same size as before (17 bytes in 8x8, 18 in 8x16) and nothing else in the ROM
+  moves. Before, `cp last + step` was `cp 256` for a last frame on tile 255 (8x8) or 254 (8x16): a panic when generated
+  in debug, `cp 0` in release (the animation froze on its first frame). For every tile and frame range it does what the old code did
+  (checked exhaustively), except with a step of 2 when the sprite shows the odd tile just before the first frame (255
+  when the first frame is tile 0): the old code went to the tile after the first frame, an odd one, the new code goes
+  to the first frame.
+- `MemoryRegion` has three new variants (`SpriteTiles`, `BackgroundTiles`, `Wram0`) and `size()`: breaking for code that
+  matches on it exhaustively.
+
+`fosdem` and `coin-anim` change only in their `Loop` functions (and `Memcopy`, [B27](#b27)); their ROMs were run in an
+emulator (PyBoy) before and after for 1500 frames with the same inputs (A, B and every direction): the OAM and the
+screen are identical on every frame, and every frame of every animation is shown. Tests: `test_sprite_tiles_must_fit_in_their_vram_block`,
+`test_background_tiles_must_fit_before_the_tilemap`, `test_at_most_40_sprites`, `test_sprite_position_must_fit_in_oam`,
+`test_variables_must_fit_in_wram0`, `test_animation_frames_must_be_the_sprite_tiles`,
+`test_loop_animation_ending_on_the_last_sprite_tile` (runs the animation on `gb_asm::test_cpu` in 8x8 and 8x16; it
+overflowed before), `test_allocation_stops_at_the_end_of_the_region`, `test_regions`; all the new ones failed before.
+Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (its size is only known when
+assembled).
 
 #### B18
 **Two tile counters can desync.** `SpriteManager.next_tile_index` (`src/rust_boy/sprites.rs:82`) and

@@ -83,32 +83,34 @@ impl Animation {
         }
     }
 
+    /// Forward to the last frame, then the first one again
+    ///
+    /// It compares the current tile with the first and the last frame themselves, like
+    /// `Once` and `PingPong`: it used to step first and compare with `last frame +
+    /// frame_step`, which is 256 when the last frame is tile 255 (8x8) or 254 (8x16), so
+    /// the animation froze on its first frame (B17). The code has the same size as before.
     fn generate_loop_func(&self) -> Vec<Instr> {
         let mut asm = Asm::new();
 
-        let label_store = format!(".store_{}", self.name);
+        let label_reset = format!(".reset_{}", self.name);
+        let label_next = format!(".next_{}", self.name);
         let oam_tile_addr = self.oam_tile_addr();
         let (abs_start, abs_end) = self.abs_frames();
 
         asm.ld_a_addr_def(&oam_tile_addr); // load current sprite tile index
+        asm.cp_imm(abs_start);
+        asm.jr_cond(Condition::C, &label_reset); // before the first frame: start
+        asm.cp_imm(abs_end);
+        asm.jr_cond(Condition::C, &label_next); // before the last frame: next frame
+
+        // On the last frame or past it: start again. The step below lands on the first
+        // frame (modulo 256: from frame 0, `a` = 255 or 254, then 0)
+        asm.label(&label_reset);
+        asm.ld_a(abs_start.wrapping_sub(self.frame_step));
 
         // Increment by frame_step (1 for 8x8, 2 for 8x16)
+        asm.label(&label_next);
         self.step_forward(&mut asm);
-
-        // Check if tile index is within valid range [abs_start, abs_end]
-        // If A < abs_start, reset (Carry set after cp means A < value)
-        asm.cp_imm(abs_start);
-        asm.jr_cond(Condition::C, &format!(".reset_{}", self.name)); // A < abs_start, reset
-
-        // If A > abs_end, reset (A >= abs_end + frame_step means we've gone past)
-        asm.cp_imm(abs_end + self.frame_step);
-        asm.jr_cond(Condition::C, &label_store); // A < abs_end + frame_step, valid, go store
-
-        // Reset to first frame (A >= abs_end + frame_step OR A < abs_start)
-        asm.label(&format!(".reset_{}", self.name));
-        asm.ld_a(abs_start);
-
-        asm.label(&label_store);
         asm.ld_addr_def_a(&oam_tile_addr); // store updated sprite tile index
 
         asm.get_main_instrs()

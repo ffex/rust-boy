@@ -3,6 +3,7 @@
 use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator, is_identifier};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
+use crate::hw;
 
 use super::functions::{BuiltinFunction, FunctionRegistry, defines};
 use super::inputs::InputManager;
@@ -637,6 +638,9 @@ impl RustBoy {
     ///   becomes part of labels.
     /// - In 8x16 mode, if `tile_source` has an odd number of tiles, or the sprite would
     ///   start on an odd tile (after an odd number of tiles added with `tiles.add_sprite`).
+    /// - If the tiles do not fit in the 256 sprite tiles ($8000-$8FFF), OAM already holds
+    ///   40 sprites, or `x` is above 247 or `y` above 239 (OAM X = x + 8 and OAM Y =
+    ///   y + 16 are bytes).
     pub fn add_sprite(
         &mut self,
         name: &str,
@@ -676,6 +680,8 @@ impl RustBoy {
     ///   half (`{name}_left`, `{name}_right`): the names become labels.
     /// - In 8x8 mode (call `set_sprite_size(SpriteSize::Size8x16)` first), or if a half has
     ///   an odd number of tiles.
+    /// - If `x` is above 239 (the right half's OAM X, x + 16, is a byte), and in the cases
+    ///   of [`RustBoy::add_sprite`] for each half.
     pub fn add_sprite_16x16(
         &mut self,
         name: &str,
@@ -694,14 +700,27 @@ impl RustBoy {
             );
         }
 
+        // The right half is 8 pixels to the right, and its OAM X, x + 16, is a byte (B17)
+        let right_x = x
+            .checked_add(8)
+            .filter(|right_x| right_x.checked_add(hw::OAM_X_OFFSET).is_some())
+            .unwrap_or_else(|| {
+                panic!(
+                    "add_sprite_16x16(\"{}\"): x = {} is too large: the right half is at x + 8, \
+                     and its OAM X, x + 16, must fit in a byte, so x is at most {}",
+                    name,
+                    x,
+                    u8::MAX - 8 - hw::OAM_X_OFFSET
+                )
+            });
+
         // Create the left sprite
         let left_name = format!("{}_left", name);
         let left_sprite = self.add_sprite(&left_name, left_tiles, x, y, flags);
 
-        // Create the right sprite (8 pixels to the right)
+        // Create the right sprite
         let right_name = format!("{}_right", name);
-        let right_sprite = self.add_sprite(&right_name, right_tiles, x + 8, y, flags);
-
+        let right_sprite = self.add_sprite(&right_name, right_tiles, right_x, y, flags);
         // Group them as a composite sprite
         self.sprites
             .create_composite(name, vec![left_sprite, right_sprite])
@@ -1023,6 +1042,95 @@ mod tests {
         assert_links(&gb.build());
     }
 
+    // ==================== Memory limits (B17) ====================
+
+    use crate::rust_boy::panic_message;
+
+    #[test]
+    fn test_sprite_tiles_must_fit_in_their_vram_block() {
+        // B17: sprite tiles past $8FFF ran into the background tiles; the tile count was
+        // cut to a u8 (257 tiles counted as 1) and the u8 tile index wrapped at 256
+        let mut gb = RustBoy::new();
+        let a = gb.add_sprite("A", tiles(128), 0, 0, 0);
+        let b = gb.add_sprite("B", tiles(128), 0, 0, 0);
+        assert_eq!(tile_of(&gb, a), (0, 0x8000));
+        assert_eq!(tile_of(&gb, b), (128, 0x8800));
+        let message = panic_message(|| gb.add_sprite("C", tiles(1), 0, 0, 0));
+        assert!(
+            message.contains("no room for sprite tiles \"C\" (1 tiles)")
+                && message.contains("0 bytes left"),
+            "{}",
+            message
+        );
+
+        let mut gb = RustBoy::new();
+        let message = panic_message(|| gb.add_sprite("Big", tiles(257), 0, 0, 0));
+        assert!(
+            message.contains("sprite tiles \"Big\" (257 tiles)"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_background_tiles_must_fit_before_the_tilemap() {
+        // B17: background tiles past $97FF overwrote the tilemap at $9800
+        let mut gb = RustBoy::new();
+        gb.tiles.add_background("Tiles", tiles(100));
+        let more = gb.tiles.add_background("More", tiles(28));
+        assert_eq!(gb.tiles.get_address(more), Some(0x9640));
+        let message = panic_message(|| gb.tiles.add_background("Extra", tiles(1)));
+        assert!(
+            message.contains("no room for background tiles \"Extra\" (1 tiles)"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_at_most_40_sprites() {
+        // B17: a 41st sprite was written past the OAM ($FEA0 on)
+        let mut gb = RustBoy::new();
+        for i in 0..40 {
+            gb.add_sprite(&format!("S{}", i), tiles(1), 0, 0, 0);
+        }
+        let message = panic_message(|| gb.add_sprite("S40", tiles(1), 0, 0, 0));
+        assert!(
+            message.contains("sprite \"S40\" does not fit in OAM, which holds 40 sprites"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_sprite_position_must_fit_in_oam() {
+        // B17: y + 16 and x + 8 overflowed a u8 when the start-up code was generated
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Low", tiles(1), 247, 239, 0);
+        let message = panic_message(|| gb.add_sprite("Lower", tiles(1), 0, 240, 0));
+        assert!(
+            message.contains("y = 240") && message.contains("at most 239"),
+            "{}",
+            message
+        );
+        let message = panic_message(|| gb.add_sprite("Right", tiles(1), 248, 0, 0));
+        assert!(
+            message.contains("x = 248") && message.contains("at most 247"),
+            "{}",
+            message
+        );
+        // The right half of a 16x16 sprite is 8 pixels further
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let message =
+            panic_message(|| gb.add_sprite_16x16("Player", tiles(2), tiles(2), 245, 0, 0));
+        assert!(
+            message.contains("add_sprite_16x16(\"Player\")") && message.contains("at most 239"),
+            "{}",
+            message
+        );
+    }
+
     #[test]
     #[should_panic(expected = "\"Player\" would start on tile 1, an odd one")]
     fn test_8x16_sprite_after_an_odd_number_of_tiles_panics() {
@@ -1048,8 +1156,9 @@ mod tests {
         let walk = function(&out, "Anim_Walker_Walk");
         assert!(walk.contains("add a, 2"), "{}", walk);
         assert!(walk.contains("cp 4"), "{}", walk);
-        assert!(walk.contains("cp 10"), "{}", walk);
-        assert!(walk.contains("ld a, 4"), "{}", walk);
+        assert!(walk.contains("cp 8"), "{}", walk);
+        // The reset loads the tile before the first frame, then steps onto it
+        assert!(walk.contains("ld a, 2"), "{}", walk);
     }
 
     #[test]
@@ -1062,7 +1171,9 @@ mod tests {
         let out = gb.build();
         let spin = function(&out, "Anim_Coin_Spin");
         assert!(spin.contains("inc a"), "{}", spin);
-        assert!(spin.contains("cp 7"), "{}", spin);
+        assert!(spin.contains("cp 6"), "{}", spin);
+        // Frame 0 is tile 0: the reset loads 255, and `inc a` wraps it to 0
+        assert!(spin.contains("ld a, 255"), "{}", spin);
     }
 
     #[test]

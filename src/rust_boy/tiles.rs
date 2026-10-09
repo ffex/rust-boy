@@ -6,6 +6,8 @@ use crate::gb_asm::Instr;
 use crate::gb_std::graphics::utility::cp_in_memory;
 use crate::hw;
 
+use super::memory::{MemoryAllocator, MemoryRegion};
+
 /// Unique identifier for a tile or tileset
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TileId(pub(crate) usize);
@@ -51,12 +53,23 @@ impl TileSource {
         TileSource::File(path.to_string(), tile_count)
     }
 
-    /// Calculate the size in bytes
+    /// Calculate the size in bytes (16 bytes per tile)
+    ///
+    /// # Panics
+    /// If it is more than 65535 bytes (4096 tiles or more): no VRAM region holds that.
     pub fn size_bytes(&self) -> u16 {
-        match self {
-            TileSource::Raw(tiles) => (tiles.len() * 16) as u16, // 16 bytes per tile
-            TileSource::File(_, tile_count) => (*tile_count * 16) as u16, // 16 bytes per tile
-        }
+        u16::try_from(self.byte_len()).unwrap_or_else(|_| {
+            panic!(
+                "{} tiles are {} bytes, more than any VRAM region",
+                self.tile_count(),
+                self.byte_len()
+            )
+        })
+    }
+
+    /// The size in bytes, without a limit
+    fn byte_len(&self) -> usize {
+        self.tile_count() * usize::from(hw::TILE_SIZE)
     }
 
     /// Get the number of tiles
@@ -96,10 +109,10 @@ pub struct TileManager {
     /// Tiles by id; ids are sequential, so iteration follows creation order
     tiles: BTreeMap<TileId, TileData>,
     next_id: usize,
-    // Sprite tiles: $8000-$8FFF
-    next_sprite_addr: u16,
-    // Background tiles: $9000-$97FF
-    next_bg_addr: u16,
+    /// Sprite tiles: $8000-$8FFF, 256 tiles (B17)
+    sprite_tiles: MemoryAllocator,
+    /// Background tiles: $9000-$97FF, 128 tiles, then the tilemaps (B17)
+    background_tiles: MemoryAllocator,
 }
 
 impl TileManager {
@@ -107,59 +120,66 @@ impl TileManager {
         Self {
             tiles: BTreeMap::new(),
             next_id: 0,
-            next_sprite_addr: 0x8000,
-            next_bg_addr: 0x9000,
+            sprite_tiles: MemoryAllocator::new(MemoryRegion::SpriteTiles),
+            background_tiles: MemoryAllocator::new(MemoryRegion::BackgroundTiles),
         }
     }
 
     /// Add sprite tiles (allocated from $8000)
+    ///
+    /// # Panics
+    /// If they do not fit in the 256 sprite tiles ($8000-$8FFF) with the ones already
+    /// added, or `source` is a file with a tile count of 0.
     pub fn add_sprite(&mut self, name: &str, source: TileSource) -> TileId {
         check_source(name, &source);
-        let size = source.size_bytes();
-        let addr = self.next_sprite_addr;
-        self.next_sprite_addr += size;
-
-        let id = TileId(self.next_id);
-        self.next_id += 1;
-
-        self.tiles.insert(
-            id,
-            TileData {
-                name: name.to_string(),
-                source,
-                vram_address: addr,
-                is_sprite: true,
-                is_tilemap: false,
-            },
-        );
-
-        id
+        let what = format!("sprite tiles \"{}\" ({} tiles)", name, source.tile_count());
+        let addr = self
+            .sprite_tiles
+            .allocate_or_panic(source.byte_len(), &what);
+        self.insert(name, source, addr, true, false)
     }
 
     /// Add background tiles (allocated from $9000)
+    ///
+    /// # Panics
+    /// If they do not fit in the 128 background tiles ($9000-$97FF, before the
+    /// tilemaps) with the ones already added, or `source` is a file with a tile count of 0.
     pub fn add_background(&mut self, name: &str, source: TileSource) -> TileId {
         check_source(name, &source);
-        let size = source.size_bytes();
-        let addr = self.next_bg_addr;
-        self.next_bg_addr += size;
+        let what = format!(
+            "background tiles \"{}\" ({} tiles)",
+            name,
+            source.tile_count()
+        );
+        let addr = self
+            .background_tiles
+            .allocate_or_panic(source.byte_len(), &what);
+        self.insert(name, source, addr, false, false)
+    }
 
+    /// Store a blob under a new id
+    fn insert(
+        &mut self,
+        name: &str,
+        source: TileSource,
+        vram_address: u16,
+        is_sprite: bool,
+        is_tilemap: bool,
+    ) -> TileId {
         let id = TileId(self.next_id);
         self.next_id += 1;
-
         self.tiles.insert(
             id,
             TileData {
                 name: name.to_string(),
                 source,
-                vram_address: addr,
-                is_sprite: false,
-                is_tilemap: false,
+                vram_address,
+                is_sprite,
+                is_tilemap,
             },
         );
-
         id
     }
-
     /// Add a tilemap (goes to $9800)
     pub fn add_tilemap(&mut self, name: &str, tilemap: &[[u8; 32]]) -> TileId {
         let id = TileId(self.next_id);
@@ -306,7 +326,12 @@ impl TileManager {
         self.tiles
             .values()
             .filter(|tile| !matches!(&tile.source, TileSource::Raw(data) if data.is_empty()))
-            .flat_map(|tile| cp_in_memory(&tile.name, &format!("${:04X}", tile.vram_address)))
+            .flat_map(|tile| {
+                cp_in_memory(
+                    &tile.name,
+                    &MemoryAllocator::format_address(tile.vram_address),
+                )
+            })
             .collect()
     }
 

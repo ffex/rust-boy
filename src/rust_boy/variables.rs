@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use crate::gb_asm::{Asm, Instr, Operand, Register};
 
+use super::memory::{MemoryAllocator, MemoryRegion};
+
 /// Unique identifier for a variable
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VarId(pub(crate) usize);
@@ -172,12 +174,17 @@ pub(crate) struct Variable {
 /// A name is one WRAM label: creating a variable whose name already exists returns the
 /// existing variable (its first initial value and section are kept). Creating it again
 /// with a different type panics.
+///
+/// Every section is a `WRAM0` section, so all the variables share its 4 KiB
+/// ($C000-$CFFF): creating one that does not fit panics (B17).
 #[derive(Debug)]
 pub struct VariableManager {
     /// Variables by id; ids are sequential, so iteration follows creation order
     variables: BTreeMap<VarId, Variable>,
     next_id: usize,
-    next_wram_addr: u16,
+    /// WRAM0 ($C000-$CFFF): every section is a `WRAM0` section, so all of them must fit
+    /// in its 4 KiB (B17)
+    wram: MemoryAllocator,
     /// Sections in first-use order, each with its variables in creation order
     sections: Vec<(String, Vec<VarId>)>,
 }
@@ -187,7 +194,7 @@ impl VariableManager {
         Self {
             variables: BTreeMap::new(),
             next_id: 0,
-            next_wram_addr: 0xC000,
+            wram: MemoryAllocator::new(MemoryRegion::Wram0),
             sections: Vec::new(),
         }
     }
@@ -254,8 +261,8 @@ impl VariableManager {
             };
         }
 
-        let addr = self.next_wram_addr;
-        self.next_wram_addr += var_type.size();
+        let what = format!("variable `{}` ({} bytes)", name, var_type.size());
+        let addr = self.wram.allocate_or_panic(var_type.size().into(), &what);
 
         let id = VarId(self.next_id);
         self.next_id += 1;
@@ -506,6 +513,25 @@ mod tests {
         assert_eq!(word(&cpu, "wWord"), 0xABCD);
         assert_eq!(word(&cpu, "wSigned") as i16, -300);
         assert_eq!(cpu.mem["wOther"], 255);
+    }
+
+    #[test]
+    fn test_variables_must_fit_in_wram0() {
+        // B17: variables were counted past WRAM0 ($C000-$CFFF, 4 KiB), and every
+        // section is a WRAM0 section: rgblink failed on a section too big, or the
+        // counter wrapped
+        let mut vm = VariableManager::new();
+        for i in 0..4094 {
+            vm.create_u8(&format!("wByte{}", i), 0);
+        }
+        let last = vm.create_u16("wLast", 0);
+        assert_eq!(vm.get_address(last.id()), Some(0xCFFE));
+        let message = panic_message(|| vm.create_u8("wMore", 0));
+        assert!(
+            message.contains("no room for variable `wMore` (1 bytes)"),
+            "{}",
+            message
+        );
     }
 
     #[test]

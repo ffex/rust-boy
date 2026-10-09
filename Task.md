@@ -81,7 +81,10 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] `raw()` drops non-`Main` chunks; raw code is unreachable — [B15](CONTEXT.md#b15)
 - [x] `Var::set`/`get` ignore 16-bit variables — [B16](CONTEXT.md#b16) (branch `refactor-p1-api-safety`: `set` takes
       any value of the variable's type and writes both bytes of a 16-bit one; `get` loads a 16-bit one into `hl`)
-- [ ] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)
+- [x] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)
+      (branch `refactor-p1-api-safety`: sprite tiles, background tiles, WRAM0 variables and OAM entries are allocated
+      through `MemoryAllocator` and panic when full; sprite positions and animation frames are checked; `Loop` compares
+      with its last frame)
 - [x] Sprite and tile counters can desync — [B18](CONTEXT.md#b18) (branch `refactor-p1-api-safety`: a sprite's tile
       index comes from where the tile manager put its tiles; `SpriteManager::add` is no longer public)
 - [ ] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19)
@@ -137,7 +140,8 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s
 - [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
       as `RustBoy::set_sprite_size`
-- [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM
+- [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since
+      [B17](CONTEXT.md#b17); HRAM, and real addresses for the variables (rgblink places the sections), are left)
 - [ ] `If` that never clobbers user registers (or documents what it uses)
 - [ ] `prelude` module; avoid the `rust_boy::rust_boy` stutter (optional rename: `asm` / `std` / `engine`)
 - [ ] Ship all breaking API changes together in one release

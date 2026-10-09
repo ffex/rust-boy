@@ -214,7 +214,8 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
       [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
       `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
-      functions and constants are not checked at all)
+      functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
+      "`Player` already defined" in rgbasm)
 
 ## Phase 4 — Documentation
 

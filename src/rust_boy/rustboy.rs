@@ -31,9 +31,9 @@ fn opens_section(code: &[Instr]) -> bool {
                 let lines = code_lines(line);
                 match lines.iter().map(|l| l.trim()).find(|l| !l.is_empty()) {
                     Some(first) => {
-                        return first
-                            .get(..7)
-                            .is_some_and(|word| word.eq_ignore_ascii_case("SECTION"));
+                        // The keyword, not a label that starts with it (`SectionTable:`)
+                        let word = first.split_whitespace().next().unwrap_or("");
+                        return word.eq_ignore_ascii_case("SECTION");
                     }
                     None => continue, // a comment only
                 }
@@ -776,6 +776,9 @@ impl RustBoy {
     /// copied at start-up like any tiles), and they count as the sprite's: its
     /// animations can use them as the next frames (an animation steps through
     /// contiguous tiles). Call it before adding the animations that use them.
+    ///
+    /// Composite (16x16) sprites are not supported: the right half's tiles always follow
+    /// the left half's, so neither half can be extended.
     ///
     /// # Example
     /// ```
@@ -1995,6 +1998,20 @@ mod tests {
             assert!(!data.contains("Raw Data"), "{}", data);
             assert_links(&gb.build());
         }
+
+        // A label that starts with "Section" is not the keyword: the default section is
+        // still added
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).raw("SectionTable: db");
+        });
+        let data = data_text(&mut gb);
+        assert!(
+            data.starts_with("SECTION \"Raw Data\", WRAM0\n"),
+            "a WRAM0 section first:\n{}",
+            data
+        );
+        assert_links(&gb.build());
 
         // After the variables, the raw data goes in their last section, as documented
         let mut gb = RustBoy::new();

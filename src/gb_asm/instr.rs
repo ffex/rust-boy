@@ -421,6 +421,17 @@ impl Instr {
         Some(size)
     }
 
+    /// The size of a `dw` whose items are plain numbers or names for which `is_label` is
+    /// true: 2 bytes each. A name the program defines as a label is an address, never an
+    /// `EQUS` (RGBDS rejects a name defined twice), which [`Instr::size`] cannot know alone.
+    /// `None` for any other instruction or item.
+    pub(crate) fn dw_size_with(&self, is_label: impl Fn(&str) -> bool) -> Option<usize> {
+        match self {
+            Instr::Dw { value } => Some(2 * data_items_with(value, is_label)?),
+            _ => None,
+        }
+    }
+
     /// The mnemonic of an instruction with operands, for messages
     fn mnemonic(&self) -> &'static str {
         match self {
@@ -450,9 +461,21 @@ fn plain_number(text: &str) -> Option<usize> {
 /// `None` with a symbol (it can be an `EQUS` of several values), a string, a character, an
 /// expression or no value
 fn data_items(values: &str) -> Option<usize> {
+    data_items_with(values, |_| false)
+}
+
+/// [`data_items`], also counting each item for which `is_label` is true (a name the
+/// program defines as a label, so not an `EQUS`)
+fn data_items_with(values: &str, is_label: impl Fn(&str) -> bool) -> Option<usize> {
+    if values.contains('\n') {
+        return None;
+    }
     let code = code_lines(values).join(" ");
     let items: Vec<&str> = code.split(',').map(str::trim).collect();
-    if items.iter().all(|item| plain_number(item).is_some()) {
+    if items
+        .iter()
+        .all(|item| plain_number(item).is_some() || is_label(item))
+    {
         Some(items.len())
     } else {
         None

@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 222 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 225 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -106,8 +106,10 @@ rgbfix -v -p 0xFF main.gb
   is the instruction that many bytes from the jump: it is measured like a label and its offset is written again
   for the relaxed code (a `jp` is one byte longer, so `jp nz, @+4` would land one byte early). If that
   instruction cannot be found, or a jump target is another expression (`Label + 2`), no jump of the program is
-  changed (printed as written; rgbasm reports a `jr` out of range). Other uses of `@` (`ds $150 - @`, an operand
-  `ld hl, @ + 5`) are not adjusted.
+  changed (printed as written; rgbasm reports a `jr` out of range), and the same holds when `@` appears anywhere
+  else in the code (a raw line, `db` / `dw`, an operand `ld hl, @ + 5`, a `DEF`), except the padding `ds N - @`.
+  A `dw` of labels the program defines once has a known size (2 bytes each); another symbol in data could be an
+  `EQUS`, so its size is unknown.
 - **Chunks** (`src/gb_asm/asm.rs:23-43`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
   Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`CHUNK_ORDER`, `src/gb_asm/codegen.rs:7-17`).
 - **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and
@@ -227,7 +229,7 @@ The problems are where each layer reaches across the line:
    | labels `ClearOam`, `AnimEnd`, `.check_left_N_end`, `.spriteK_left_limit_N_store` / `_end` | `.clear_oam_N`, `.anim_end_N`, `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the dispatcher's: `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`) |
    | a `jr` that rgbasm rejected as out of range, or to an external symbol | assembles: printed as `jp`, one byte longer and one cycle slower when taken (4 M-cycles, `jr` 3): code of fixed size or timing (an `rst` vector, a raw fixed-size section, a cycle-counted loop) must write jumps that reach |
    | `LabelAllocator::local("check left")` (any text) | panics: a stem is made of identifier characters (letters, digits, `_`, `#`, `$`, `@`); `locals` also panics on a stem given twice |
-   | a jump target `@+n` with a jump that grows in between | its offset is written again (`jp nz, @+5`); a target `Label + 2` (any other expression) leaves the whole program unrelaxed |
+   | a jump target `@+n` with a jump that grows in between | its offset is written again (`jp nz, @+5`); a target `Label + 2` (any other expression), or `@` anywhere else (a raw line, data, an operand; not `ds N - @`), leaves the whole program unrelaxed, so a far `jr` fails in rgbasm as before |
 
 ### Proposed target
 

@@ -39,8 +39,10 @@ impl Asm {
     /// instruction that many bytes from the jump: its offset is written again when a jump
     /// in between, or the jump itself, grows. If that instruction cannot be found (an offset
     /// inside an instruction, a size only RGBDS knows in between), or a jump's target is
-    /// another expression (`Label + 2`), the program is printed as written, with no jump
-    /// changed. See `gb_asm::relax` for every rule.
+    /// another expression (`Label + 2`), or `@` appears anywhere else in the code (a raw
+    /// line, data, an operand; but not the padding `ds N - @`), the program is printed as
+    /// written, with no jump changed: rgbasm then reports a `jr` out of range. See
+    /// `gb_asm::relax` for every rule.
     ///
     /// # Example
     /// ```

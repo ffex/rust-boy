@@ -33,9 +33,16 @@
 //! instruction cannot be found (a size only RGBDS knows in between, another section, an
 //! offset inside an instruction), or a jump's target is any other expression (`Label + 2`,
 //! `@ * 2`), no jump of the program is changed: the program is printed as written, and
-//! rgbasm reports a `jr` out of range as before, loudly. Other uses of `@`, such as
-//! `ds $150 - @` (padding up to an address, which keeps its meaning) or an operand
-//! `ld hl, @ + 5`, are not adjusted: write a label for an offset that spans a `jr`.
+//! rgbasm reports a `jr` out of range as before, loudly. The same holds when `@` appears
+//! anywhere else in the code (a raw line with code, `db` / `dw`, an operand such as
+//! `ld hl, @ + 5`, a `DEF`): such an offset cannot be written again, and would move if a
+//! `jr` in its span grew. The one exception is the padding `ds N - @` (`N` a number), which
+//! fills up to the address `N` and so keeps its meaning. `@` in a comment, in a string or
+//! inside a name (`a@b`) is not one.
+//!
+//! **Data.** A `dw` whose items are plain numbers, or labels the program defines once (an
+//! address is 2 bytes, and such a name cannot be an `EQUS`), has a known size; any other
+//! symbol in data could be an `EQUS` of several values, so its size is unknown.
 //!
 //! The relaxation is iterative: a `jr` that grows to a `jp` takes one more byte, which can
 //! push another `jr` over the same bytes out of range. It starts with every `jr` short and
@@ -48,7 +55,7 @@ use std::collections::BTreeMap;
 
 use super::expr::parse_number;
 use super::instr::{Instr, JumpTarget};
-use super::labels::is_identifier;
+use super::labels::{code_lines, is_identifier};
 
 /// What a jump's target is, for the relaxation
 #[derive(Debug, Clone, PartialEq)]
@@ -84,16 +91,19 @@ fn classify(target: &JumpTarget) -> Target {
     };
     let text = text.trim();
     if let Some(rest) = text.strip_prefix('@') {
-        let rest: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
+        // Spaces around the operator only: `@ + 4`, not `@+ 1 0` (which rgbasm rejects)
+        let rest = rest.trim_start();
         if rest.is_empty() {
             return Target::Here(0);
         }
-        let (sign, digits) = match rest.split_at(1) {
-            ("+", digits) => (1, digits),
-            ("-", digits) => (-1, digits),
-            _ => return Target::Expression,
+        let (sign, digits) = if let Some(digits) = rest.strip_prefix('+') {
+            (1, digits)
+        } else if let Some(digits) = rest.strip_prefix('-') {
+            (-1, digits)
+        } else {
+            return Target::Expression;
         };
-        return match parse_number(digits) {
+        return match parse_number(digits.trim_start()) {
             Some((value, _)) if value >= 0 => Target::Here(sign * i64::from(value)),
             _ => Target::Expression,
         };
@@ -114,6 +124,46 @@ fn classify(target: &JumpTarget) -> Target {
     } else {
         Target::Expression
     }
+}
+
+/// Whether a line of code (from [`code_lines`]: comments and strings removed) uses `@`, the
+/// address of the current instruction: an `@` that does not continue a name (`a@b` is one)
+fn uses_here(code: &str) -> bool {
+    let chars: Vec<char> = code.chars().collect();
+    chars.iter().enumerate().any(|(i, &c)| {
+        c == '@'
+            && (i == 0 || !(chars[i - 1].is_ascii_alphanumeric() || "_#$@.".contains(chars[i - 1])))
+    })
+}
+
+/// Whether `instr` is the padding `ds N - @` (up to the address N): it keeps its meaning
+/// when the code before it grows
+fn is_padding(instr: &Instr) -> bool {
+    let Instr::Ds {
+        num_bytes,
+        starter_point,
+    } = instr
+    else {
+        return false;
+    };
+    let padding = num_bytes
+        .split_once('-')
+        .is_some_and(|(end, here)| here.trim() == "@" && parse_number(end.trim()).is_some());
+    padding && !code_lines(starter_point).iter().any(|code| uses_here(code))
+}
+
+/// Whether `program` uses `@` anywhere but in a jump target (which [`classify`] reads) or a
+/// padding `ds N - @`: a raw line, a `db` / `dw`, an operand (`ld hl, @ + 5`). Such an
+/// offset would move if a `jr` in its span grew, so the program is then left as written.
+fn uses_here_elsewhere(program: &[Instr]) -> bool {
+    program.iter().any(|instr| {
+        if jump_target(instr).is_some() || is_padding(instr) || instr.check().is_err() {
+            return false;
+        }
+        code_lines(&instr.to_string())
+            .iter()
+            .any(|code| uses_here(code))
+    })
 }
 
 /// The index of the instruction `offset` bytes from the start of the jump at `jump`, as
@@ -221,6 +271,9 @@ pub(crate) fn relax_jumps(program: &[Instr]) -> Vec<Instr> {
 /// instruction it means); `None` if the program must be left as it is written
 #[allow(clippy::type_complexity)]
 fn relax(program: &[Instr]) -> Option<(Vec<bool>, Vec<(usize, usize)>, Vec<Option<(i64, usize)>>)> {
+    if uses_here_elsewhere(program) {
+        return None;
+    }
     // The scope of each instruction, and the index of each label by its full name (`None`
     // when it is defined twice: rgbasm rejects it, and it is no target to measure)
     let mut scopes = Vec::with_capacity(program.len());
@@ -247,7 +300,19 @@ fn relax(program: &[Instr]) -> Option<(Vec<bool>, Vec<(usize, usize)>, Vec<Optio
         scopes.push(scope);
     }
 
-    let sizes: Vec<Option<usize>> = program.iter().map(Instr::size).collect();
+    // A `dw` of labels the program defines is 2 bytes each (such a name is no `EQUS`)
+    let sizes: Vec<Option<usize>> = program
+        .iter()
+        .zip(&scopes)
+        .map(|(instr, scope)| {
+            instr.size().or_else(|| {
+                instr.dw_size_with(|name| {
+                    full_name(*scope, name)
+                        .is_some_and(|full| matches!(labels.get(&full), Some(Some(_))))
+                })
+            })
+        })
+        .collect();
     // The `@` target of each jump, as (offset, instruction); `targets`: the instruction each
     // `jr` jumps to, if the program defines it once
     let mut here = vec![None; program.len()];
@@ -969,5 +1034,119 @@ mod tests {
         for expression in ["Main + 2", "@ * 2", "@+x", "LOW(Main)", ":+-"] {
             assert_eq!(kind(expression), Target::Expression, "{}", expression);
         }
+    }
+
+    /// `asm` as RGBDS sees it: `Err` with its errors if it does not assemble and link
+    /// (`None` without `RGBDS_LINK_CHECK`)
+    fn rgbds_result(asm: &Asm) -> Option<Result<Vec<u8>, String>> {
+        std::env::var_os("RGBDS_LINK_CHECK")?;
+        let text = asm.to_asm();
+        let result = std::panic::catch_unwind(|| rgbds_rom(&text).unwrap());
+        Some(result.map_err(|payload| {
+            payload
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_default()
+        }))
+    }
+
+    #[test]
+    fn test_an_offset_from_at_elsewhere_leaves_the_program_as_written() {
+        // `@` in a raw line, an operand or data: the relaxation cannot write it again, and a
+        // jr that grew in its span would move its target (each landed one byte early), so
+        // the program is printed as written and rgbasm reports the far jr, loudly
+        type AtCode = fn(&mut Asm);
+        let cases: [(&str, AtCode); 3] = [
+            ("raw line", |asm| {
+                asm.raw("    jr nz, @+4");
+            }),
+            ("operand", |asm| {
+                asm.ld(crate::gb_asm::R16::HL, crate::gb_asm::Expr::raw("@+5"));
+            }),
+            ("data", |asm| {
+                asm.dw("@+4");
+            }),
+        ];
+        for (name, at_code) in cases {
+            let asm = one_section(|asm| {
+                at_code(asm);
+                asm.jr(".far").ld_a(1);
+                nops(asm, 128);
+                asm.label(".far").ret();
+            });
+            assert_eq!(asm.program(), asm.get_main_instrs()[..], "{}", name);
+            if let Some(result) = rgbds_result(&asm) {
+                let error = result.expect_err(name);
+                assert!(
+                    error.contains("`JR` target must be between -128 and 127 bytes away"),
+                    "{}: {}",
+                    name,
+                    error
+                );
+            }
+        }
+
+        // The padding `ds N - @`, `@` in a comment or a string, and a name with `@` in it
+        // keep the relaxation
+        let asm = one_section(|asm| {
+            asm.ds("$10 - @", "0")
+                .comment("@param a: nothing")
+                .db("\"a@b\"")
+                .label("a@b")
+                .jr(".far");
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(jump_to(&asm.program(), ".far"), "jp");
+        assert!(!uses_here_elsewhere(&asm.get_main_instrs()));
+        if let Some(result) = rgbds_result(&asm) {
+            result.expect("it assembles");
+        }
+    }
+
+    #[test]
+    fn test_a_dw_of_labels_has_a_known_size() {
+        // A name the program defines as a label is an address, 2 bytes in a dw (it cannot
+        // also be an EQUS); an undefined name could be one
+        let asm = one_section(|asm| {
+            asm.jr(".after")
+                .dw("Main, .after, $1234")
+                .label(".after")
+                .ret();
+            asm.jr(".end").dw("Unknown").label(".end").ret();
+        });
+        let program = asm.program();
+        assert_eq!(jump_to(&program, ".after"), "jr");
+        assert_eq!(jump_to(&program, ".end"), "jp");
+        assert_eq!(jr_range_errors(&program), Vec::<String>::new());
+        let defined = rgbds_result(&one_section(|asm| {
+            asm.jr(".after")
+                .dw("Main, .after, $1234")
+                .label(".after")
+                .ret();
+        }));
+        if let Some(result) = defined {
+            assert_eq!(result.expect("it assembles")[..2], [0x18, 6]);
+        }
+    }
+
+    #[test]
+    fn test_an_at_offset_is_read_as_rgbasm_reads_it() {
+        let kind = |text: &str| classify(&JumpTarget::Label(text.to_string()));
+        assert_eq!(kind("@ + 10"), Target::Here(10));
+        assert_eq!(kind("@+$0A"), Target::Here(10));
+        // rgbasm rejects `1 0`: it is no offset, and the program is left as written
+        assert_eq!(kind("@+ 1 0"), Target::Expression);
+        let asm = one_section(|asm| {
+            asm.jr_cond(Condition::NZ, "@+ 1 0").jr(".far");
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+        // The test helper reads the same numbers
+        let asm = one_section(|asm| {
+            asm.jr("@+$04").nop().nop().ret();
+        });
+        assert_eq!(jr_range_errors(&asm.program()), Vec::<String>::new());
     }
 }

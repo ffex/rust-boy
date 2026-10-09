@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::expr::parse_number;
 use super::{Asm, Instr, JumpTarget};
 
 /// Every label problem in `asm`: a label defined twice, a local label outside any scope,
@@ -334,12 +335,16 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
         };
         // `@`, `@+n`, `@-n`: n bytes from the start of the jr
         if let Some(rest) = name.trim().strip_prefix('@') {
-            let rest: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
-            let from_start = match rest.split_at(rest.len().min(1)) {
-                ("", _) => Some(0),
-                ("+", n) => n.parse::<isize>().ok(),
-                ("-", n) => n.parse::<isize>().ok().map(|n| -n),
-                _ => None,
+            let rest = rest.trim_start();
+            let number = |n: &str| parse_number(n.trim_start()).map(|(n, _)| n as isize);
+            let from_start = if rest.is_empty() {
+                Some(0)
+            } else if let Some(n) = rest.strip_prefix('+') {
+                number(n)
+            } else if let Some(n) = rest.strip_prefix('-') {
+                number(n).map(|n| -n)
+            } else {
+                None
             };
             match from_start {
                 Some(n) if (-128..=127).contains(&(n - 2)) => {}
@@ -373,7 +378,22 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
             errors.push(format!("{}: the target is in another section", instr));
             continue;
         }
-        let Some(bytes) = between.iter().map(Instr::size).sum::<Option<usize>>() else {
+        // A `dw` of labels defined once is 2 bytes each (a label is no `EQUS`)
+        let size = |i: usize| {
+            code[i].size().or_else(|| {
+                code[i].dw_size_with(|name| {
+                    full_name(scopes[i], name)
+                        .and_then(|full| labels.get(&full))
+                        .is_some_and(|places| places.len() == 1)
+                })
+            })
+        };
+        let range = if target > index {
+            index + 1..target
+        } else {
+            target..index + 1
+        };
+        let Some(bytes) = range.map(size).sum::<Option<usize>>() else {
             errors.push(format!(
                 "{}: an instruction of unknown size is in the way",
                 instr

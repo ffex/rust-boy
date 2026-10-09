@@ -134,10 +134,12 @@ Write `jr` where you expect a short jump: when the program is printed (`Asm::to_
 that cannot be shown to reach its target becomes a `jp`: more than 127 bytes ahead or 128 behind, in another section,
 a symbol the program does not define as a label, or behind a line whose size only RGBDS knows (a raw line, an
 `INCLUDE`). A `jr` that grows can push another one out of range, so this is repeated until every `jr` left reaches
-its target. A `jp` is never shortened. A target written from `@` (`jr nz, @+4`) keeps pointing at the same
-instruction: its offset is written again when a jump grows. If that cannot be worked out (an offset into the middle
-of an instruction, or a target such as `Label + 2`), the program is printed as written. A `jp` costs one byte and
-one cycle more than a `jr`, so code whose size or timing is fixed should write jumps that reach.
+its target. A `jp` is never shortened. The target of a jump written from `@` (`jr nz, @+4`, `jp @-3`) keeps
+pointing at the same instruction: its offset is written again when a jump grows. If that cannot be worked out (an
+offset into the middle of an instruction, a target such as `Label + 2`), or `@` is used anywhere else (a raw line,
+`db`/`dw`, an operand such as `ld hl, @ + 5`; the padding `ds $150 - @` is fine), no jump is changed and the program
+is printed as written, so rgbasm reports a `jr` out of range as it always did. A `jp` costs one byte and one cycle
+more than a `jr`, so code whose size or timing is fixed should write jumps that reach.
 
 ```rust
 use rust_boy::gb_asm::{Asm, Block};

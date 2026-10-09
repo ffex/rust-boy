@@ -3,25 +3,38 @@
 //! It runs the [`Instr`]s a routine emits, so a test can check what the generated code
 //! does rather than how it looks. It models the 8-bit registers, the Z and C flags, a
 //! memory addressed by symbol (`[wCurKeys]`, `[_OAMRAM+1]`, …) and symbolic constants
-//! (`PADF_LEFT`). A memory symbol plus an offset (`+4`, `+$4`, `+%100`) has one name however it is
-//! written: `_OAMRAM+4+1`, `_OAMRAM + 5` and `_OAMRAM+5` are the same byte, `_OAMRAM+0`
-//! is `_OAMRAM`. A number is an address too, named `$XXXX`: `$9800+33` is `$9821`.
+//! (`PADF_LEFT`).
+//!
+//! It reads the typed operands ([`Operand`], [`Dst`], [`Mem`], [`AluOperand`], [`IncDec`])
+//! and the [`Expr`] they hold, never their text. An address is a symbol plus an offset, or
+//! a number ([`Pointer`]): `Expr::sym("_OAMRAM") + 4 + 1` is `_OAMRAM` + 5, a byte the
+//! memory names `_OAMRAM+5`, and a number is named `$XXXX` (`$9821`). A value is a
+//! constant ([`Expr::value`]), a symbol of [`TestCpu::consts`], or an expression of them
+//! (`LCDCF_ON | LCDCF_BGON`); [`TestCpu::consts`] can also give the value of a whole
+//! expression, by its text. A value that does not fit its 8-bit operand (-128 to 255)
+//! panics, as rgbasm would truncate it. A test names the bytes it sets or reads with the
+//! same text (`"_OAMRAM+5"`, `"_OAMRAM + 5"`, `"$9821"`): [`Memory`] reads it into the same
+//! name, which is the only text the model parses.
+//!
 //! The register pairs `bc`, `de` and `hl` hold a symbolic address
 //! ([`Pointer`]): `ld hl, _OAMRAM` then `ld [hli], a` writes `[_OAMRAM]`, then
 //! `[_OAMRAM+1]`, the names a direct access such as `ld [_OAMRAM+1], a` uses. Loading a
 //! pair with a symbol makes its two 8-bit registers unknown, and changing one of them
 //! makes the pair unknown; reading an unknown register, or using an unknown pair, panics.
-//! A pair loaded with a number (`ld bc, $9800`, or a symbol of [`TestCpu::consts16`]),
+//! A pair loaded with a number (`ld bc, $9800`, or an expression of [`TestCpu::consts16`]),
 //! or whose two registers are known, holds that number, as on the CPU: `ld h, 0` then
 //! `ld l, a` sets `hl`. 16-bit `add hl, rr`, `inc rr` and `dec rr` work on numbers and on
-//! a symbol plus a number (the carry of `add hl` is then unknown). The 8-bit ALU
-//! instructions, the rotates and shifts, `swap`, `bit` / `set` / `res` (on a register or
-//! `[hl]`), `cpl`, `scf`, `ccf` and `nop` are modelled exactly for the Z and C flags; N
-//! and H are not modelled, so `daa` is not either. `push` and `pop` share one stack with
-//! `call` and `ret`, as on the CPU: a pushed pair can be popped into another pair (`push
-//! hl` / `pop de`), with what the model knows of it, but a `ret` to a pushed value or a
-//! `pop` of a return address panics. `halt`, `stop`, `di`, `ei`, `reti`, `rst`, `jp hl`,
-//! `add sp`, `ld hl, sp + e` and `add hl, sp` are not modelled. Jumps and
+//! a symbol plus a number (the carry of `add hl` is then unknown). Every load is modelled
+//! but the ones with `sp`: `ld [bc]`, `[de]`, `[hl]`, `[hli]`, `[hld]` and `[n16]` either
+//! way, `ldh [n8]` and `ldh [c]` (the byte at `$FF00 + c`). The 8-bit ALU instructions,
+//! `inc` / `dec` (also on `[hl]`), the rotates and shifts, `swap`, `bit` / `set` / `res`
+//! (on a register or `[hl]`), `cpl`, `scf`, `ccf` and `nop` are modelled exactly for the Z
+//! and C flags; N and H are not modelled, so `daa` is not either. `push` and `pop` share
+//! one stack with `call` and `ret`, as on the CPU: a pushed pair can be popped into
+//! another pair (`push hl` / `pop de`), with what the model knows of it, but a `ret` to a
+//! pushed value or a `pop` of a return address panics. `halt`, `stop`, `di`, `ei`, `reti`,
+//! `rst`, `jp hl`, `add sp`, `ld hl, sp + e`, `add hl, sp` and every other use of `sp` are
+//! not modelled. Jumps and
 //! calls go to labels in the same instruction list, and
 //! execution ends when it runs past the last instruction or on a `ret` with no `call`
 //! to return to (so a routine can be run on its own, or a test can put its routines
@@ -36,7 +49,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Condition, Instr, JumpTarget, Operand, R16Stack, Register};
+use super::expr::{BinOp, Expr};
+use super::{
+    AluOperand, Condition, Dst, IncDec, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
+};
 
 /// The address held by a register pair: a symbol plus an offset in bytes, or a number
 /// (an empty symbol, the number in `offset`)
@@ -47,9 +63,10 @@ pub(crate) struct Pointer {
 }
 
 impl Pointer {
-    /// The address `symbol`, split into a base symbol and offsets (any RGBDS number):
-    /// `_OAMRAM+4+1` and `_OAMRAM+$5` are `_OAMRAM` + 5; a number (`$9800`, `0x9800`, `%1001`, `38912`) has
-    /// no symbol
+    /// The address a test names with the text `symbol`, split into a base symbol and
+    /// offsets (any RGBDS number): `_OAMRAM+4+1` and `_OAMRAM + $5` are `_OAMRAM` + 5; a
+    /// number (`$9800`, `0x9800`, `%1001`, `38912`) has no symbol. Only for the names of
+    /// [`Memory`]: the code's operands are read as [`Expr`]s.
     fn parse(symbol: &str) -> Pointer {
         let symbol = symbol.trim();
         if let Some((base, offset)) = symbol.rsplit_once('+') {
@@ -61,10 +78,7 @@ impl Pointer {
         }
         match parse_number(symbol) {
             Some(number) => Pointer::number(number),
-            None => Pointer {
-                symbol: symbol.to_string(),
-                offset: 0,
-            },
+            None => Pointer::symbol(symbol),
         }
     }
 
@@ -73,6 +87,14 @@ impl Pointer {
         Pointer {
             symbol: String::new(),
             offset: number,
+        }
+    }
+
+    /// The address of the symbol `name`
+    fn symbol(name: &str) -> Pointer {
+        Pointer {
+            symbol: name.to_string(),
+            offset: 0,
         }
     }
 
@@ -113,7 +135,7 @@ impl Pointer {
     }
 }
 
-/// The value of an RGBDS number
+/// The value of an RGBDS number a test writes in the name of a byte of [`Memory`]
 ///
 /// `None` for a symbol (text that does not start like a number). Every RGBDS form is
 /// read: `$FF`, `0xFF`, `%101`, `0b101`, `&17`, `0o17`, decimal, `_` between digits, and a
@@ -156,26 +178,7 @@ fn parse_number(text: &str) -> Option<u16> {
     })
 }
 
-/// The byte an 8-bit operand written as the number `text` assembles to: 0 to 255, or
-/// -128 to -1 (`-1` is `$FF`); anything else panics (rgbasm would truncate it with a
-/// warning). The range is checked on the signed value, before [`parse_number`] wraps a
-/// negative number to 16 bits (`-65535` would wrap to 1).
-fn imm8(text: &str) -> u8 {
-    let text = text.trim();
-    let (negative, digits) = match text.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, text),
-    };
-    let magnitude = parse_number(digits)
-        .unwrap_or_else(|| panic!("{} is not an 8-bit value (-128 to 255)", text));
-    match (negative, magnitude) {
-        (false, 0..=0xFF) => magnitude as u8,
-        (true, 0..=0x80) => (magnitude as u8).wrapping_neg(),
-        _ => panic!("{} is not an 8-bit value (-128 to 255)", text),
-    }
-}
-
-/// The one name of the memory byte `symbol`: `_OAMRAM+4+1` is `_OAMRAM+5`
+/// The one name of the memory byte a test names `symbol`: `_OAMRAM+4+1` is `_OAMRAM+5`
 fn normalize(symbol: &str) -> String {
     Pointer::parse(symbol).name()
 }
@@ -262,13 +265,14 @@ pub(crate) struct TestCpu {
     pub l: u8,
     pub zero: bool,
     pub carry: bool,
-    /// Memory accessed through `[symbol]` operands, by normalised name (`_OAMRAM+5`);
-    /// reading a symbol never written panics
+    /// Memory accessed through `[address]` operands and the register pairs, by normalised
+    /// name (`_OAMRAM+5`); reading a byte never written panics
     pub mem: Memory,
-    /// Values of the symbols used as immediates (`and PADF_LEFT`); reading one that is
-    /// not set panics
+    /// Values of the symbols used as 8-bit values (`and PADF_LEFT`), or of a whole value
+    /// expression by its text (`LCDCF_ON | LCDCF_BGON`); reading one that is not set
+    /// panics
     pub consts: BTreeMap<String, u8>,
-    /// Values of the symbols loaded into a register pair as numbers
+    /// Values of the expressions loaded into a register pair as numbers, by their text
     /// (`ld bc, TilesEnd - Tiles`); a symbol not set here is an address
     pub consts16: BTreeMap<String, u16>,
     /// The register pairs that hold a symbolic address; `None` for a pair that holds a
@@ -336,14 +340,18 @@ impl TestCpu {
             steps += 1;
             assert!(steps <= 100_000, "the code does not terminate");
             let instr = &instrs[pc];
+            if let Err(error) = instr.check() {
+                panic!("invalid instruction: {}", error);
+            }
             match instr {
-                Instr::Ld { dst, src } => {
-                    if let Operand::Reg(pair @ (Register::BC | Register::DE | Register::HL)) = dst {
-                        self.load_pair(pair, src);
-                    } else {
-                        let value = self.read(src);
-                        self.write(dst, value);
-                    }
+                Instr::Ld {
+                    dst: Dst::R16(pair),
+                    src,
+                } => self.load_pair(*pair, src),
+                // `ldh` is `ld` with an address from $FF00 (`Instr::check` makes sure)
+                Instr::Ld { dst, src } | Instr::Ldh { dst, src } => {
+                    let value = self.read(src);
+                    self.write(dst, value);
                 }
                 Instr::Push { pair } => {
                     let saved = self.save(*pair);
@@ -360,50 +368,44 @@ impl TestCpu {
                 },
                 // `add a, src` and `adc a, src` (a + src + carry)
                 Instr::Add { src } | Instr::Adc { src } => {
-                    let value = self.read(src);
+                    let value = self.read_alu(src);
                     let carry = matches!(instr, Instr::Adc { .. }) && self.holds(&Condition::C);
-                    let sum =
-                        u16::from(self.get(&Register::A)) + u16::from(value) + u16::from(carry);
+                    let sum = u16::from(self.get(R8::A)) + u16::from(value) + u16::from(carry);
                     let result = sum as u8;
-                    self.set(&Register::A, result);
+                    self.set(R8::A, result);
                     self.set_zero(result == 0);
                     self.set_carry(sum > 0xFF);
                 }
                 // `sub a, src`, `sbc a, src` (a - src - carry) and `cp a, src` (the flags
                 // of `sub`, `a` unchanged)
                 Instr::Sub { src } | Instr::Sbc { src } | Instr::Cp { src } => {
-                    let value = self.read(src);
+                    let value = self.read_alu(src);
                     let borrow = matches!(instr, Instr::Sbc { .. }) && self.holds(&Condition::C);
                     let difference =
-                        i16::from(self.get(&Register::A)) - i16::from(value) - i16::from(borrow);
+                        i16::from(self.get(R8::A)) - i16::from(value) - i16::from(borrow);
                     let result = difference as u8;
                     self.set_zero(result == 0);
                     self.set_carry(difference < 0);
                     if !matches!(instr, Instr::Cp { .. }) {
-                        self.set(&Register::A, result);
+                        self.set(R8::A, result);
                     }
                 }
                 Instr::And { src } | Instr::Xor { src } | Instr::Or { src } => {
-                    let value = self.read(src);
-                    let a = self.get(&Register::A);
+                    let value = self.read_alu(src);
+                    let a = self.get(R8::A);
                     let result = match instr {
                         Instr::And { .. } => a & value,
                         Instr::Xor { .. } => a ^ value,
                         _ => a | value,
                     };
-                    self.set(&Register::A, result);
+                    self.set(R8::A, result);
                     self.set_zero(result == 0);
                     self.set_carry(false);
                 }
                 // `add hl, rr`: the Z flag is unchanged
                 Instr::AddHl { src } => {
-                    let pair = Register::from(*src);
-                    assert!(
-                        pair != Register::SP,
-                        "add hl, sp: sp is not supported by the test CPU"
-                    );
-                    let hl = self.address(&Register::HL);
-                    let other = self.address(&pair);
+                    let hl = self.address(R16::HL);
+                    let other = self.address(*src);
                     let result = match (hl.is_number(), other.is_number()) {
                         (true, true) => {
                             let (sum, carry) = hl.offset.overflowing_add(other.offset);
@@ -428,40 +430,44 @@ impl TestCpu {
                             other.name()
                         ),
                     };
-                    self.set_pair(&Register::HL, result);
+                    self.set_pair(R16::HL, result);
                 }
                 // 16-bit `inc rr` / `dec rr`: no flag changes
                 Instr::Inc {
-                    operand: Operand::Reg(pair @ (Register::BC | Register::DE | Register::HL)),
-                } => {
-                    let moved = self.address(pair).moved(1);
-                    self.set_pair(pair, moved);
+                    operand: IncDec::R16(pair),
                 }
-                Instr::Dec {
-                    operand: Operand::Reg(pair @ (Register::BC | Register::DE | Register::HL)),
+                | Instr::Dec {
+                    operand: IncDec::R16(pair),
                 } => {
-                    let moved = self.address(pair).moved(-1);
-                    self.set_pair(pair, moved);
+                    let delta = if matches!(instr, Instr::Inc { .. }) {
+                        1
+                    } else {
+                        -1
+                    };
+                    let moved = self.address(*pair).moved(delta);
+                    self.set_pair(*pair, moved);
                 }
+                // 8-bit `inc` / `dec`, also on `[hl]`: the carry unchanged
                 Instr::Inc {
-                    operand: Operand::Reg(reg),
-                } => {
-                    let value = self.get(reg).wrapping_add(1);
-                    self.set(reg, value);
-                    self.set_zero(value == 0); // carry unchanged
+                    operand: IncDec::R8(r8),
                 }
-                Instr::Dec {
-                    operand: Operand::Reg(reg),
+                | Instr::Dec {
+                    operand: IncDec::R8(r8),
                 } => {
-                    let value = self.get(reg).wrapping_sub(1);
-                    self.set(reg, value);
-                    self.set_zero(value == 0); // carry unchanged
+                    let value = self.read_r8(*r8);
+                    let value = if matches!(instr, Instr::Inc { .. }) {
+                        value.wrapping_add(1)
+                    } else {
+                        value.wrapping_sub(1)
+                    };
+                    self.write_r8(*r8, value);
+                    self.set_zero(value == 0);
                 }
                 // The rotates on `a`: as `rlc a`, … but Z is always reset
                 Instr::Rlca | Instr::Rrca | Instr::Rla | Instr::Rra => {
-                    let value = self.get(&Register::A);
+                    let value = self.get(R8::A);
                     let (result, carry) = self.rotate(instr, value);
-                    self.set(&Register::A, result);
+                    self.set(R8::A, result);
                     self.set_zero(false);
                     self.set_carry(carry);
                 }
@@ -473,33 +479,31 @@ impl TestCpu {
                 | Instr::Sra { operand }
                 | Instr::Swap { operand }
                 | Instr::Srl { operand } => {
-                    let operand = Operand::from(*operand);
-                    let value = self.read(&operand);
+                    let value = self.read_r8(*operand);
                     let (result, carry) = self.rotate(instr, value);
-                    self.write(&operand, result);
+                    self.write_r8(*operand, result);
                     self.set_zero(result == 0);
                     self.set_carry(carry);
                 }
                 // `bit n, r8`: Z set when the bit is 0, the carry unchanged
                 Instr::Bit { bit, operand } => {
-                    let value = self.read(&Operand::from(*operand));
+                    let value = self.read_r8(*operand);
                     self.set_zero(value & (1 << bit) == 0);
                 }
                 // `set` and `res`: no flag changes
                 Instr::Set { bit, operand } | Instr::Res { bit, operand } => {
-                    let operand = Operand::from(*operand);
-                    let value = self.read(&operand);
+                    let value = self.read_r8(*operand);
                     let result = if matches!(instr, Instr::Set { .. }) {
                         value | (1 << bit)
                     } else {
                         value & !(1 << bit)
                     };
-                    self.write(&operand, result);
+                    self.write_r8(*operand, result);
                 }
                 // `cpl`: Z and the carry unchanged
                 Instr::Cpl => {
-                    let value = !self.get(&Register::A);
-                    self.set(&Register::A, value);
+                    let value = !self.get(R8::A);
+                    self.set(R8::A, value);
                 }
                 Instr::Scf => self.set_carry(true),
                 Instr::Ccf => {
@@ -600,7 +604,7 @@ impl TestCpu {
     /// What `push pair` puts on the stack
     fn save(&mut self, pair: R16Stack) -> Saved {
         let unknown_mask = |unknown: bool| if unknown { 0xFF } else { 0 };
-        match pair {
+        let pair = match pair {
             R16Stack::AF => {
                 let flags = (u8::from(self.zero) << 7) | (u8::from(self.carry) << 4);
                 // N and H are not modelled: they are always unknown
@@ -611,34 +615,34 @@ impl TestCpu {
                 if self.unknown & UNKNOWN_CARRY != 0 {
                     unknown_flags |= 0b0001_0000;
                 }
-                Saved {
+                return Saved {
                     bytes: [self.a, flags],
                     unknown: [unknown_mask(self.unknown & UNKNOWN_A != 0), unknown_flags],
                     pointer: None,
-                }
+                };
             }
-            _ => {
-                let reg = Register::from(pair);
-                let (high, low) = Self::halves(&reg);
-                let unknown_high = self.unknown & Self::unknown_bit(&high) != 0;
-                let unknown_low = self.unknown & Self::unknown_bit(&low) != 0;
-                Saved {
-                    bytes: [*self.reg(&high), *self.reg(&low)],
-                    unknown: [unknown_mask(unknown_high), unknown_mask(unknown_low)],
-                    pointer: self.pair(&reg).and_then(|pointer| pointer.clone()),
-                }
-            }
+            R16Stack::BC => R16::BC,
+            R16Stack::DE => R16::DE,
+            R16Stack::HL => R16::HL,
+        };
+        let (high, low) = Self::halves(pair);
+        let unknown_high = self.unknown & Self::unknown_bit(high) != 0;
+        let unknown_low = self.unknown & Self::unknown_bit(low) != 0;
+        Saved {
+            bytes: [*self.reg(high), *self.reg(low)],
+            unknown: [unknown_mask(unknown_high), unknown_mask(unknown_low)],
+            pointer: self.pair(pair).clone(),
         }
     }
 
     /// `pop pair` of what [`save`](Self::save) put on the stack (from the same pair or
     /// another one)
     fn restore(&mut self, pair: R16Stack, saved: Saved) {
-        match pair {
+        let pair = match pair {
             R16Stack::AF => {
                 let [a, flags] = saved.bytes;
                 let [unknown_a, unknown_flags] = saved.unknown;
-                self.set(&Register::A, a);
+                self.set(R8::A, a);
                 self.set_zero(flags & 0b1000_0000 != 0);
                 self.set_carry(flags & 0b0001_0000 != 0);
                 // An address pushed from another pair: its bytes are not known
@@ -652,31 +656,30 @@ impl TestCpu {
                 if unknown_flags & 0b0001_0000 != 0 || address {
                     self.unknown |= UNKNOWN_CARRY;
                 }
+                return;
             }
-            _ => {
-                let reg = Register::from(pair);
-                if let Some(pointer) = saved.pointer {
-                    self.set_pair(&reg, pointer);
-                    return;
-                }
-                let (high, low) = Self::halves(&reg);
-                for ((half, byte), unknown) in
-                    [high, low].iter().zip(saved.bytes).zip(saved.unknown)
-                {
-                    self.set(half, byte);
-                    if unknown != 0 {
-                        self.unknown |= Self::unknown_bit(half);
-                    }
-                }
+            R16Stack::BC => R16::BC,
+            R16Stack::DE => R16::DE,
+            R16Stack::HL => R16::HL,
+        };
+        if let Some(pointer) = saved.pointer {
+            self.set_pair(pair, pointer);
+            return;
+        }
+        let (high, low) = Self::halves(pair);
+        for ((half, byte), unknown) in [high, low].into_iter().zip(saved.bytes).zip(saved.unknown) {
+            self.set(half, byte);
+            if unknown != 0 {
+                self.unknown |= Self::unknown_bit(half);
             }
         }
     }
 
     /// Panics if one of the `bits` is unknown
-    fn check_known(&self, bits: u16, what: &dyn std::fmt::Debug) {
+    fn check_known(&self, bits: u16, what: &dyn std::fmt::Display) {
         assert!(
             self.unknown & bits == 0,
-            "{:?} read while its value is unknown (its register pair was loaded with an \
+            "{} read while its value is unknown (its register pair was loaded with an \
              address, or a stubbed routine was called)",
             what
         );
@@ -706,155 +709,280 @@ impl TestCpu {
         self.unknown &= !UNKNOWN_CARRY;
     }
 
-    /// The unknown bit of the 8-bit register `reg`
-    fn unknown_bit(reg: &Register) -> u16 {
+    /// The unknown bit of the 8-bit register `reg` (not `[hl]`)
+    fn unknown_bit(reg: R8) -> u16 {
         match reg {
-            Register::A => UNKNOWN_A,
-            Register::B => UNKNOWN_B,
-            Register::C => UNKNOWN_C,
-            Register::D => UNKNOWN_D,
-            Register::E => UNKNOWN_E,
-            Register::H => UNKNOWN_H,
-            Register::L => UNKNOWN_L,
-            other => panic!("register {:?} not supported by the test CPU", other),
+            R8::A => UNKNOWN_A,
+            R8::B => UNKNOWN_B,
+            R8::C => UNKNOWN_C,
+            R8::D => UNKNOWN_D,
+            R8::E => UNKNOWN_E,
+            R8::H => UNKNOWN_H,
+            R8::L => UNKNOWN_L,
+            R8::AtHl => unreachable!("[hl] is memory, not a register"),
         }
     }
 
-    /// The value of the 8-bit register `reg`; panics if it is unknown
-    fn get(&mut self, reg: &Register) -> u8 {
-        self.check_known(Self::unknown_bit(reg), reg);
+    /// The value of the 8-bit register `reg` (not `[hl]`); panics if it is unknown
+    fn get(&mut self, reg: R8) -> u8 {
+        self.check_known(Self::unknown_bit(reg), &reg);
         *self.reg(reg)
     }
 
-    /// Set the 8-bit register `reg`; the pair it belongs to no longer holds an address
-    fn set(&mut self, reg: &Register, value: u8) {
+    /// Set the 8-bit register `reg` (not `[hl]`); the pair it belongs to no longer holds an
+    /// address
+    fn set(&mut self, reg: R8, value: u8) {
         match reg {
-            Register::B | Register::C => self.bc = None,
-            Register::D | Register::E => self.de = None,
-            Register::H | Register::L => self.hl = None,
+            R8::B | R8::C => self.bc = None,
+            R8::D | R8::E => self.de = None,
+            R8::H | R8::L => self.hl = None,
             _ => {}
         }
         self.unknown &= !Self::unknown_bit(reg);
         *self.reg(reg) = value;
     }
 
-    /// The register pair `reg`, or `None` for an 8-bit register
-    fn pair(&mut self, reg: &Register) -> Option<&mut Option<Pointer>> {
+    /// The symbolic address the register pair `pair` holds; panics on `sp`
+    fn pair(&mut self, pair: R16) -> &mut Option<Pointer> {
+        match pair {
+            R16::BC => &mut self.bc,
+            R16::DE => &mut self.de,
+            R16::HL => &mut self.hl,
+            R16::SP => panic!("sp is not supported by the test CPU"),
+        }
+    }
+
+    /// The 8-bit registers of the register pair `pair`, high then low; panics on `sp`
+    fn halves(pair: R16) -> (R8, R8) {
+        match pair {
+            R16::BC => (R8::B, R8::C),
+            R16::DE => (R8::D, R8::E),
+            R16::HL => (R8::H, R8::L),
+            R16::SP => panic!("sp is not supported by the test CPU"),
+        }
+    }
+
+    /// The address in the register pair `pair`: its symbolic address, or the number its
+    /// two 8-bit registers make; panics if it holds neither
+    fn address(&mut self, pair: R16) -> Pointer {
+        let (high, low) = Self::halves(pair);
+        if let Some(pointer) = self.pair(pair).clone() {
+            return pointer;
+        }
+        let known = self.unknown & (Self::unknown_bit(high) | Self::unknown_bit(low)) == 0;
+        assert!(
+            known,
+            "{} used without an address loaded",
+            pair.to_string().to_uppercase()
+        );
+        Pointer::number(u16::from_be_bytes([*self.reg(high), *self.reg(low)]))
+    }
+
+    /// Put the address `pointer` in the register pair `pair`: a number goes into its two
+    /// 8-bit registers; with a symbol, they hold an address the model does not know as a
+    /// number, so they become unknown
+    fn set_pair(&mut self, pair: R16, pointer: Pointer) {
+        let (high, low) = Self::halves(pair);
+        if pointer.is_number() {
+            let [high_byte, low_byte] = pointer.offset.to_be_bytes();
+            self.set(high, high_byte);
+            self.set(low, low_byte);
+        } else {
+            self.unknown |= Self::unknown_bit(high) | Self::unknown_bit(low);
+            *self.pair(pair) = Some(pointer);
+        }
+    }
+
+    fn reg(&mut self, reg: R8) -> &mut u8 {
         match reg {
-            Register::BC => Some(&mut self.bc),
-            Register::DE => Some(&mut self.de),
-            Register::HL => Some(&mut self.hl),
+            R8::A => &mut self.a,
+            R8::B => &mut self.b,
+            R8::C => &mut self.c,
+            R8::D => &mut self.d,
+            R8::E => &mut self.e,
+            R8::H => &mut self.h,
+            R8::L => &mut self.l,
+            R8::AtHl => unreachable!("[hl] is memory, not a register"),
+        }
+    }
+
+    /// The value of the expression `e`, reading its symbols in [`TestCpu::consts`]; or
+    /// `None` if it holds a symbol (or raw text) that is not set there
+    fn eval(&self, e: &Expr) -> Option<i32> {
+        if let Some(value) = self.consts.get(&e.to_string()) {
+            return Some(i32::from(*value));
+        }
+        match e {
+            Expr::Num(value, _) => Some(*value),
+            Expr::Sym(_) | Expr::Raw(_) => None,
+            Expr::Neg(e) => self.eval(e).map(i32::wrapping_neg),
+            Expr::Not(e) => self.eval(e).map(|v| !v),
+            Expr::Low(e) => self.eval(e).map(|v| v & 0xFF),
+            Expr::High(e) => self.eval(e).map(|v| (v >> 8) & 0xFF),
+            Expr::Binary(op, left, right) => {
+                let constant = Expr::Binary(
+                    *op,
+                    Box::new(Expr::num(self.eval(left)?)),
+                    Box::new(Expr::num(self.eval(right)?)),
+                );
+                constant.value()
+            }
+        }
+    }
+
+    /// The byte an 8-bit value operand gives: -128 to 255 (`-1` is `$FF`); panics on a
+    /// symbol not set in [`TestCpu::consts`], or a value out of that range (rgbasm would
+    /// truncate it)
+    fn value8(&self, e: &Expr) -> u8 {
+        let value = self
+            .eval(e)
+            .unwrap_or_else(|| panic!("constant {} not set in the test CPU", e));
+        match value {
+            0..=0xFF => value as u8,
+            -0x80..=-1 => value as u8,
+            _ => panic!("{} = {} is not an 8-bit value (-128 to 255)", e, value),
+        }
+    }
+
+    /// The address `e`: a number, a symbol, or a symbol plus or minus constant offsets
+    /// (`_OAMRAM+4+1` is `_OAMRAM` + 5); panics on anything else
+    fn pointer(&self, e: &Expr) -> Pointer {
+        self.try_pointer(e)
+            .unwrap_or_else(|| panic!("address {} not supported by the test CPU", e))
+    }
+
+    /// [`pointer`](Self::pointer), or `None` for an expression that is not an address
+    fn try_pointer(&self, e: &Expr) -> Option<Pointer> {
+        if let Some(value) = e.value() {
+            // A 16-bit value, -32768 to 65535 (`-1` is $FFFF)
+            if !(-0x8000..=0xFFFF).contains(&value) {
+                panic!("address {} = {} is not a 16-bit value", e, value);
+            }
+            return Some(Pointer::number(value as u16));
+        }
+        match e {
+            Expr::Sym(name) => Some(Pointer::symbol(name)),
+            Expr::Binary(BinOp::Add, left, right) => match (left.value(), right.value()) {
+                (_, Some(offset)) => Some(self.try_pointer(left)?.moved(offset)),
+                (Some(offset), _) => Some(self.try_pointer(right)?.moved(offset)),
+                _ => None,
+            },
+            Expr::Binary(BinOp::Sub, left, right) => {
+                Some(self.try_pointer(left)?.moved(-right.value()?))
+            }
             _ => None,
         }
     }
 
-    /// The 8-bit registers of the register pair `reg`, high then low
-    fn halves(reg: &Register) -> (Register, Register) {
-        match reg {
-            Register::BC => (Register::B, Register::C),
-            Register::DE => (Register::D, Register::E),
-            Register::HL => (Register::H, Register::L),
-            other => panic!("{:?} is not a register pair", other),
+    /// The address of the memory operand `mem`; `[hli]` and `[hld]` then move `hl`
+    fn access(&mut self, mem: &Mem) -> Pointer {
+        match mem {
+            Mem::Bc => self.address(R16::BC),
+            Mem::De => self.address(R16::DE),
+            Mem::Hli | Mem::Hld => {
+                let hl = self.address(R16::HL);
+                let delta = if *mem == Mem::Hli { 1 } else { -1 };
+                self.set_pair(R16::HL, hl.moved(delta));
+                hl
+            }
+            // `ldh [c]`: the byte at $FF00 + c
+            Mem::C => {
+                let c = self.get(R8::C);
+                Pointer::number(0xFF00 + u16::from(c))
+            }
+            Mem::Addr(address) => self.pointer(address),
         }
     }
 
-    /// The address in the register pair `reg`: its symbolic address, or the number its
-    /// two 8-bit registers make; panics if it holds neither
-    fn address(&mut self, reg: &Register) -> Pointer {
-        let (high, low) = Self::halves(reg);
-        if let Some(pointer) = self.pair(reg).and_then(|pair| pair.clone()) {
-            return pointer;
-        }
-        let known = self.unknown & (Self::unknown_bit(&high) | Self::unknown_bit(&low)) == 0;
-        assert!(known, "{:?} used without an address loaded", reg);
-        Pointer::number(u16::from_be_bytes([*self.reg(&high), *self.reg(&low)]))
+    fn read_memory(&self, at: &Pointer) -> u8 {
+        let name = at.name();
+        *self
+            .mem
+            .0
+            .get(&name)
+            .unwrap_or_else(|| panic!("read of [{}], which was never written", name))
     }
 
-    /// Put the address `pointer` in the register pair `reg`: a number goes into its two
-    /// 8-bit registers; with a symbol, they hold an address the model does not know as a
-    /// number, so they become unknown
-    fn set_pair(&mut self, reg: &Register, pointer: Pointer) {
-        let (high, low) = Self::halves(reg);
-        if pointer.is_number() {
-            let [high_byte, low_byte] = pointer.offset.to_be_bytes();
-            self.set(&high, high_byte);
-            self.set(&low, low_byte);
-        } else {
-            self.unknown |= Self::unknown_bit(&high) | Self::unknown_bit(&low);
-            *self
-                .pair(reg)
-                .unwrap_or_else(|| panic!("{:?} is not a register pair", reg)) = Some(pointer);
+    fn write_memory(&mut self, at: &Pointer, value: u8) {
+        let name = at.name();
+        self.trace.push(Event::Write(name.clone(), value));
+        self.mem.0.insert(name, value);
+    }
+
+    /// The value of an 8-bit register or `[hl]`
+    fn read_r8(&mut self, r8: R8) -> u8 {
+        match r8 {
+            R8::AtHl => {
+                let hl = self.address(R16::HL);
+                self.read_memory(&hl)
+            }
+            reg => self.get(reg),
         }
     }
 
-    fn reg(&mut self, reg: &Register) -> &mut u8 {
-        match reg {
-            Register::A => &mut self.a,
-            Register::B => &mut self.b,
-            Register::C => &mut self.c,
-            Register::D => &mut self.d,
-            Register::E => &mut self.e,
-            Register::H => &mut self.h,
-            Register::L => &mut self.l,
-            other => panic!("register {:?} not supported by the test CPU", other),
+    /// Set an 8-bit register or `[hl]`
+    fn write_r8(&mut self, r8: R8, value: u8) {
+        match r8 {
+            R8::AtHl => {
+                let hl = self.address(R16::HL);
+                self.write_memory(&hl, value);
+            }
+            reg => self.set(reg, value),
         }
     }
 
+    /// The byte the source of an 8-bit load gives
     fn read(&mut self, operand: &Operand) -> u8 {
         match operand {
-            Operand::Reg(reg) => self.get(reg),
-            Operand::Imm(value) => *value,
-            Operand::AddrDef(symbol) => *self.mem.get(symbol).unwrap_or_else(|| {
-                panic!("read of [{}], which was never written", normalize(symbol))
-            }),
-            Operand::AddrReg(reg) => {
-                let name = self.address(reg).name();
-                self.read(&Operand::AddrDef(name))
+            Operand::R8(r8) => self.read_r8(*r8),
+            Operand::Imm(value) => self.value8(value),
+            Operand::Mem(mem) => {
+                let at = self.access(mem);
+                self.read_memory(&at)
             }
-            Operand::Label(symbol) => match parse_number(symbol.trim()) {
-                // A number written as text (`ld a, -1`): an 8-bit operand, -128 to 255
-                Some(_) => imm8(symbol),
-                None => *self
-                    .consts
-                    .get(symbol)
-                    .unwrap_or_else(|| panic!("constant {} not set in the test CPU", symbol)),
-            },
-            other => panic!("operand {} not supported by the test CPU", other),
+            Operand::R16(r16) => panic!("ld …, {} is not supported by the test CPU", r16),
         }
     }
 
-    /// `ld rr, n16`: put a number (`$9800`, a symbol of [`TestCpu::consts16`]) or a
-    /// symbolic address (`_OAMRAM+4`) in the register pair `rr`
-    fn load_pair(&mut self, reg: &Register, src: &Operand) {
-        let pointer = match src {
-            Operand::Imm16(number) => Pointer::number(*number),
-            Operand::Label(symbol) => match self.consts16.get(symbol.trim()) {
-                Some(number) => Pointer::number(*number),
-                None => Pointer::parse(symbol),
-            },
-            other => panic!("ld {:?}, {} not supported by the test CPU", reg, other),
-        };
-        self.set_pair(reg, pointer);
+    /// The byte the source of an 8-bit ALU instruction gives
+    fn read_alu(&mut self, operand: &AluOperand) -> u8 {
+        match operand {
+            AluOperand::R8(r8) => self.read_r8(*r8),
+            AluOperand::Imm(value) => self.value8(value),
+        }
     }
 
-    fn write(&mut self, operand: &Operand, value: u8) {
-        match operand {
-            Operand::Reg(reg) => self.set(reg, value),
-            Operand::AddrDef(symbol) => {
-                let name = normalize(symbol);
-                self.trace.push(Event::Write(name.clone(), value));
-                self.mem.insert(name, value);
+    /// `ld rr, n16`: put a number (`$9800`, an expression of [`TestCpu::consts16`]) or a
+    /// symbolic address (`_OAMRAM+4`) in the register pair `rr`. Any other value
+    /// (`TilesEnd - Tiles` not in [`TestCpu::consts16`]) is one the model does not know:
+    /// the pair and its two registers become unknown, so using them panics.
+    fn load_pair(&mut self, pair: R16, src: &Operand) {
+        let Operand::Imm(value) = src else {
+            panic!("ld {}, {} not supported by the test CPU", pair, src);
+        };
+        let pointer = match self.consts16.get(&value.to_string()) {
+            Some(number) => Some(Pointer::number(*number)),
+            None => self.try_pointer(value),
+        };
+        match pointer {
+            Some(pointer) => self.set_pair(pair, pointer),
+            None => {
+                let (high, low) = Self::halves(pair);
+                self.unknown |= Self::unknown_bit(high) | Self::unknown_bit(low);
+                *self.pair(pair) = None;
             }
-            Operand::AddrReg(reg) => {
-                let name = self.address(reg).name();
-                self.write(&Operand::AddrDef(name), value);
+        }
+    }
+
+    /// Store `value` to the destination of a load
+    fn write(&mut self, dst: &Dst, value: u8) {
+        match dst {
+            Dst::R8(r8) => self.write_r8(*r8, value),
+            Dst::Mem(mem) => {
+                let at = self.access(mem);
+                self.write_memory(&at, value);
             }
-            Operand::AddrRegInc(Register::HL) => {
-                let hl = self.address(&Register::HL);
-                self.write(&Operand::AddrDef(hl.name()), value);
-                self.set_pair(&Register::HL, hl.moved(1));
-            }
-            other => panic!("cannot write to {} in the test CPU", other),
+            Dst::R16(r16) => panic!("ld {}, … is not supported by the test CPU", r16),
         }
     }
 }
@@ -862,18 +990,18 @@ impl TestCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::{Asm, R8, R16, R16Stack};
+    use crate::gb_asm::Asm;
 
     #[test]
     fn test_call_and_ret() {
         let mut asm = Asm::new();
         asm.call("Double")
             .call("Double")
-            .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
+            .ld(R8::B, R8::A)
             .ret() // ends the run: no call to return to
             .ld_a(99)
             .label("Double")
-            .add(Operand::Reg(Register::A))
+            .add(R8::A)
             .ret();
         let mut cpu = TestCpu {
             a: 3,
@@ -886,9 +1014,7 @@ mod tests {
     #[test]
     fn test_conditional_ret_and_inc_dec() {
         let mut asm = Asm::new();
-        asm.dec(Operand::Reg(Register::A))
-            .ret_cond(Condition::Z)
-            .inc(Operand::Reg(Register::B));
+        asm.dec(R8::A).ret_cond(Condition::Z).inc(R8::B);
         let code = asm.get_main_instrs();
         let mut cpu = TestCpu {
             a: 1,
@@ -903,18 +1029,15 @@ mod tests {
     #[test]
     fn test_register_pairs_stubs_and_trace() {
         let mut asm = Asm::new();
-        asm.ld(
-            Operand::Reg(Register::HL),
-            Operand::Label("_OAMRAM".to_string()),
-        )
-        .ld_a(7)
-        .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A))
-        .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A))
-        .ld_a(9)
-        .ld(Operand::AddrReg(Register::HL), Operand::Reg(Register::A))
-        .ld_a(0)
-        .ld(Operand::Reg(Register::B), Operand::AddrReg(Register::HL))
-        .call("Memcopy");
+        asm.ld(R16::HL, "_OAMRAM")
+            .ld_a(7)
+            .ld(Mem::Hli, R8::A)
+            .ld(Mem::Hli, R8::A)
+            .ld_a(9)
+            .ld(R8::AtHl, R8::A)
+            .ld_a(0)
+            .ld(R8::B, R8::AtHl)
+            .call("Memcopy");
         let mut cpu = TestCpu::default();
         cpu.stubs.insert("Memcopy".to_string());
         cpu.run(&asm.get_main_instrs());
@@ -934,12 +1057,7 @@ mod tests {
     #[should_panic(expected = "HL used without an address loaded")]
     fn test_changing_half_of_a_pair_forgets_its_address() {
         let mut asm = Asm::new();
-        asm.ld(
-            Operand::Reg(Register::HL),
-            Operand::Label("_OAMRAM".to_string()),
-        )
-        .ld(Operand::Reg(Register::L), Operand::Imm(4))
-        .ld(Operand::AddrReg(Register::HL), Operand::Reg(Register::A));
+        asm.ld(R16::HL, "_OAMRAM").ld(R8::L, 4).ld(R8::AtHl, R8::A);
         TestCpu::default().run(&asm.get_main_instrs());
     }
 
@@ -957,29 +1075,28 @@ mod tests {
     /// Code appended to a test program
     type Snippet = fn(&mut Asm);
 
-    fn ld_pair(asm: &mut Asm, pair: Register, symbol: &str) {
-        asm.ld(Operand::Reg(pair), Operand::Label(symbol.to_string()));
+    fn ld_pair(asm: &mut Asm, pair: R16, address: impl Into<Expr>) {
+        asm.ld(pair, address.into());
     }
 
     #[test]
     fn test_loading_a_pair_makes_its_halves_unknown() {
         let pairs = [
-            (Register::BC, Register::B, Register::C),
-            (Register::DE, Register::D, Register::E),
-            (Register::HL, Register::H, Register::L),
+            (R16::BC, R8::B, R8::C),
+            (R16::DE, R8::D, R8::E),
+            (R16::HL, R8::H, R8::L),
         ];
         for (pair, high, low) in pairs {
             for half in [high, low] {
                 let mut asm = Asm::new();
-                ld_pair(&mut asm, pair.clone(), "_OAMRAM");
-                asm.ld(Operand::Reg(Register::A), Operand::Reg(half.clone()));
+                ld_pair(&mut asm, pair, "_OAMRAM");
+                asm.ld(R8::A, half);
                 assert!(panics(&asm), "{:?} read after ld {:?}", half, pair);
 
                 // Set again, the half is known (and the pair no longer holds an address)
                 let mut asm = Asm::new();
-                ld_pair(&mut asm, pair.clone(), "_OAMRAM");
-                asm.ld(Operand::Reg(half.clone()), Operand::Imm(3))
-                    .ld(Operand::Reg(Register::A), Operand::Reg(half.clone()));
+                ld_pair(&mut asm, pair, "_OAMRAM");
+                asm.ld(half, 3).ld(R8::A, half);
                 assert!(!panics(&asm), "{:?} set after ld {:?}", half, pair);
             }
         }
@@ -989,28 +1106,28 @@ mod tests {
     fn test_a_stub_leaves_registers_pairs_and_flags_unknown() {
         let after_stub = |tail: &dyn Fn(&mut Asm)| {
             let mut asm = Asm::new();
-            ld_pair(&mut asm, Register::HL, "_OAMRAM");
-            ld_pair(&mut asm, Register::DE, "Tiles");
-            ld_pair(&mut asm, Register::BC, "TilesEnd - Tiles");
+            ld_pair(&mut asm, R16::HL, "_OAMRAM");
+            ld_pair(&mut asm, R16::DE, "Tiles");
+            ld_pair(&mut asm, R16::BC, Expr::sym("TilesEnd") - "Tiles");
             asm.ld_a(1).cp_imm(1).ld_b(2).call("Memcopy");
             tail(&mut asm);
             asm
         };
         let reads: [(&str, Snippet); 7] = [
             ("a", |asm| {
-                asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+                asm.ld(R8::B, R8::A);
             }),
             ("b", |asm| {
-                asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
+                asm.ld(R8::A, R8::B);
             }),
             ("hl", |asm| {
-                asm.ld(Operand::AddrRegInc(Register::HL), Operand::Imm(0));
+                asm.ld(R8::AtHl, 0);
             }),
             ("de", |asm| {
-                asm.ld(Operand::Reg(Register::A), Operand::AddrReg(Register::DE));
+                asm.ld(R8::A, Mem::De);
             }),
             ("bc", |asm| {
-                asm.ld(Operand::Reg(Register::A), Operand::AddrReg(Register::BC));
+                asm.ld(R8::A, Mem::Bc);
             }),
             ("Z flag", |asm| {
                 asm.jp_cond(Condition::NZ, "End").label("End");
@@ -1034,16 +1151,16 @@ mod tests {
     #[test]
     fn test_one_address_has_one_name() {
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::HL, "_OAMRAM+4");
+        ld_pair(&mut asm, R16::HL, Expr::sym("_OAMRAM") + 4);
         asm.ld_a(7)
-            .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A))
+            .ld(Mem::Hli, R8::A)
             .ld_a(8)
-            .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A))
+            .ld(Mem::Hli, R8::A)
             .ld_a(9)
-            .ld_addr_def_a("_OAMRAM + 6")
+            .ld_addr_def_a(Expr::sym("_OAMRAM") + 4 + 2)
             .ld_a(0)
-            .ld_addr_def_a("_OAMRAM+0")
-            .ld_a_addr_def("_OAMRAM+5");
+            .ld_addr_def_a(Expr::sym("_OAMRAM") + 0)
+            .ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
         let mut cpu = TestCpu::default();
         cpu.run(&asm.get_main_instrs());
         assert_eq!(cpu.a, 8, "[_OAMRAM+5] written through hl, read directly");
@@ -1075,22 +1192,18 @@ mod tests {
         assert_eq!((cpu.b, cpu.c), (1, 2));
     }
 
-    fn reg(r: Register) -> Operand {
-        Operand::Reg(r)
-    }
-
     #[test]
     fn test_a_pair_holds_a_number() {
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::BC, "$9800");
-        ld_pair(&mut asm, Register::DE, "LenEnd - Len");
+        ld_pair(&mut asm, R16::BC, "$9800");
+        ld_pair(&mut asm, R16::DE, Expr::sym("LenEnd") - "Len");
         // hl set through its halves: $12FF
-        asm.ld(reg(Register::H), Operand::Imm(0x12))
-            .ld(reg(Register::L), Operand::Imm(0xFF))
+        asm.ld(R8::H, 0x12)
+            .ld(R8::L, 0xFF)
             .ld_a(7)
-            .ld(Operand::AddrRegInc(Register::HL), reg(Register::A))
-            .ld(Operand::AddrRegInc(Register::HL), reg(Register::A))
-            .ld(reg(Register::A), Operand::AddrReg(Register::BC));
+            .ld(Mem::Hli, R8::A)
+            .ld(Mem::Hli, R8::A)
+            .ld(R8::A, Mem::Bc);
         let mut cpu = TestCpu::default();
         cpu.consts16.insert("LenEnd - Len".to_string(), 300);
         cpu.mem.insert("$9800".to_string(), 9);
@@ -1146,34 +1259,58 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_an_8_bit_operand_written_as_a_number() {
-        // `ld a, -1` (a number written as text, as `Var::set` emits it) is the byte $FF
-        for (text, value) in [
-            ("-1", 0xFF),
-            ("-128", 0x80),
-            ("$10", 0x10),
-            ("255", 0xFF),
-            ("-0", 0),
-            ("-$7F", 0x81),
-        ] {
-            let mut cpu = TestCpu::default();
-            cpu.run(&[Instr::Ld {
-                dst: Operand::Reg(Register::A),
-                src: Operand::Label(text.to_string()),
-            }]);
-            assert_eq!(cpu.a, value, "{}", text);
+    /// Run `ld a, value` on a CPU whose constants are `consts`
+    fn load_a(value: Expr, consts: &[(&str, u8)]) -> u8 {
+        let mut cpu = TestCpu::default();
+        for (name, value) in consts {
+            cpu.consts.insert(name.to_string(), *value);
         }
-        // Out of the 8-bit range: rgbasm would truncate it, the model panics. The range
-        // is checked on the signed value: -65535 and -$FF00 wrap to 1 and $100 in 16 bits
-        // (-65535 was taken for 1)
-        for text in ["256", "-129", "$FFFF", "-65535", "-$FF00", "--1"] {
-            let result = std::panic::catch_unwind(|| {
-                TestCpu::default().run(&[Instr::Ld {
-                    dst: Operand::Reg(Register::A),
-                    src: Operand::Label(text.to_string()),
-                }])
-            });
+        cpu.run(&[Instr::Ld {
+            dst: Dst::R8(R8::A),
+            src: Operand::Imm(value),
+        }]);
+        cpu.a
+    }
+
+    #[test]
+    fn test_an_8_bit_value() {
+        // A number, in any form (`ld a, -1`, as `Var::set` emits it, is the byte $FF)
+        let numbers = [
+            (Expr::num(-1), 0xFF),
+            (Expr::num(-128), 0x80),
+            (Expr::hex(0x10), 0x10),
+            (Expr::num(255), 0xFF),
+            (Expr::from("-0"), 0),
+            (Expr::from("-$7F"), 0x81),
+            (Expr::bin(0b1010) + 1, 11),
+            (Expr::low(Expr::hex(0x1234)), 0x34),
+        ];
+        for (value, byte) in numbers {
+            assert_eq!(load_a(value.clone(), &[]), byte, "{}", value);
+        }
+        // Symbols of `consts`, and expressions of them; a whole expression can be set
+        let consts = [("ON", 0x80), ("BG", 0x01), ("ON | BG | OBJ", 0x83)];
+        let on_bg = Expr::sym("ON") | "BG";
+        assert_eq!(load_a(on_bg, &consts), 0x81);
+        let whole = Expr::sym("ON") | "BG" | "OBJ";
+        assert_eq!(load_a(whole, &consts), 0x83, "by its text");
+        assert_eq!(load_a(Expr::sym("ON") - 1, &consts), 0x7F);
+
+        // Out of the 8-bit range: rgbasm would truncate it, the model panics (a constant
+        // is rejected by `Instr::check`, an expression of symbols by the model itself);
+        // and so does a symbol that is not set
+        let out_of_range = [
+            Expr::num(256),
+            Expr::num(-129),
+            Expr::hex(0xFFFF),
+            Expr::num(-65535),
+            Expr::sym("ON") + "ON",
+            Expr::sym("UNSET"),
+            Expr::raw("BANK(ON)"),
+        ];
+        for value in out_of_range {
+            let text = value.to_string();
+            let result = std::panic::catch_unwind(|| load_a(value, &consts));
             assert!(result.is_err(), "{} should panic", text);
         }
     }
@@ -1181,13 +1318,13 @@ mod tests {
     #[test]
     fn test_add_hl() {
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::HL, "$8000");
-        ld_pair(&mut asm, Register::BC, "$0005");
+        ld_pair(&mut asm, R16::HL, "$8000");
+        ld_pair(&mut asm, R16::BC, "$0005");
         asm.ld_a(1)
             .cp_imm(1) // Z set, C clear
             .add_hl(R16::HL) // $0000, carry
-            .ld(reg(Register::D), reg(Register::H))
-            .ld(reg(Register::E), reg(Register::L))
+            .ld(R8::D, R8::H)
+            .ld(R8::E, R8::L)
             .ld_a(0)
             .jp_cond(Condition::NC, "End")
             .jp_cond(Condition::NZ, "End")
@@ -1205,8 +1342,8 @@ mod tests {
         // A symbol plus a number is that symbol at an offset; its carry is unknown
         let symbol_plus_number = |tail: &dyn Fn(&mut Asm)| {
             let mut asm = Asm::new();
-            ld_pair(&mut asm, Register::HL, "33");
-            ld_pair(&mut asm, Register::BC, "_SCRN0");
+            ld_pair(&mut asm, R16::HL, "33");
+            ld_pair(&mut asm, R16::BC, "_SCRN0");
             asm.add_hl(R16::BC);
             tail(&mut asm);
             asm
@@ -1215,7 +1352,7 @@ mod tests {
         cpu.mem.insert("_SCRN0+33".to_string(), 4);
         cpu.run(
             &symbol_plus_number(&|asm| {
-                asm.ld_a_addr_reg(Register::HL);
+                asm.ld(R8::A, R8::AtHl);
             })
             .get_main_instrs(),
         );
@@ -1227,9 +1364,9 @@ mod tests {
         // A number from $8000 is a step back, as the sum wraps around at 16 bits:
         // _SCRN0+5 + $FFFF is _SCRN0+4
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::HL, "_SCRN0+5");
-        ld_pair(&mut asm, Register::DE, "$FFFF");
-        asm.add_hl(R16::DE).ld_a_addr_reg(Register::HL);
+        ld_pair(&mut asm, R16::HL, Expr::sym("_SCRN0") + 5);
+        ld_pair(&mut asm, R16::DE, "$FFFF");
+        asm.add_hl(R16::DE).ld(R8::A, R8::AtHl);
         let mut cpu = TestCpu::default();
         cpu.mem.insert("_SCRN0+4".to_string(), 8);
         cpu.run(&asm.get_main_instrs());
@@ -1237,7 +1374,7 @@ mod tests {
 
         // Two symbols cannot be added
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::HL, "_SCRN0");
+        ld_pair(&mut asm, R16::HL, "_SCRN0");
         asm.add_hl(R16::HL);
         assert!(panics(&asm));
     }
@@ -1245,15 +1382,15 @@ mod tests {
     #[test]
     fn test_16_bit_inc_and_dec() {
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::DE, "Tiles");
-        ld_pair(&mut asm, Register::BC, "$0000");
+        ld_pair(&mut asm, R16::DE, "Tiles");
+        ld_pair(&mut asm, R16::BC, "$0000");
         asm.ld_a(1)
             .cp_imm(1) // Z set: inc rr / dec rr leave the flags alone
-            .inc(reg(Register::DE))
-            .inc(reg(Register::DE))
-            .dec(reg(Register::DE))
-            .dec(reg(Register::BC))
-            .ld(reg(Register::A), Operand::AddrReg(Register::DE))
+            .inc(R16::DE)
+            .inc(R16::DE)
+            .dec(R16::DE)
+            .dec(R16::BC)
+            .ld(R8::A, Mem::De)
             .jp_cond(Condition::NZ, "End")
             .ld_h(1)
             .label("End");
@@ -1266,8 +1403,8 @@ mod tests {
 
         // Before a symbol, the address is unknown
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::DE, "Tiles");
-        asm.dec(reg(Register::DE));
+        ld_pair(&mut asm, R16::DE, "Tiles");
+        asm.dec(R16::DE);
         assert!(panics(&asm));
     }
 
@@ -1276,20 +1413,20 @@ mod tests {
         let mut asm = Asm::new();
         asm.ld_a(0b11)
             .srl(R8::A) // 1, carry
-            .ld(reg(Register::B), reg(Register::A))
+            .ld(R8::B, R8::A)
             .srl(R8::A) // 0, carry, zero
             .ld_a(0xFF)
-            .adc(Operand::Imm(0)) // 0xFF + 0 + 1 = 0, carry
-            .ld(reg(Register::C), reg(Register::A))
-            .adc(Operand::Imm(1)) // 0 + 1 + 1 = 2, no carry
-            .ld(reg(Register::D), reg(Register::A))
-            .adc(Operand::Imm(3)) // 2 + 3 + 0
-            .ld(reg(Register::E), reg(Register::A))
+            .adc(0) // 0xFF + 0 + 1 = 0, carry
+            .ld(R8::C, R8::A)
+            .adc(1) // 0 + 1 + 1 = 2, no carry
+            .ld(R8::D, R8::A)
+            .adc(3) // 2 + 3 + 0
+            .ld(R8::E, R8::A)
             .ld_a(0)
-            .or(Operand::Imm(0)) // zero, carry cleared
+            .or(0) // zero, carry cleared
             .jp_cond(Condition::NZ, "End")
             .jp_cond(Condition::C, "End")
-            .or(reg(Register::B)) // 1
+            .or(R8::B) // 1
             .label("End");
         let mut cpu = TestCpu::default();
         cpu.run(&asm.get_main_instrs());
@@ -1322,7 +1459,7 @@ mod tests {
                 0x10,
                 true,
                 |asm| {
-                    asm.sbc(Operand::Imm(0x0F));
+                    asm.sbc(0x0F);
                 },
                 0x00,
                 false,
@@ -1332,7 +1469,7 @@ mod tests {
                 0x00,
                 true,
                 |asm| {
-                    asm.sbc(Operand::Imm(0x00));
+                    asm.sbc(0x00);
                 },
                 0xFF,
                 true,
@@ -1342,7 +1479,7 @@ mod tests {
                 0x05,
                 false,
                 |asm| {
-                    asm.sbc(Operand::Imm(0x03));
+                    asm.sbc(0x03);
                 },
                 0x02,
                 false,
@@ -1352,7 +1489,7 @@ mod tests {
                 0x05,
                 true,
                 |asm| {
-                    asm.sbc(Operand::Imm(0x05));
+                    asm.sbc(0x05);
                 },
                 0xFF,
                 true,
@@ -1362,7 +1499,7 @@ mod tests {
                 0x05,
                 true,
                 |asm| {
-                    asm.sbc(Operand::Imm(0x04));
+                    asm.sbc(0x04);
                 },
                 0x00,
                 false,
@@ -1373,7 +1510,7 @@ mod tests {
                 0x05,
                 true,
                 |asm| {
-                    asm.sub(Operand::Imm(0x05));
+                    asm.sub(0x05);
                 },
                 0x00,
                 false,
@@ -1383,7 +1520,7 @@ mod tests {
                 0x05,
                 false,
                 |asm| {
-                    asm.cp(Operand::Imm(0x06));
+                    asm.cp(0x06);
                 },
                 0x05,
                 true,
@@ -1394,7 +1531,7 @@ mod tests {
                 0b1100,
                 true,
                 |asm| {
-                    asm.xor(Operand::Imm(0b1010));
+                    asm.xor(0b1010);
                 },
                 0b0110,
                 false,
@@ -1404,7 +1541,7 @@ mod tests {
                 0x5A,
                 true,
                 |asm| {
-                    asm.xor(reg(Register::A));
+                    asm.xor(R8::A);
                 },
                 0x00,
                 false,
@@ -1598,7 +1735,7 @@ mod tests {
 
         // On [hl] the result is written back to memory
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::HL, "wValue");
+        ld_pair(&mut asm, R16::HL, "wValue");
         asm.sra(R8::AtHl).swap(R8::AtHl);
         let mut cpu = TestCpu::default();
         cpu.mem.insert("wValue".to_string(), 0x82);
@@ -1615,7 +1752,7 @@ mod tests {
     #[test]
     fn test_bit_set_res_cpl_scf_ccf() {
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::HL, "wFlags");
+        ld_pair(&mut asm, R16::HL, "wFlags");
         asm.scf()
             .bit(2, R8::AtHl) // bit set: Z reset, carry unchanged
             .ld_a(0)
@@ -1654,8 +1791,8 @@ mod tests {
     #[test]
     fn test_push_and_pop() {
         let mut asm = Asm::new();
-        ld_pair(&mut asm, Register::BC, "$1234");
-        ld_pair(&mut asm, Register::HL, "_OAMRAM");
+        ld_pair(&mut asm, R16::BC, "$1234");
+        ld_pair(&mut asm, R16::HL, "_OAMRAM");
         asm.push(R16Stack::BC)
             .push(R16Stack::HL)
             .ld_a(5)
@@ -1667,7 +1804,7 @@ mod tests {
             .pop(R16Stack::AF) // a = 5, Z set, carry clear
             .pop(R16Stack::DE) // the address in hl
             .pop(R16Stack::HL) // $1234
-            .ld(Operand::AddrReg(Register::DE), reg(Register::A))
+            .ld(Mem::De, R8::A)
             .ret()
             // A routine that keeps bc
             .label("Routine")
@@ -1689,18 +1826,18 @@ mod tests {
 
         // `pop bc` after `push af`: b is a, c holds the flags, N and H included, which
         // the model does not know
-        let push_af_pop_bc = |read: Register| {
+        let push_af_pop_bc = |read: R8| {
             let mut asm = Asm::new();
             asm.ld_a(3)
                 .push(R16Stack::AF)
                 .pop(R16Stack::BC)
-                .ld(reg(Register::E), reg(read));
+                .ld(R8::E, read);
             asm
         };
-        assert!(!panics(&push_af_pop_bc(Register::B)), "b is a");
-        assert!(panics(&push_af_pop_bc(Register::C)), "c is unknown");
+        assert!(!panics(&push_af_pop_bc(R8::B)), "b is a");
+        assert!(panics(&push_af_pop_bc(R8::C)), "c is unknown");
         let mut cpu = TestCpu::default();
-        cpu.run(&push_af_pop_bc(Register::B).get_main_instrs());
+        cpu.run(&push_af_pop_bc(R8::B).get_main_instrs());
         assert_eq!(cpu.e, 3);
 
         // The stack is shared with the calls: a `ret` to a pushed value, a `pop` of a

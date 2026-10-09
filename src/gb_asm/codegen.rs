@@ -1,5 +1,5 @@
 use super::asm::{Asm, Chunk};
-use super::instr::{Condition, Instr, JumpTarget, Operand, Register};
+use super::instr::{Condition, Instr, JumpTarget};
 use std::fmt;
 
 // Code generation implementation for Asm
@@ -42,44 +42,6 @@ impl Asm {
         asm
     }
 }
-// Display implementation for Register
-impl fmt::Display for Register {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Register::A => write!(f, "a"),
-            Register::B => write!(f, "b"),
-            Register::C => write!(f, "c"),
-            Register::D => write!(f, "d"),
-            Register::E => write!(f, "e"),
-            Register::H => write!(f, "h"),
-            Register::L => write!(f, "l"),
-            Register::SP => write!(f, "sp"),
-            Register::PC => write!(f, "pc"),
-            Register::AF => write!(f, "af"),
-            Register::BC => write!(f, "bc"),
-            Register::DE => write!(f, "de"),
-            Register::HL => write!(f, "hl"),
-        }
-    }
-}
-
-// Display implementation for Operand
-impl fmt::Display for Operand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Operand::Reg(reg) => write!(f, "{}", reg),
-            Operand::Imm(val) => write!(f, "{}", val),
-            Operand::Imm16(val) => write!(f, "{}", val),
-            Operand::Addr(addr) => write!(f, "[${:04x}]", addr),
-            Operand::AddrDef(const_name) => write!(f, "[{}]", const_name),
-            Operand::AddrReg(reg) => write!(f, "[{}]", reg),
-            Operand::AddrRegInc(reg) => write!(f, "[{}i]", reg),
-            Operand::AddrRegDec(reg) => write!(f, "[{}d]", reg),
-            Operand::Label(label) => write!(f, "{}", label),
-        }
-    }
-}
-
 // Display implementation for JumpTarget
 impl fmt::Display for JumpTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

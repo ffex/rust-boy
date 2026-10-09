@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition as AsmCondition, Instr, JumpTarget, Operand, Register};
+use crate::gb_asm::{Asm, Condition as AsmCondition, Expr, Instr, JumpTarget, R8};
 
 use super::emittable::Emittable;
 
@@ -297,13 +297,13 @@ impl Emittable for If {
         asm.emit_all(self.right.emit(counter));
 
         // Step 2: Save right value to B
-        asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+        asm.ld(R8::B, R8::A);
 
         // Step 3: Execute left instructions (result in A)
         asm.emit_all(self.left.emit(counter));
 
         // Step 4: Compare A (left) with B (right): the flags describe left - right
-        asm.cp(Operand::Reg(Register::B));
+        asm.cp(R8::B);
 
         // Step 5: Handle conditional jumps based on operator type
         match self.op {
@@ -350,8 +350,8 @@ impl Emittable for If {
 pub struct IfConst {
     /// Instructions that load value into A
     value: Box<dyn Emittable>,
-    /// Constant label to compare against
-    const_label: String,
+    /// The constant to compare against: a `DEF` name, a number, an expression
+    constant: Expr,
     /// Comparison operator
     op: ComparisonOp,
     /// Then branch
@@ -364,12 +364,12 @@ impl IfConst {
     /// Create an IfConst with equality comparison (A == const)
     pub fn eq(
         value: impl Emittable + 'static,
-        const_label: &str,
+        constant: impl Into<Expr>,
         then_branch: impl Emittable + 'static,
     ) -> Self {
         Self {
             value: Box::new(value),
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::E,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -379,12 +379,12 @@ impl IfConst {
     /// Create an IfConst with not-equal comparison (A != const)
     pub fn ne(
         value: impl Emittable + 'static,
-        const_label: &str,
+        constant: impl Into<Expr>,
         then_branch: impl Emittable + 'static,
     ) -> Self {
         Self {
             value: Box::new(value),
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::NE,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -394,12 +394,12 @@ impl IfConst {
     /// Create an IfConst with less-than comparison (A < const)
     pub fn lt(
         value: impl Emittable + 'static,
-        const_label: &str,
+        constant: impl Into<Expr>,
         then_branch: impl Emittable + 'static,
     ) -> Self {
         Self {
             value: Box::new(value),
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::LT,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -409,12 +409,12 @@ impl IfConst {
     /// Create an IfConst with greater-or-equal comparison (A >= const)
     pub fn ge(
         value: impl Emittable + 'static,
-        const_label: &str,
+        constant: impl Into<Expr>,
         then_branch: impl Emittable + 'static,
     ) -> Self {
         Self {
             value: Box::new(value),
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::GE,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -424,12 +424,12 @@ impl IfConst {
     /// Create an IfConst with less-or-equal comparison (A <= const)
     pub fn le(
         value: impl Emittable + 'static,
-        const_label: &str,
+        constant: impl Into<Expr>,
         then_branch: impl Emittable + 'static,
     ) -> Self {
         Self {
             value: Box::new(value),
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::LE,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -439,12 +439,12 @@ impl IfConst {
     /// Create an IfConst with greater-than comparison (A > const)
     pub fn gt(
         value: impl Emittable + 'static,
-        const_label: &str,
+        constant: impl Into<Expr>,
         then_branch: impl Emittable + 'static,
     ) -> Self {
         Self {
             value: Box::new(value),
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::GT,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -553,7 +553,7 @@ impl Emittable for IfConst {
         asm.emit_all(self.value.emit(counter));
 
         // Step 2: Compare A with constant label
-        asm.cp(Operand::Label(self.const_label.clone()));
+        asm.cp(self.constant.clone());
 
         // Step 3: Handle conditional jumps based on operator type
         match self.op {
@@ -588,8 +588,8 @@ impl Emittable for IfConst {
 /// ]);
 /// ```
 pub struct IfA {
-    /// Constant label to compare against
-    const_label: String,
+    /// The constant to compare against: a `DEF` name, a number, an expression
+    constant: Expr,
     /// Comparison operator
     op: ComparisonOp,
     /// Then branch
@@ -600,9 +600,9 @@ pub struct IfA {
 
 impl IfA {
     /// Create an IfA with equality comparison (A == const)
-    pub fn eq(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+    pub fn eq(constant: impl Into<Expr>, then_branch: impl Emittable + 'static) -> Self {
         Self {
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::E,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -610,9 +610,9 @@ impl IfA {
     }
 
     /// Create an IfA with not-equal comparison (A != const)
-    pub fn ne(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+    pub fn ne(constant: impl Into<Expr>, then_branch: impl Emittable + 'static) -> Self {
         Self {
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::NE,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -620,9 +620,9 @@ impl IfA {
     }
 
     /// Create an IfA with less-than comparison (A < const)
-    pub fn lt(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+    pub fn lt(constant: impl Into<Expr>, then_branch: impl Emittable + 'static) -> Self {
         Self {
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::LT,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -630,9 +630,9 @@ impl IfA {
     }
 
     /// Create an IfA with greater-or-equal comparison (A >= const)
-    pub fn ge(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+    pub fn ge(constant: impl Into<Expr>, then_branch: impl Emittable + 'static) -> Self {
         Self {
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::GE,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -640,9 +640,9 @@ impl IfA {
     }
 
     /// Create an IfA with less-or-equal comparison (A <= const)
-    pub fn le(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+    pub fn le(constant: impl Into<Expr>, then_branch: impl Emittable + 'static) -> Self {
         Self {
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::LE,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -650,9 +650,9 @@ impl IfA {
     }
 
     /// Create an IfA with greater-than comparison (A > const)
-    pub fn gt(const_label: &str, then_branch: impl Emittable + 'static) -> Self {
+    pub fn gt(constant: impl Into<Expr>, then_branch: impl Emittable + 'static) -> Self {
         Self {
-            const_label: const_label.to_string(),
+            constant: constant.into(),
             op: ComparisonOp::GT,
             then_branch: Box::new(then_branch),
             else_branch: None,
@@ -757,7 +757,7 @@ impl Emittable for IfA {
         let then_label = format!(".then_{}", my_counter);
 
         // Compare A with constant label (A already loaded)
-        asm.cp(Operand::Label(self.const_label.clone()));
+        asm.cp(self.constant.clone());
 
         // Handle conditional jumps based on operator type
         match self.op {
@@ -966,12 +966,13 @@ impl Emittable for IfCall {
 mod tests {
     use super::*;
     use crate::gb_asm::test_cpu::TestCpu;
+    use crate::gb_asm::{Dst, Operand};
 
     #[test]
     fn test_emittable_vec() {
         let mut instrs = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(42),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(42),
         }];
 
         let mut counter = 0;
@@ -984,16 +985,16 @@ mod tests {
     #[test]
     fn test_simple_if_eq() {
         let left = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(10),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(10),
         }];
         let right = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(20),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(20),
         }];
         let then_body = vec![Instr::Ld {
-            dst: Operand::Reg(Register::C),
-            src: Operand::Imm(1),
+            dst: Dst::R8(R8::C),
+            src: Operand::from(1),
         }];
 
         let mut if_stmt = If::eq(left, right, then_body);
@@ -1007,20 +1008,20 @@ mod tests {
     #[test]
     fn test_if_with_else() {
         let left = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(10),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(10),
         }];
         let right = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(20),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(20),
         }];
         let then_body = vec![Instr::Ld {
-            dst: Operand::Reg(Register::C),
-            src: Operand::Imm(1),
+            dst: Dst::R8(R8::C),
+            src: Operand::from(1),
         }];
         let else_body = vec![Instr::Ld {
-            dst: Operand::Reg(Register::C),
-            src: Operand::Imm(0),
+            dst: Dst::R8(R8::C),
+            src: Operand::from(0),
         }];
 
         let mut if_stmt = If::eq(left, right, then_body).or_else(else_body);
@@ -1034,25 +1035,25 @@ mod tests {
     #[test]
     fn test_nested_if() {
         let outer_left = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(1),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(1),
         }];
         let outer_right = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(1),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(1),
         }];
 
         let inner_left = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(2),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(2),
         }];
         let inner_right = vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(2),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(2),
         }];
         let inner_body = vec![Instr::Ld {
-            dst: Operand::Reg(Register::D),
-            src: Operand::Imm(99),
+            dst: Dst::R8(R8::D),
+            src: Operand::from(99),
         }];
 
         let inner_if = If::lt(inner_left, inner_right, inner_body);
@@ -1070,16 +1071,16 @@ mod tests {
         let make_if = || {
             If::eq(
                 vec![Instr::Ld {
-                    dst: Operand::Reg(Register::A),
-                    src: Operand::Imm(1),
+                    dst: Dst::R8(R8::A),
+                    src: Operand::from(1),
                 }],
                 vec![Instr::Ld {
-                    dst: Operand::Reg(Register::A),
-                    src: Operand::Imm(1),
+                    dst: Dst::R8(R8::A),
+                    src: Operand::from(1),
                 }],
                 vec![Instr::Ld {
-                    dst: Operand::Reg(Register::A),
-                    src: Operand::Imm(0),
+                    dst: Dst::R8(R8::A),
+                    src: Operand::from(0),
                 }],
             )
         };
@@ -1108,15 +1109,15 @@ mod tests {
 
     fn load_a(value: u8) -> Vec<Instr> {
         vec![Instr::Ld {
-            dst: Operand::Reg(Register::A),
-            src: Operand::Imm(value),
+            dst: Dst::R8(R8::A),
+            src: Operand::from(value),
         }]
     }
 
     fn set_c(value: u8) -> Vec<Instr> {
         vec![Instr::Ld {
-            dst: Operand::Reg(Register::C),
-            src: Operand::Imm(value),
+            dst: Dst::R8(R8::C),
+            src: Operand::from(value),
         }]
     }
 

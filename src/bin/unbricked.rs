@@ -1,4 +1,4 @@
-use rust_boy::gb_asm::{Asm, Condition, Operand, Register};
+use rust_boy::gb_asm::{Asm, Condition, Expr, Mem, R8, R16};
 
 fn main() {
     let mut asm = Asm::new();
@@ -29,73 +29,73 @@ fn main() {
     asm.ld_addr_def_a("rLCDC");
 
     // Copy tiles data
-    asm.ld_de_label("Tiles");
-    asm.ld_hl_label("$9000");
-    asm.ld_bc_label("TilesEnd - Tiles");
+    asm.ld(R16::DE, "Tiles");
+    asm.ld(R16::HL, Expr::hex(0x9000));
+    asm.ld(R16::BC, Expr::sym("TilesEnd") - "Tiles");
     asm.call("Memcopy");
 
     // Copy the tilemap
-    asm.ld_de_label("Tilemap");
-    asm.ld_hl_label("$9800");
-    asm.ld_bc_label("TilemapEnd - Tilemap");
+    asm.ld(R16::DE, "Tilemap");
+    asm.ld(R16::HL, Expr::hex(0x9800));
+    asm.ld(R16::BC, Expr::sym("TilemapEnd") - "Tilemap");
     asm.call("Memcopy");
 
     // Copy the paddle tile
-    asm.ld_de_label("Paddle");
-    asm.ld_hl_label("$8000");
-    asm.ld_bc_label("PaddleEnd - Paddle");
+    asm.ld(R16::DE, "Paddle");
+    asm.ld(R16::HL, Expr::hex(0x8000));
+    asm.ld(R16::BC, Expr::sym("PaddleEnd") - "Paddle");
     asm.call("Memcopy");
 
     // Copy the ball tile
-    asm.ld_de_label("Ball");
-    asm.ld_hl_label("$8010");
-    asm.ld_bc_label("BallEnd - Ball");
+    asm.ld(R16::DE, "Ball");
+    asm.ld(R16::HL, Expr::hex(0x8010));
+    asm.ld(R16::BC, Expr::sym("BallEnd") - "Ball");
     asm.call("Memcopy");
 
     // Initialize OAM
     asm.ld_a(0);
     asm.ld_b(160);
-    asm.ld_hl_label("_OAMRAM");
+    asm.ld(R16::HL, "_OAMRAM");
 
     // Clear OAM loop
     asm.label("ClearOam");
-    asm.ld_hli_label("a");
-    asm.dec_label("b");
+    asm.ld(Mem::Hli, R8::A);
+    asm.dec(R8::B);
     asm.jp_cond(Condition::NZ, "ClearOam");
 
     // Draw object in OAM - paddle
-    asm.ld_hl_label("_OAMRAM");
+    asm.ld(R16::HL, "_OAMRAM");
     asm.ld_a(128 + 16);
-    asm.ld_hli_label("a");
+    asm.ld(Mem::Hli, R8::A);
     asm.ld_a(16 + 8);
-    asm.ld_hli_label("a");
+    asm.ld(Mem::Hli, R8::A);
     asm.ld_a(0);
-    asm.ld_hli_label("a");
-    asm.ld_hli_label("a");
+    asm.ld(Mem::Hli, R8::A);
+    asm.ld(Mem::Hli, R8::A);
 
     // Draw object in OAM - ball
     asm.ld_a(100 + 16);
-    asm.ld_hli_label("a");
+    asm.ld(Mem::Hli, R8::A);
     asm.ld_a(32 + 8);
-    asm.ld_hli_label("a");
+    asm.ld(Mem::Hli, R8::A);
     asm.ld_a(1);
-    asm.ld_hli_label("a");
+    asm.ld(Mem::Hli, R8::A);
     asm.ld_a(0);
-    asm.ld_hli_label("a");
+    asm.ld(Mem::Hli, R8::A);
 
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumX");
-    asm.ld_a_label("-1");
+    asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
 
     // Turn LCD On
-    asm.ld_a_label("LCDCF_ON | LCDCF_BGON | LCDCF_OBJON");
+    asm.ld(R8::A, Expr::sym("LCDCF_ON") | "LCDCF_BGON" | "LCDCF_OBJON");
     asm.ld_addr_def_a("rLCDC");
 
     // Initialize display registers
-    asm.ld_a_label("%11100100");
+    asm.ld(R8::A, Expr::bin(0b11100100));
     asm.ld_addr_def_a("rBGP");
-    asm.ld_a_label("%11100100");
+    asm.ld(R8::A, Expr::bin(0b11100100));
     asm.ld_addr_def_a("rOBP0");
 
     // Initialize global variables
@@ -119,29 +119,29 @@ fn main() {
 
     // Add the ball's momentum to its position in OAM
     asm.ld_a_addr_def("wBallMomentumX");
-    asm.ld_b_label("a");
-    asm.ld_a_addr_def("_OAMRAM +5");
-    asm.add_label("a", "b");
-    asm.ld_addr_def_a("_OAMRAM +5");
+    asm.ld(R8::B, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
+    asm.add(R8::B);
+    asm.ld_addr_def_a(Expr::sym("_OAMRAM") + 5);
 
     asm.ld_a_addr_def("wBallMomentumY");
-    asm.ld_b_label("a");
-    asm.ld_a_addr_def("_OAMRAM +4");
-    asm.add_label("a", "b");
-    asm.ld_addr_def_a("_OAMRAM +4");
+    asm.ld(R8::B, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 4);
+    asm.add(R8::B);
+    asm.ld_addr_def_a(Expr::sym("_OAMRAM") + 4);
 
     // BounceOnTop
     asm.label("BounceOnTop");
     asm.comment("Remember to offset the OAM position!");
     asm.comment("(8, 16) in OAM coordinates is (0, 0) on the screen.");
-    asm.ld_a_addr_def("_OAMRAM + 4");
-    asm.sub_label("a", "16 + 1");
-    asm.ld_c_label("a");
-    asm.ld_a_addr_def("_OAMRAM + 5");
-    asm.sub_label("a", "8");
-    asm.ld_b_label("a");
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 4);
+    asm.sub(Expr::num(16) + 1);
+    asm.ld(R8::C, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
+    asm.sub(8);
+    asm.ld(R8::B, R8::A);
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(Register::HL);
+    asm.ld(R8::A, R8::AtHl);
     asm.call("IsWallTile");
     asm.jp_cond(Condition::NZ, "BounceOnRight");
     asm.call("CheckAndHandleBrick");
@@ -150,29 +150,29 @@ fn main() {
 
     // BounceOnRight
     asm.label("BounceOnRight");
-    asm.ld_a_addr_def("_OAMRAM + 4");
-    asm.sub_label("a", "16");
-    asm.ld_c_label("a");
-    asm.ld_a_addr_def("_OAMRAM + 5");
-    asm.sub_label("a", "8 - 1");
-    asm.ld_b_label("a");
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 4);
+    asm.sub(16);
+    asm.ld(R8::C, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
+    asm.sub(Expr::num(8) - 1);
+    asm.ld(R8::B, R8::A);
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(Register::HL);
+    asm.ld(R8::A, R8::AtHl);
     asm.call("IsWallTile");
     asm.jp_cond(Condition::NZ, "BounceOnLeft");
-    asm.ld_a_label("-1");
+    asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumX");
 
     // BounceOnLeft
     asm.label("BounceOnLeft");
-    asm.ld_a_addr_def("_OAMRAM + 4");
-    asm.sub_label("a", "16");
-    asm.ld_c_label("a");
-    asm.ld_a_addr_def("_OAMRAM + 5");
-    asm.sub_label("a", "8 + 1");
-    asm.ld_b_label("a");
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 4);
+    asm.sub(16);
+    asm.ld(R8::C, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
+    asm.sub(Expr::num(8) + 1);
+    asm.ld(R8::B, R8::A);
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(Register::HL);
+    asm.ld(R8::A, R8::AtHl);
     asm.call("IsWallTile");
     asm.jp_cond(Condition::NZ, "BounceOnBottom");
     asm.ld_a(1);
@@ -180,40 +180,40 @@ fn main() {
 
     // BounceOnBottom
     asm.label("BounceOnBottom");
-    asm.ld_a_addr_def("_OAMRAM + 4");
-    asm.sub_label("a", "16 - 1");
-    asm.ld_c_label("a");
-    asm.ld_a_addr_def("_OAMRAM + 5");
-    asm.sub_label("a", "8");
-    asm.ld_b_label("a");
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 4);
+    asm.sub(Expr::num(16) - 1);
+    asm.ld(R8::C, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
+    asm.sub(8);
+    asm.ld(R8::B, R8::A);
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(Register::HL);
+    asm.ld(R8::A, R8::AtHl);
     asm.call("IsWallTile");
     asm.jp_cond(Condition::NZ, "BounceDone");
-    asm.ld_a_label("-1");
+    asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
 
     asm.label("BounceDone");
     asm.comment("First, check if the ball is low enough to bounce off the paddle.");
     asm.ld_a_addr_def("_OAMRAM");
-    asm.ld_b_label("a");
-    asm.ld_a_addr_def("_OAMRAM + 4");
-    asm.add_label("a", "5");
-    asm.cp_label("b");
+    asm.ld(R8::B, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 4);
+    asm.add(5);
+    asm.cp(R8::B);
     asm.jp_cond(Condition::NZ, "PaddleBounceDone");
 
     asm.comment("Now let's compare the X positions of the objects to see if they're touching.");
-    asm.ld_a_addr_def("_OAMRAM + 5");
-    asm.ld_b_label("a");
-    asm.ld_a_addr_def("_OAMRAM + 1");
-    asm.sub_label("a", "8");
-    asm.cp_label("b");
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
+    asm.ld(R8::B, R8::A);
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 1);
+    asm.sub(8);
+    asm.cp(R8::B);
     asm.jp_cond(Condition::NC, "PaddleBounceDone");
-    asm.add_label("a", "8 + 16");
-    asm.cp_label("b");
+    asm.add(Expr::num(8) + 16);
+    asm.cp(R8::B);
     asm.jp_cond(Condition::C, "PaddleBounceDone");
 
-    asm.ld_a_label("-1");
+    asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
 
     asm.label("PaddleBounceDone");
@@ -222,30 +222,30 @@ fn main() {
     // Check if the left button is pressed
     asm.label("CheckLeft");
     asm.ld_a_addr_def("wCurKeys");
-    asm.and_label("PADF_LEFT");
+    asm.and("PADF_LEFT");
     asm.jp_cond(Condition::Z, "CheckRight");
 
     asm.label("Left");
     asm.comment("move the paddle one pixel to the left");
-    asm.ld_a_addr_def("_OAMRAM+1");
-    asm.dec(Operand::Reg(Register::A));
-    asm.cp_label("15");
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 1);
+    asm.dec(R8::A);
+    asm.cp(15);
     asm.jp_cond(Condition::Z, "Main");
-    asm.ld_addr_def_a("_OAMRAM+1");
+    asm.ld_addr_def_a(Expr::sym("_OAMRAM") + 1);
     asm.jp("Main");
 
     asm.label("CheckRight");
     asm.ld_a_addr_def("wCurKeys");
-    asm.and_label("PADF_RIGHT");
+    asm.and("PADF_RIGHT");
     asm.jp_cond(Condition::Z, "Main");
 
     asm.label("Right");
     asm.comment("move the paddle one pixel to the right");
-    asm.ld_a_addr_def("_OAMRAM+1");
-    asm.inc(Operand::Reg(Register::A));
-    asm.cp_label("105");
+    asm.ld_a_addr_def(Expr::sym("_OAMRAM") + 1);
+    asm.inc(R8::A);
+    asm.cp(105);
     asm.jp_cond(Condition::Z, "Main");
-    asm.ld_addr_def_a("_OAMRAM+1");
+    asm.ld_addr_def_a(Expr::sym("_OAMRAM") + 1);
     asm.jp("Main");
 
     // Memcopy function
@@ -254,60 +254,48 @@ fn main() {
     asm.comment("@param hl: destination");
     asm.comment("@param bc: length");
     asm.label("Memcopy");
-    asm.ld_a_addr_reg(Register::DE);
-    asm.ld_hli_label("a");
-    asm.inc_label("de");
-    asm.dec_label("bc");
-    asm.ld_a_label("b");
-    asm.or_label("a", "c");
+    asm.ld(R8::A, Mem::De);
+    asm.ld(Mem::Hli, R8::A);
+    asm.inc(R16::DE);
+    asm.dec(R16::BC);
+    asm.ld(R8::A, R8::B);
+    asm.or(R8::C);
     asm.jp_cond(Condition::NZ, "Memcopy");
     asm.ret();
 
     // UpdateKeys function
     asm.label("UpdateKeys");
     asm.comment("poll half the controller");
-    asm.ld_a_label("P1F_GET_BTN");
+    asm.ld(R8::A, "P1F_GET_BTN");
     asm.call(".onenibble");
-    asm.ld_b_label("a");
+    asm.ld(R8::B, R8::A);
 
     asm.comment("poll the other half");
-    asm.ld_a_label("P1F_GET_DPAD");
+    asm.ld(R8::A, "P1F_GET_DPAD");
     asm.call(".onenibble");
-    asm.swap_label("a");
-    asm.xor_label("a", "b");
-    asm.ld_b_label("a");
+    asm.swap(R8::A);
+    asm.xor(R8::B);
+    asm.ld(R8::B, R8::A);
 
     asm.comment("And release the controller");
-    asm.ld_a_label("P1F_GET_NONE");
-    asm.ldh(
-        Operand::AddrDef("rP1".to_string()),
-        Operand::Reg(Register::A),
-    );
+    asm.ld(R8::A, "P1F_GET_NONE");
+    asm.ldh(Mem::addr("rP1"), R8::A);
 
     asm.comment("Combine with previous wCurKeys to make wNewKeys");
     asm.ld_a_addr_def("wCurKeys");
-    asm.xor_label("a", "b");
-    asm.and_label("b");
+    asm.xor(R8::B);
+    asm.and(R8::B);
     asm.ld_addr_def_a("wNewKeys");
-    asm.ld_a_label("b");
+    asm.ld(R8::A, R8::B);
     asm.ld_addr_def_a("wCurKeys");
     asm.ret();
 
     asm.label(".onenibble");
-    asm.ldh(
-        Operand::AddrDef("rP1".to_string()),
-        Operand::Reg(Register::A),
-    );
+    asm.ldh(Mem::addr("rP1"), R8::A);
     asm.call(".knowret");
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.or_label("a", "$F0");
+    asm.ldh(R8::A, Mem::addr("rP1"));
+    asm.ldh(R8::A, Mem::addr("rP1"));
+    asm.or(Expr::hex(0xF0));
     asm.ret();
 
     asm.label(".knowret");
@@ -317,22 +305,22 @@ fn main() {
     asm.comment("check if a brick was collided with and breaks if it is possible");
     asm.comment("@param hl: address of the tile");
     asm.label("CheckAndHandleBrick");
-    asm.ld_a_addr_reg(Register::HL);
-    asm.cp_label("BRICK_LEFT");
+    asm.ld(R8::A, R8::AtHl);
+    asm.cp("BRICK_LEFT");
     asm.jr_cond(Condition::NZ, "CheckAndHandleBrickRight");
     asm.comment("break from left side");
-    asm.raw("ld [hl], BLANK_TILE");
-    asm.inc_label("hl");
-    asm.raw("ld [hl], BLANK_TILE");
+    asm.ld(R8::AtHl, "BLANK_TILE");
+    asm.inc(R16::HL);
+    asm.ld(R8::AtHl, "BLANK_TILE");
     asm.call("IncreaseScorePackedBCD");
     asm.ret();
 
     asm.label("CheckAndHandleBrickRight");
-    asm.cp_label("BRICK_RIGHT");
+    asm.cp("BRICK_RIGHT");
     asm.ret_cond(Condition::NZ);
-    asm.raw("ld [hl], BLANK_TILE");
-    asm.dec_label("hl");
-    asm.raw("ld [hl], BLANK_TILE");
+    asm.ld(R8::AtHl, "BLANK_TILE");
+    asm.dec(R16::HL);
+    asm.ld(R8::AtHl, "BLANK_TILE");
     asm.call("IncreaseScorePackedBCD");
     asm.ret();
 
@@ -346,73 +334,73 @@ fn main() {
     asm.comment("First, we need to divide by 8 to convert a pixel position to a tile position.");
     asm.comment("After this we want to multiply the Y position by 32.");
     asm.comment("These operations effectively cancel out so we only need to mask the Y value.");
-    asm.ld_a_label("c");
-    asm.and_label("%11111000");
-    asm.ld_l_label("a");
+    asm.ld(R8::A, R8::C);
+    asm.and(Expr::bin(0b11111000));
+    asm.ld(R8::L, R8::A);
     asm.ld_h(0);
     asm.comment("Now we have the position * 8 in hl");
-    asm.add_label("hl", "hl");
-    asm.add_label("hl", "hl");
+    asm.add_hl(R16::HL);
+    asm.add_hl(R16::HL);
     asm.comment("Convert the X position to an offset.");
-    asm.ld_a_label("b");
-    asm.srl_label("a");
-    asm.srl_label("a");
-    asm.srl_label("a");
+    asm.ld(R8::A, R8::B);
+    asm.srl(R8::A);
+    asm.srl(R8::A);
+    asm.srl(R8::A);
     asm.comment("Add the two offsets together.");
-    asm.add_label("a", "l");
-    asm.ld_l_label("a");
-    asm.adc_label("h");
-    asm.sub_label("a", "l");
-    asm.ld_h_label("a");
+    asm.add(R8::L);
+    asm.ld(R8::L, R8::A);
+    asm.adc(R8::H);
+    asm.sub(R8::L);
+    asm.ld(R8::H, R8::A);
     asm.comment("Add the offset to the tilemap's base address, and we are done!");
-    asm.ld_bc_label("$9800");
-    asm.add_label("hl", "bc");
+    asm.ld(R16::BC, Expr::hex(0x9800));
+    asm.add_hl(R16::BC);
     asm.ret();
 
     // IsWallTile function
     asm.comment("@param a: tile ID");
     asm.comment("@return z: set if a is a wall.");
     asm.label("IsWallTile");
-    asm.cp_label("$00");
+    asm.cp(Expr::hex(0x00));
     asm.ret_cond(Condition::Z);
-    asm.cp_label("$01");
+    asm.cp(Expr::hex(0x01));
     asm.ret_cond(Condition::Z);
-    asm.cp_label("$02");
+    asm.cp(Expr::hex(0x02));
     asm.ret_cond(Condition::Z);
-    asm.cp_label("$04");
+    asm.cp(Expr::hex(0x04));
     asm.ret_cond(Condition::Z);
-    asm.cp_label("$05");
+    asm.cp(Expr::hex(0x05));
     asm.ret_cond(Condition::Z);
-    asm.cp_label("$06");
+    asm.cp(Expr::hex(0x06));
     asm.ret_cond(Condition::Z);
-    asm.cp_label("$07");
+    asm.cp(Expr::hex(0x07));
     asm.ret();
 
     // IncreaseScorePackedBCD function
     asm.comment("Increase score by 1 and store it as a 1 byte packed BCD number");
     asm.comment("changes A and HL");
     asm.label("IncreaseScorePackedBCD");
-    asm.xor_label("a", "a");
-    asm.inc_label("a");
-    asm.ld_hl_label("wScore");
-    asm.adc_label("[hl]");
+    asm.xor(R8::A);
+    asm.inc(R8::A);
+    asm.ld(R16::HL, "wScore");
+    asm.adc(R8::AtHl);
     asm.daa();
-    asm.ld_addr_label_a("[hl]");
+    asm.ld(R8::AtHl, R8::A);
     asm.call("UpdateScoreBoard");
     asm.ret();
 
     // UpdateScoreBoard function
     asm.label("UpdateScoreBoard");
-    asm.ld_a_label("[wScore]");
-    asm.and_label("%11110000");
-    asm.swap_label("a");
-    asm.add_label("a", "DIGIT_OFFSET");
-    asm.ld_addr_label_a("[SCORE_TENS]");
+    asm.ld_a_addr_def("wScore");
+    asm.and(Expr::bin(0b11110000));
+    asm.swap(R8::A);
+    asm.add("DIGIT_OFFSET");
+    asm.ld_addr_def_a("SCORE_TENS");
 
-    asm.ld_a_label("[wScore]");
-    asm.and_label("%00001111");
-    asm.add_label("a", "DIGIT_OFFSET");
-    asm.ld_addr_label_a("[SCORE_ONES]");
+    asm.ld_a_addr_def("wScore");
+    asm.and(Expr::bin(0b00001111));
+    asm.add("DIGIT_OFFSET");
+    asm.ld_addr_def_a("SCORE_ONES");
     asm.ret();
 
     // Tiles data

@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Asm, Instr, JumpTarget, Operand, Register};
+use super::{AluOperand, Asm, Dst, Instr, JumpTarget, Mem, Operand, R16};
 
 /// Every label problem in `asm`: a label defined twice, a local label outside any scope,
 /// or a `jp` / `jr` / `call` whose target is not defined (in its own scope, for a local
@@ -345,43 +345,32 @@ pub(crate) fn assert_code_labels_ok(code: &[Instr]) {
 }
 
 /// Size in bytes of `instr` once assembled; panics on what it does not know
+///
+/// It reads the typed operands, so a register is never taken for a value: `cp a, b` is 1
+/// byte, `cp a, n8` 2 (the string helpers put registers in expressions, which were
+/// counted as values).
 pub(crate) fn instr_size(instr: &Instr) -> usize {
-    use Operand::{Addr, AddrDef, AddrReg, AddrRegDec, AddrRegInc, Imm, Imm16, Label, Reg};
-    let wide = |reg: &Register| {
-        matches!(
-            reg,
-            Register::BC | Register::DE | Register::HL | Register::SP | Register::AF
-        )
-    };
-    // `op a, src`: register or [hl] 1 byte, immediate 2
-    let alu = |src: &Operand| match src {
-        Reg(_) | AddrReg(Register::HL) => 1,
-        Imm(_) | Label(_) => 2,
-        other => panic!("jr_range_errors: unknown size of an ALU operand {}", other),
-    };
     match instr {
         Instr::Label { .. } | Instr::Comment { .. } | Instr::Def { .. } => 0,
         Instr::Ld { dst, src } => match (dst, src) {
-            (Reg(r), Imm(_) | Imm16(_) | Label(_)) if wide(r) => 3,
-            (Reg(_), Reg(_)) => 1,
-            (Reg(_), Imm(_) | Label(_)) => 2,
-            (Reg(Register::A), Addr(_) | AddrDef(_))
-            | (Addr(_) | AddrDef(_), Reg(Register::A | Register::SP)) => 3,
-            (Reg(_), AddrReg(_) | AddrRegInc(_) | AddrRegDec(_))
-            | (AddrReg(_) | AddrRegInc(_) | AddrRegDec(_), Reg(_)) => 1,
-            (AddrReg(Register::HL), Imm(_) | Label(_)) => 2,
-            (dst, src) => panic!("jr_range_errors: unknown size of ld {}, {}", dst, src),
+            (Dst::R8(_), Operand::R8(_)) | (Dst::R16(R16::SP), Operand::R16(R16::HL)) => 1,
+            (Dst::R8(_), Operand::Imm(_)) => 2,
+            (Dst::R16(_), Operand::Imm(_)) => 3,
+            (Dst::Mem(Mem::Addr(_)), _) | (_, Operand::Mem(Mem::Addr(_))) => 3,
+            (Dst::Mem(_), Operand::R8(_)) | (Dst::R8(_), Operand::Mem(_)) => 1,
+            (dst, src) => panic!("instr_size: unknown size of ld {}, {}", dst, src),
         },
         // `ldh a, [c]` / `ldh [c], a` 1 byte, `ldh a, [n8]` / `ldh [n8], a` 2
         Instr::Ldh {
-            dst: AddrReg(Register::C),
+            dst: Dst::Mem(Mem::C),
             ..
         }
         | Instr::Ldh {
-            src: AddrReg(Register::C),
+            src: Operand::Mem(Mem::C),
             ..
         } => 1,
         Instr::Ldh { .. } => 2,
+        // `op a, src`: register or [hl] 1 byte, value 2
         Instr::Add { src }
         | Instr::Adc { src }
         | Instr::Sub { src }
@@ -389,7 +378,10 @@ pub(crate) fn instr_size(instr: &Instr) -> usize {
         | Instr::And { src }
         | Instr::Xor { src }
         | Instr::Or { src }
-        | Instr::Cp { src } => alu(src),
+        | Instr::Cp { src } => match src {
+            AluOperand::R8(_) => 1,
+            AluOperand::Imm(_) => 2,
+        },
         Instr::Inc { .. }
         | Instr::Dec { .. }
         | Instr::AddHl { .. }
@@ -483,7 +475,7 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::{Condition, R16};
+    use crate::gb_asm::{Condition, IncDec, R8};
 
     #[test]
     fn test_undefined_symbols() {
@@ -588,7 +580,7 @@ mod tests {
     /// before it when `gap` is negative
     fn jr_over(gap: isize) -> Vec<Instr> {
         let filler = || Instr::Inc {
-            operand: Operand::Reg(Register::A),
+            operand: IncDec::R8(R8::A),
         };
         let jr = Instr::Jr {
             target: JumpTarget::Label(".target".to_string()),
@@ -669,25 +661,18 @@ mod tests {
 
     #[test]
     fn test_instr_size_of_ldh_and_add() {
-        let a = || Operand::Reg(Register::A);
-        let c = || Operand::AddrReg(Register::C);
-        let ldh = |dst, src| Instr::Ldh { dst, src };
+        let ldh = |dst: Dst, src: Operand| Instr::Ldh { dst, src };
         // ldh a, [c] and ldh [c], a: 1 byte; ldh with an 8-bit address: 2
-        assert_eq!(instr_size(&ldh(a(), c())), 1);
-        assert_eq!(instr_size(&ldh(c(), a())), 1);
-        assert_eq!(
-            instr_size(&ldh(a(), Operand::AddrDef("rLY".to_string()))),
-            2
-        );
+        assert_eq!(instr_size(&ldh(R8::A.into(), Mem::C.into())), 1);
+        assert_eq!(instr_size(&ldh(Mem::C.into(), R8::A.into())), 1);
+        assert_eq!(instr_size(&ldh(R8::A.into(), Mem::addr("rLY").into())), 2);
         // add sp, e8: 2 bytes; add hl, r16: 1; add a, n8: 2
         // (every instruction family is checked against rgbasm in `gb_asm::isa_tests`)
         assert_eq!(instr_size(&Instr::AddSp { offset: 4 }), 2);
         assert_eq!(instr_size(&Instr::AddHl { src: R16::DE }), 1);
-        assert_eq!(
-            instr_size(&Instr::Add {
-                src: Operand::Imm(4)
-            }),
-            2
-        );
+        assert_eq!(instr_size(&Instr::Add { src: 4.into() }), 2);
+        // A register is 1 byte, also in `cp` (the string helper `cp_label("b")` made it
+        // an expression, counted as 2)
+        assert_eq!(instr_size(&Instr::Cp { src: R8::B.into() }), 1);
     }
 }

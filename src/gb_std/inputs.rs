@@ -1,4 +1,5 @@
-use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, R8, Register};
+use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Mem, R8};
+use crate::hw;
 
 /// Enum for joypad buttons that can return constant names and values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,67 +60,34 @@ pub fn update_keys() -> Vec<Instr> {
     let mut asm = Asm::new();
 
     asm.label("UpdateKeys");
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::Label("P1F_GET_BTN".to_string()),
-    );
+    asm.ld(R8::A, hw::P1F_GET_BTN);
     asm.call(".onenibble");
-    asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+    asm.ld(R8::B, R8::A);
 
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::Label("P1F_GET_DPAD".to_string()),
-    );
+    asm.ld(R8::A, hw::P1F_GET_DPAD);
     asm.call(".onenibble");
     asm.swap(R8::A);
-    asm.xor(Operand::Reg(Register::B));
-    asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+    asm.xor(R8::B);
+    asm.ld(R8::B, R8::A);
 
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::Label("P1F_GET_NONE".to_string()),
-    );
-    asm.ldh(
-        Operand::AddrDef("rP1".to_string()),
-        Operand::Reg(Register::A),
-    );
+    asm.ld(R8::A, hw::P1F_GET_NONE);
+    asm.ldh(Mem::addr(hw::P1), R8::A);
 
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("wCurKeys".to_string()),
-    );
-    asm.xor(Operand::Reg(Register::B));
-    asm.and(Operand::Reg(Register::B));
-    asm.ld(
-        Operand::AddrDef("wNewKeys".to_string()),
-        Operand::Reg(Register::A),
-    );
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.ld(
-        Operand::AddrDef("wCurKeys".to_string()),
-        Operand::Reg(Register::A),
-    );
+    asm.ld_a_addr_def("wCurKeys");
+    asm.xor(R8::B);
+    asm.and(R8::B);
+    asm.ld_addr_def_a("wNewKeys");
+    asm.ld(R8::A, R8::B);
+    asm.ld_addr_def_a("wCurKeys");
     asm.ret();
 
     asm.label(".onenibble");
-    asm.ldh(
-        Operand::AddrDef("rP1".to_string()),
-        Operand::Reg(Register::A),
-    );
+    asm.ldh(Mem::addr(hw::P1), R8::A);
     asm.call(".knowret");
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.ldh(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("rP1".to_string()),
-    );
-    asm.or(Operand::Imm(0xF0));
+    asm.ldh(R8::A, Mem::addr(hw::P1));
+    asm.ldh(R8::A, Mem::addr(hw::P1));
+    asm.ldh(R8::A, Mem::addr(hw::P1));
+    asm.or(0xF0);
 
     asm.label(".knowret");
     asm.ret();
@@ -143,11 +111,8 @@ pub fn check_key(
     let end = format!("{}_end", start);
     let mut asm = Asm::new();
     asm.label(&start);
-    asm.ld(
-        Operand::Reg(Register::A),
-        Operand::AddrDef("wCurKeys".to_string()),
-    );
-    asm.and(Operand::Label(button.name().to_string()));
+    asm.ld_a_addr_def("wCurKeys");
+    asm.and(button.name());
     asm.jp_cond(Condition::Z, &end);
     asm.emit_all(pressed_func);
     asm.label(&end);

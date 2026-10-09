@@ -1,4 +1,6 @@
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Expr, Instr, R8};
+use crate::gb_std::graphics::sprites::oam_address;
+use crate::hw;
 
 /// How an animation goes on after its last frame
 ///
@@ -53,8 +55,8 @@ impl Animation {
     }
 
     /// OAM address of the sprite's tile index: byte 2 of its entry (Y, X, tile, flags)
-    fn oam_tile_addr(&self) -> String {
-        format!("_OAMRAM+{}", self.oam_index * 4 + 2)
+    fn oam_tile_addr(&self) -> Expr {
+        oam_address(self.oam_index, hw::OAMA_TILEID)
     }
 
     /// Absolute tile indices of the first and last frames; frames are `frame_step` tiles
@@ -68,18 +70,18 @@ impl Animation {
     /// `a` = the next frame's tile
     fn step_forward(&self, asm: &mut Asm) {
         if self.frame_step == 1 {
-            asm.inc(Operand::Reg(Register::A));
+            asm.inc(R8::A);
         } else {
-            asm.add(Operand::Imm(self.frame_step));
+            asm.add(self.frame_step);
         }
     }
 
     /// `a` = the previous frame's tile
     fn step_backward(&self, asm: &mut Asm) {
         if self.frame_step == 1 {
-            asm.dec(Operand::Reg(Register::A));
+            asm.dec(R8::A);
         } else {
-            asm.sub(Operand::Imm(self.frame_step));
+            asm.sub(self.frame_step);
         }
     }
 
@@ -174,7 +176,7 @@ impl Animation {
         asm.jr_cond(Condition::NC, &reset); // past the last frame: start
         // Between the two ends: keep going in the same direction
         asm.ld_a_addr_def(direction_var);
-        asm.and(Operand::Reg(Register::A));
+        asm.and(R8::A);
         asm.jr_cond(Condition::NZ, &backward);
         asm.jr(&forward);
 

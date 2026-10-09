@@ -97,7 +97,7 @@ pub fn memcopy() -> Vec<Instr> {
 pub fn turn_off_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
     // Turn off LCD
-    asm.ld_a(0).ld_addr_def_a("rLCDC").get_main_instrs()
+    asm.ld_a(0).ld_addr_def_a(hw::LCDC).get_main_instrs()
 }
 
 pub fn turn_on_screen() -> Vec<Instr> {
@@ -110,7 +110,7 @@ pub fn turn_on_screen() -> Vec<Instr> {
 pub fn wait_vblank() -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label("WaitVBlank");
-    asm.ld_a_addr_def("rLY");
+    asm.ld_a_addr_def(hw::LY);
     asm.cp_imm(144);
     asm.jp_cond(Condition::C, "WaitVBlank");
     asm.ret();
@@ -119,7 +119,7 @@ pub fn wait_vblank() -> Vec<Instr> {
 pub fn wait_not_vblank() -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label("WaitNotVBlank");
-    asm.ld_a_addr_def("rLY");
+    asm.ld_a_addr_def(hw::LY);
     asm.cp_imm(144);
     asm.jp_cond(Condition::NC, "WaitNotVBlank");
     asm.ret();

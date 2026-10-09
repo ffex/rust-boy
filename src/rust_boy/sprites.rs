@@ -89,15 +89,31 @@ impl SpriteSize {
     }
 }
 
+/// The sprite tiles a sprite shows, as the tile manager placed them in VRAM
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SpriteTiles {
+    /// The tiles in the tile manager
+    pub id: TileId,
+    /// Tile index of the first one (its VRAM address is `$8000 + first * 16`)
+    pub first: u8,
+    /// How many tiles (1 to 256)
+    pub count: u16,
+}
+
 /// Internal sprite data
 #[derive(Debug, Clone)]
 pub(crate) struct SpriteData {
     pub name: String,
+    #[cfg_attr(not(test), allow(dead_code))] // the tests check it against tile_index
     pub tile_id: TileId,
     pub oam_index: u8,
     pub x: u8,
     pub y: u8,
+    /// Tile index of the sprite's first tile, from the tile manager (B18)
     pub tile_index: u8,
+    /// Number of tiles of the sprite (its frames are among them)
+    #[cfg_attr(not(test), allow(dead_code))] // read by the animation checks (B17)
+    pub tile_count: u16,
     pub flags: u8,
     pub animations: Vec<Animation>,
     pub initial_animation: u8, // Index of initially active animation, or ANIM_DISABLED
@@ -214,7 +230,6 @@ pub struct SpriteManager {
     next_id: usize,
     next_composite_id: usize,
     next_oam_index: u8,
-    next_tile_index: u8,
     size: SpriteSize,
     /// Numbers the local labels of the moves; shared with the rest of the program (B7)
     labels: LabelAllocator,
@@ -229,7 +244,6 @@ impl SpriteManager {
             next_id: 0,
             next_composite_id: 0,
             next_oam_index: 0,
-            next_tile_index: 0,
             size: SpriteSize::default(),
             labels,
         }
@@ -255,16 +269,27 @@ impl SpriteManager {
         self.size = size;
     }
 
-    /// Add a new sprite with tile data and initial position
-    /// Returns both the sprite ID and tile ID for reference
-    /// `tile_count` is the number of tiles this sprite uses (for proper tile index allocation)
+    /// Add a new sprite, shown with the sprite tiles `tiles` (already in the tile manager)
+    /// at its initial position; `RustBoy::add_sprite` is the public way, it adds the
+    /// tiles and the sprite together
+    ///
+    /// The tile index comes from where the tile manager put the tiles in VRAM: the tile
+    /// manager is the one source of the sprite tile indices (B18).
     ///
     /// # Panics
     /// - If `name` is not a valid RGBDS identifier, or another sprite has it: the name
     ///   becomes part of labels (the sprite's tiles, its animations).
-    /// - In 8x16 mode, if `tile_count` is odd: the bottom half of the last frame would be
-    ///   the next tile in VRAM, which is not this sprite's.
-    pub fn add(&mut self, name: &str, x: u8, y: u8, flags: u8, tile_count: u8) -> SpriteId {
+    /// - In 8x16 mode, if the sprite has an odd number of tiles (the bottom half of the
+    ///   last frame would be the next tile in VRAM, which is not this sprite's), or starts
+    ///   on an odd tile (the hardware ignores bit 0 of the index).
+    pub(crate) fn add(
+        &mut self,
+        name: &str,
+        tiles: SpriteTiles,
+        x: u8,
+        y: u8,
+        flags: u8,
+    ) -> SpriteId {
         check_name("sprite", name);
         if self.sprites.values().any(|sprite| sprite.name == name) {
             panic!(
@@ -273,35 +298,37 @@ impl SpriteManager {
                 name
             );
         }
-        if self.size == SpriteSize::Size8x16 && tile_count % 2 != 0 {
+        if self.size == SpriteSize::Size8x16 && tiles.count % 2 != 0 {
             panic!(
                 "sprite \"{}\" has {} tiles, but in 8x16 mode every sprite frame is two tiles \
                  (top and bottom), so the tile count must be even",
-                name, tile_count
+                name, tiles.count
             );
         }
-        // Tile indices start at 0 and every sprite takes whole frames, so in 8x16 mode
-        // each sprite starts on an even tile, as the hardware needs (it ignores bit 0)
-        let tile_index = self.next_tile_index;
+        if self.size == SpriteSize::Size8x16 && tiles.first % 2 != 0 {
+            panic!(
+                "sprite \"{}\" would start on tile {}, an odd one, but in 8x16 mode the \
+                 hardware ignores bit 0 of the tile index: the tiles added before it with \
+                 `tiles.add_sprite` must be an even number",
+                name, tiles.first
+            );
+        }
         let oam_index = self.next_oam_index;
-
-        // We'll use a placeholder TileId - the actual tile ID will be set by RustBoy
-        let tile_id = TileId(usize::MAX);
 
         let id = SpriteId(self.next_id);
         self.next_id += 1;
         self.next_oam_index += 1;
-        self.next_tile_index += tile_count;
 
         self.sprites.insert(
             id,
             SpriteData {
                 name: name.to_string(),
-                tile_id,
+                tile_id: tiles.id,
                 oam_index,
                 x,
                 y,
-                tile_index,
+                tile_index: tiles.first,
+                tile_count: tiles.count,
                 flags,
                 animations: Vec::new(),
                 initial_animation: ANIM_DISABLED, // No animation by default
@@ -311,13 +338,30 @@ impl SpriteManager {
         id
     }
 
-    /// Update the tile ID for a sprite (called internally by RustBoy)
-    pub(crate) fn set_tile_id(&mut self, sprite_id: SpriteId, tile_id: TileId) {
-        if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
-            sprite.tile_id = tile_id;
-        }
+    /// Add a sprite whose tiles follow those of the sprites already added (tests that
+    /// use a sprite manager without a tile manager)
+    #[cfg(test)]
+    pub(crate) fn add_for_test(
+        &mut self,
+        name: &str,
+        x: u8,
+        y: u8,
+        flags: u8,
+        tile_count: u8,
+    ) -> SpriteId {
+        let first = self
+            .sprites
+            .values()
+            .map(|sprite| u16::from(sprite.tile_index) + sprite.tile_count)
+            .max()
+            .unwrap_or(0);
+        let tiles = SpriteTiles {
+            id: TileId(usize::MAX),
+            first: u8::try_from(first).expect("too many tiles for a test"),
+            count: tile_count.into(),
+        };
+        self.add(name, tiles, x, y, flags)
     }
-
     /// Get sprite data (used by the tests)
     #[cfg(test)]
     pub(crate) fn get(&self, id: SpriteId) -> Option<&SpriteData> {
@@ -1032,9 +1076,9 @@ mod tests {
             ("down", SpriteManager::move_down_limit, 0, MoveDir::Increase),
         ];
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        sm.add("Paddle", 16, 128, 0, 1);
+        sm.add_for_test("Paddle", 16, 128, 0, 1);
         // OAM entry 1: Y at _OAMRAM+4, X at _OAMRAM+5
-        let ball = sm.add("Ball", 32, 100, 0, 1);
+        let ball = sm.add_for_test("Ball", 32, 100, 0, 1);
 
         for (name, method, byte, dir) in moves {
             let moved = format!("_OAMRAM+{}", 4 + byte);
@@ -1064,7 +1108,7 @@ mod tests {
         // B8: with a step of 2 from X 24 towards the limit 15, the sprite went
         // 22, 20, 18, 16, 14, ... and wrapped around through 0 / 255
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        let ball = sm.add("Ball", 16, 100, 0, 1); // X 24 in OAM
+        let ball = sm.add_for_test("Ball", 16, 100, 0, 1); // X 24 in OAM
         let left = sm.move_left_limit(ball, 2, 15);
         let mut cpu = cpu_with_oam(&sm);
         for frame in 0..300 {
@@ -1195,8 +1239,8 @@ mod tests {
     fn test_get_pivot_handles_every_offset() {
         // B22: out-of-range offsets were clamped to `sub 0`
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        sm.add("Paddle", 16, 128, 0, 1);
-        let ball = sm.add("Ball", 32, 100, 0, 1);
+        sm.add_for_test("Paddle", 16, 128, 0, 1);
+        let ball = sm.add_for_test("Ball", 32, 100, 0, 1);
         crate::gb_std::graphics::sprites::tests::check_pivot(
             |x, y| sm.get_pivot(ball, x, y),
             "_OAMRAM+4",
@@ -1208,7 +1252,7 @@ mod tests {
     #[should_panic(expected = "get_pivot: the offset -256 is out of range")]
     fn test_get_pivot_rejects_an_offset_past_the_map() {
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        let ball = sm.add("Ball", 32, 100, 0, 1);
+        let ball = sm.add_for_test("Ball", 32, 100, 0, 1);
         sm.get_pivot(ball, 0, -256);
     }
 
@@ -1416,7 +1460,7 @@ mod tests {
         // animation got index 255, so enabling it disabled the sprite, and the one after
         // wrapped to index 0
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        let coin = sm.add("Coin", 0, 0, 0, 1);
+        let coin = sm.add_for_test("Coin", 0, 0, 0, 1);
         for i in 0..255 {
             let index = sm.add_animation(coin, &format!("A{}", i), 0, 0, AnimationType::Loop);
             assert_eq!(index, i as u8);
@@ -1433,8 +1477,8 @@ mod tests {
     fn test_add_sprite() {
         let mut sm = SpriteManager::new(LabelAllocator::new());
 
-        let paddle = sm.add("Paddle", 16, 128, 0, 1);
-        let ball = sm.add("Ball", 32, 100, 0, 1);
+        let paddle = sm.add_for_test("Paddle", 16, 128, 0, 1);
+        let ball = sm.add_for_test("Ball", 32, 100, 0, 1);
 
         assert_eq!(sm.get(paddle).unwrap().x, 16);
         assert_eq!(sm.get(paddle).unwrap().y, 128);
@@ -1446,8 +1490,8 @@ mod tests {
     fn test_oam_indices() {
         let mut sm = SpriteManager::new(LabelAllocator::new());
 
-        let paddle = sm.add("Paddle", 16, 128, 0, 1);
-        let ball = sm.add("Ball", 32, 100, 0, 1);
+        let paddle = sm.add_for_test("Paddle", 16, 128, 0, 1);
+        let ball = sm.add_for_test("Ball", 32, 100, 0, 1);
 
         assert_eq!(sm.get(paddle).unwrap().oam_index, 0);
         assert_eq!(sm.get(ball).unwrap().oam_index, 1);
@@ -1514,8 +1558,8 @@ mod tests {
         let per_frame = size.tiles_per_sprite();
         let mut sm = SpriteManager::new(LabelAllocator::new());
         sm.set_size(size);
-        sm.add("Other", 0, 0, 0, per_frame);
-        let coin = sm.add("Coin", 16, 16, 0, 6 * per_frame);
+        sm.add_for_test("Other", 0, 0, 0, per_frame);
+        let coin = sm.add_for_test("Coin", 16, 16, 0, 6 * per_frame);
         let spin = sm.add_animation(coin, "Spin", start, end, anim_type);
         sm.set_initial_animation(coin, spin);
         (sm, coin)
@@ -1620,7 +1664,7 @@ mod tests {
     #[test]
     fn test_switching_between_ping_pong_animations() {
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        let coin = sm.add("Coin", 16, 16, 0, 6);
+        let coin = sm.add_for_test("Coin", 16, 16, 0, 6);
         let small = sm.add_animation(coin, "Small", 0, 2, AnimationType::PingPong);
         let big = sm.add_animation(coin, "Big", 3, 5, AnimationType::PingPong);
         sm.set_initial_animation(coin, small);
@@ -1643,7 +1687,7 @@ mod tests {
     #[test]
     fn test_once_after_another_animation_plays_again() {
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        let coin = sm.add("Coin", 16, 16, 0, 6);
+        let coin = sm.add_for_test("Coin", 16, 16, 0, 6);
         let jump = sm.add_animation(coin, "Jump", 0, 2, AnimationType::Once);
         let idle = sm.add_animation(coin, "Idle", 3, 4, AnimationType::Loop);
         sm.set_initial_animation(coin, jump);
@@ -1695,17 +1739,17 @@ mod tests {
     #[test]
     fn test_only_ping_pong_sprites_get_a_direction_variable() {
         let mut sm = SpriteManager::new(LabelAllocator::new());
-        let coin = sm.add("Coin", 0, 0, 0, 4);
+        let coin = sm.add_for_test("Coin", 0, 0, 0, 4);
         sm.add_animation(coin, "Spin", 0, 3, AnimationType::Loop);
         sm.add_animation(coin, "Fall", 0, 3, AnimationType::Once);
-        let gem = sm.add("Gem", 0, 0, 0, 4);
+        let gem = sm.add_for_test("Gem", 0, 0, 0, 4);
         sm.add_animation(gem, "Spin", 0, 3, AnimationType::Loop);
         sm.add_animation(gem, "Shine", 0, 3, AnimationType::PingPong);
         // A one-frame PingPong never reads the direction: no variable
-        let star = sm.add("Star", 0, 0, 0, 4);
+        let star = sm.add_for_test("Star", 0, 0, 0, 4);
         sm.add_animation(star, "Twinkle", 2, 2, AnimationType::PingPong);
         // ... unless the sprite also has a longer one
-        let moon = sm.add("Moon", 0, 0, 0, 4);
+        let moon = sm.add_for_test("Moon", 0, 0, 0, 4);
         sm.add_animation(moon, "Still", 1, 1, AnimationType::PingPong);
         sm.add_animation(moon, "Wax", 0, 1, AnimationType::PingPong);
         assert_eq!(

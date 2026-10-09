@@ -82,7 +82,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [x] `Var::set`/`get` ignore 16-bit variables — [B16](CONTEXT.md#b16) (branch `refactor-p1-api-safety`: `set` takes
       any value of the variable's type and writes both bytes of a 16-bit one; `get` loads a 16-bit one into `hl`)
 - [ ] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)
-- [ ] Sprite and tile counters can desync — [B18](CONTEXT.md#b18)
+- [x] Sprite and tile counters can desync — [B18](CONTEXT.md#b18) (branch `refactor-p1-api-safety`: a sprite's tile
+      index comes from where the tile manager put its tiles; `SpriteManager::add` is no longer public)
 - [ ] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19)
 - [x] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20) (branch `refactor-p1-api-safety`:
       every sprite / composite method panics on an unknown id, an unknown animation name or index, a sprite without

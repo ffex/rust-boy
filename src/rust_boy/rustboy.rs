@@ -6,7 +6,7 @@ use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_
 
 use super::functions::{BuiltinFunction, FunctionRegistry, defines};
 use super::inputs::InputManager;
-use super::sprites::{SpriteManager, SpriteSize, check_name};
+use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
 use super::tiles::TileManager;
 use super::variables::VariableManager;
 
@@ -627,10 +627,16 @@ impl RustBoy {
     /// Add a sprite with its tile in one call
     /// Returns the sprite ID for later reference
     ///
+    /// The tiles go to VRAM after the sprite tiles already added (also those added with
+    /// `tiles.add_sprite` alone), and the sprite's tile index is where they went: the
+    /// tile manager is the one source of both (B18). This is the only way to add a
+    /// sprite: `SpriteManager::add` is no longer public.
+    ///
     /// # Panics
     /// - If `name` is not a valid RGBDS identifier, or another sprite has it: the name
     ///   becomes part of labels.
-    /// - In 8x16 mode, if `tile_source` has an odd number of tiles.
+    /// - In 8x16 mode, if `tile_source` has an odd number of tiles, or the sprite would
+    ///   start on an odd tile (after an odd number of tiles added with `tiles.add_sprite`).
     pub fn add_sprite(
         &mut self,
         name: &str,
@@ -639,19 +645,14 @@ impl RustBoy {
         y: u8,
         flags: u8,
     ) -> super::sprites::SpriteId {
-        // Get tile count before moving tile_source
-        let tile_count = tile_source.tile_count() as u8;
-
-        // Add the tile to the tile manager
-        let tile_id = self.tiles.add_sprite(name, tile_source);
-
-        // Add the sprite to the sprite manager with tile count for proper index allocation
-        let sprite_id = self.sprites.add(name, x, y, flags, tile_count);
-
-        // Link the tile ID to the sprite
-        self.sprites.set_tile_id(sprite_id, tile_id);
-
-        sprite_id
+        let count = tile_source.tile_count();
+        let id = self.tiles.add_sprite(name, tile_source);
+        let tiles = SpriteTiles {
+            id,
+            first: self.tiles.sprite_tile_index(id),
+            count: u16::try_from(count).unwrap_or(u16::MAX),
+        };
+        self.sprites.add(name, tiles, x, y, flags)
     }
 
     /// Add a 16x16 composite sprite made of two 8x16 sprites side by side
@@ -1002,6 +1003,35 @@ mod tests {
         assert_eq!(tile_of(&gb, halves[0]), (8, 0x8080));
         assert_eq!(tile_of(&gb, halves[1]), (12, 0x80C0));
         assert_eq!(tile_of(&gb, d), (16, 0x8100));
+    }
+
+    #[test]
+    fn test_sprite_tiles_have_one_source() {
+        // B18: the sprite manager counted tile indices on its own and the tile manager
+        // VRAM addresses on its own: tiles added with `gb.tiles.add_sprite` moved the
+        // VRAM copy of the next sprite but not its OAM tile index, so it showed other tiles
+        let mut gb = RustBoy::new();
+        let paddle = gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
+        gb.tiles.add_sprite("Extra", tiles(3)); // tiles 1 to 3, for no sprite
+        let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
+        assert_eq!(tile_of(&gb, paddle), (0, 0x8000));
+        assert_eq!(tile_of(&gb, ball), (4, 0x8040));
+
+        // The start-up code writes that tile index to Ball's OAM entry (entry 1)
+        let cpu = run_startup(&mut gb);
+        assert_mem(&cpu, &oam(4 + 2), 4);
+        assert_links(&gb.build());
+    }
+
+    #[test]
+    #[should_panic(expected = "\"Player\" would start on tile 1, an odd one")]
+    fn test_8x16_sprite_after_an_odd_number_of_tiles_panics() {
+        // In 8x16 mode the hardware ignores bit 0 of the tile index: tiles added with
+        // `gb.tiles.add_sprite` must keep the next sprite on an even tile
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.tiles.add_sprite("Extra", tiles(1));
+        gb.add_sprite("Player", tiles(2), 80, 72, 0);
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::gb_asm::Instr;
 use crate::gb_std::graphics::utility::cp_in_memory;
+use crate::hw;
 
 /// Unique identifier for a tile or tileset
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -200,6 +201,26 @@ impl TileManager {
     /// Get the label name for a tile
     pub fn get_label(&self, id: TileId) -> Option<&str> {
         self.tiles.get(&id).map(|t| t.name.as_str())
+    }
+
+    /// The tile index of the first tile of the sprite tiles `id`, from their VRAM
+    /// address (`$8000 + index * 16`): the one source of sprite tile indices (B18)
+    ///
+    /// # Panics
+    /// If `id` is not sprite tiles of this manager.
+    pub(crate) fn sprite_tile_index(&self, id: TileId) -> u8 {
+        let tile = self
+            .tiles
+            .get(&id)
+            .filter(|tile| tile.is_sprite)
+            .unwrap_or_else(|| panic!("tiles {:?} are not sprite tiles of this program", id));
+        let index = (tile.vram_address - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE;
+        u8::try_from(index).unwrap_or_else(|_| {
+            panic!(
+                "sprite tiles \"{}\" start on tile {}, past the 256 sprite tiles",
+                tile.name, index
+            )
+        })
     }
 
     /// Generate tile data instructions for the Tiles chunk

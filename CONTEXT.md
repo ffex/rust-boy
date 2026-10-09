@@ -427,6 +427,15 @@ failed before: the high byte was not written, `hl` not loaded), `test_set_panics
 `TileManager.next_sprite_addr` (`src/rust_boy/tiles.rs:94`) are kept in sync only by `RustBoy::add_sprite`.
 Calling the public `gb.tiles.add_sprite` or `gb.sprites.add` directly (the `RustBoy` doc example does) → wrong
 tile indices. *Fix:* single source of truth.
+**Status: fixed** on `refactor-p1-api-safety`: the tile manager is the one source. `RustBoy::add_sprite` adds the tiles,
+then takes the sprite's tile index from their VRAM address (`TileManager::sprite_tile_index`: `($8000 + 16 n) → n`) and
+gives it to the sprite manager, which no longer counts tiles (`next_tile_index` is gone). So tiles added alone with
+`gb.tiles.add_sprite` (still public: tiles a program swaps in itself) just move the next sprite further, index and VRAM
+copy together. **Breaking:** `SpriteManager::add` is `pub(crate)` now (it takes the tiles); `RustBoy::add_sprite` is
+the way to add a sprite, as every example and the README already do. In 8x16 mode a sprite that would start on an odd tile
+(after an odd number of tiles added alone) panics, as an odd tile count already did ([B4](#b4)). Tests:
+`test_sprite_tiles_have_one_source` (failed before: tile index 1, VRAM `$8040`; it also runs the start-up code to check
+the OAM tile byte) and `test_8x16_sprite_after_an_odd_number_of_tiles_panics`. No example changes.
 
 #### B19
 **Every tilemap goes to `$9800`.** `add_tilemap` hardcodes `vram_address: 0x9800`

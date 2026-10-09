@@ -74,6 +74,7 @@ impl fmt::Display for Operand {
             Operand::AddrDef(const_name) => write!(f, "[{}]", const_name),
             Operand::AddrReg(reg) => write!(f, "[{}]", reg),
             Operand::AddrRegInc(reg) => write!(f, "[{}i]", reg),
+            Operand::AddrRegDec(reg) => write!(f, "[{}d]", reg),
             Operand::Label(label) => write!(f, "{}", label),
         }
     }
@@ -101,43 +102,93 @@ impl fmt::Display for Condition {
     }
 }
 
-// Display implementation for Instr
+/// `sp + offset` / `sp - offset`, as `ld hl, sp + e8` writes it
+fn sp_offset(offset: i8) -> String {
+    if offset < 0 {
+        format!("sp - {}", offset.unsigned_abs())
+    } else {
+        format!("sp + {}", offset)
+    }
+}
+
+// Display implementation for Instr: the RGBDS syntax of gbz80(7), the 8-bit ALU
+// instructions with their explicit `a` (`cp a, 5`). Panics on an instruction that
+// `Instr::check` rejects.
 impl fmt::Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Err(error) = self.check() {
+            panic!("invalid instruction: {}", error);
+        }
         match self {
             // Load instructions
             Instr::Ld { dst, src } => write!(f, "ld {}, {}", dst, src),
             Instr::Ldh { dst, src } => write!(f, "ldh {}, {}", dst, src),
+            Instr::LdHlSp { offset } => write!(f, "ld hl, {}", sp_offset(*offset)),
+            Instr::Push { pair } => write!(f, "push {}", pair),
+            Instr::Pop { pair } => write!(f, "pop {}", pair),
 
-            // Arithmetic instructions
-            Instr::Add { dst, src } => write!(f, "add {}, {}", dst, src),
-            Instr::AdcA { operand } => write!(f, "adc {}", operand),
-            Instr::Adc { dst, src } => write!(f, "adc {}, {}", dst, src),
-            Instr::Sub { dst, src } => write!(f, "sub {}, {}", dst, src),
+            // 8-bit arithmetic and logic
+            Instr::Add { src } => write!(f, "add a, {}", src),
+            Instr::Adc { src } => write!(f, "adc a, {}", src),
+            Instr::Sub { src } => write!(f, "sub a, {}", src),
+            Instr::Sbc { src } => write!(f, "sbc a, {}", src),
+            Instr::And { src } => write!(f, "and a, {}", src),
+            Instr::Xor { src } => write!(f, "xor a, {}", src),
+            Instr::Or { src } => write!(f, "or a, {}", src),
+            Instr::Cp { src } => write!(f, "cp a, {}", src),
             Instr::Inc { operand } => write!(f, "inc {}", operand),
             Instr::Dec { operand } => write!(f, "dec {}", operand),
 
-            // Logical instructions
-            Instr::And { operand } => write!(f, "and a, {}", operand),
-            Instr::Or { dst, src } => write!(f, "or {}, {}", dst, src),
-            Instr::Xor { dst, src } => write!(f, "xor {}, {}", dst, src),
-            Instr::Cp { operand } => write!(f, "cp {}", operand),
+            // 16-bit arithmetic
+            Instr::AddHl { src } => write!(f, "add hl, {}", src),
+            Instr::AddSp { offset } => write!(f, "add sp, {}", offset),
 
-            // Bit shift instructions
-            Instr::Srl { operand } => write!(f, "srl {}", operand),
+            // Rotates and shifts
+            Instr::Rlca => write!(f, "rlca"),
+            Instr::Rrca => write!(f, "rrca"),
+            Instr::Rla => write!(f, "rla"),
+            Instr::Rra => write!(f, "rra"),
+            Instr::Rlc { operand } => write!(f, "rlc {}", operand),
+            Instr::Rrc { operand } => write!(f, "rrc {}", operand),
+            Instr::Rl { operand } => write!(f, "rl {}", operand),
+            Instr::Rr { operand } => write!(f, "rr {}", operand),
+            Instr::Sla { operand } => write!(f, "sla {}", operand),
+            Instr::Sra { operand } => write!(f, "sra {}", operand),
             Instr::Swap { operand } => write!(f, "swap {}", operand),
+            Instr::Srl { operand } => write!(f, "srl {}", operand),
 
-            // Misc instructions
+            // Bit instructions
+            Instr::Bit { bit, operand } => write!(f, "bit {}, {}", bit, operand),
+            Instr::Set { bit, operand } => write!(f, "set {}, {}", bit, operand),
+            Instr::Res { bit, operand } => write!(f, "res {}, {}", bit, operand),
+
+            // Flags and accumulator
             Instr::Daa => write!(f, "daa"),
+            Instr::Cpl => write!(f, "cpl"),
+            Instr::Scf => write!(f, "scf"),
+            Instr::Ccf => write!(f, "ccf"),
+
+            // CPU control
+            Instr::Nop => write!(f, "nop"),
+            Instr::Halt => write!(f, "halt"),
+            Instr::Stop => write!(f, "stop"),
+            Instr::Di => write!(f, "di"),
+            Instr::Ei => write!(f, "ei"),
 
             // Jump instructions
             Instr::Jp { target } => write!(f, "jp {}", target),
             Instr::JpCond { condition, target } => write!(f, "jp {}, {}", condition, target),
+            Instr::JpHl => write!(f, "jp hl"),
             Instr::Jr { target } => write!(f, "jr {}", target),
             Instr::JrCond { condition, target } => write!(f, "jr {}, {}", condition, target),
             Instr::Call { target } => write!(f, "call {}", target),
+            Instr::CallCond { condition, target } => {
+                write!(f, "call {}, {}", condition, target)
+            }
             Instr::Ret => write!(f, "ret"),
             Instr::RetCond { condition } => write!(f, "ret {}", condition),
+            Instr::Reti => write!(f, "reti"),
+            Instr::Rst { vector } => write!(f, "rst ${:02x}", vector),
 
             // Assembler directives
             Instr::Ds {

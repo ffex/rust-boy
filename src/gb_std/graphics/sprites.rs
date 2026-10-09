@@ -63,26 +63,25 @@ pub(crate) fn move_coord_limit(
 
     // Work on the offset from the limit, A = coord - limit, so the limit is at 0 and
     // the carry flag of each step tells on which side of it the coordinate is
-    asm.ld_a_addr_def(coord)
-        .sub(Operand::Reg(Register::A), Operand::Imm(limit));
+    asm.ld_a_addr_def(coord).sub(Operand::Imm(limit));
     match dir {
         MoveDir::Decrease => {
             // Carry: coord < limit, already past the limit
             asm.jp_cond(Condition::C, &end)
                 // Carry: the step goes past the limit
-                .sub(Operand::Reg(Register::A), Operand::Imm(distance));
+                .sub(Operand::Imm(distance));
         }
         MoveDir::Increase => {
             // No carry: coord >= limit, on the limit or past it
             asm.jp_cond(Condition::NC, &end)
                 // A is coord - limit + 256 here; carry: the step reaches the limit or goes past it
-                .add(Operand::Reg(Register::A), Operand::Imm(distance));
+                .add(Operand::Imm(distance));
         }
     }
     asm.jp_cond(Condition::NC, &store)
         .ld_a(0) // stop exactly on the limit
         .label(&store)
-        .add(Operand::Reg(Register::A), Operand::Imm(limit))
+        .add(Operand::Imm(limit))
         .ld_addr_def_a(coord);
 
     // A holds the new coord; put each follower at its offset from it
@@ -90,12 +89,9 @@ pub(crate) fn move_coord_limit(
     for (follower, offset) in followers {
         let step = offset - a_offset;
         if step > 0 {
-            asm.add(Operand::Reg(Register::A), Operand::Imm(step as u8));
+            asm.add(Operand::Imm(step as u8));
         } else if step < 0 {
-            asm.sub(
-                Operand::Reg(Register::A),
-                Operand::Imm(step.unsigned_abs() as u8),
-            );
+            asm.sub(Operand::Imm(step.unsigned_abs() as u8));
         }
         asm.ld_addr_def_a(follower);
         a_offset = *offset;
@@ -133,16 +129,10 @@ pub(crate) fn pivot(oam_index: u8, x_offset: i16, y_offset: i16) -> Vec<Instr> {
     };
     let mut asm = Asm::new();
     asm.ld_a_addr_def(&hw::oam_address(oam_index, hw::OAMA_Y))
-        .sub(
-            Operand::Reg(Register::A),
-            Operand::Imm(sub(hw::OAM_Y_OFFSET, y_offset)),
-        )
+        .sub(Operand::Imm(sub(hw::OAM_Y_OFFSET, y_offset)))
         .ld(Operand::Reg(Register::C), Operand::Reg(Register::A))
         .ld_a_addr_def(&hw::oam_address(oam_index, hw::OAMA_X))
-        .sub(
-            Operand::Reg(Register::A),
-            Operand::Imm(sub(hw::OAM_X_OFFSET, x_offset)),
-        )
+        .sub(Operand::Imm(sub(hw::OAM_X_OFFSET, x_offset)))
         .ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
     asm.get_main_instrs()
 }
@@ -223,7 +213,7 @@ impl Sprite {
     pub fn move_left(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .sub(Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
         asm.get_main_instrs()
     }
@@ -232,7 +222,7 @@ impl Sprite {
     pub fn move_right(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .add(Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
         asm.get_main_instrs()
     }
@@ -241,7 +231,7 @@ impl Sprite {
     pub fn move_up(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
-            .sub(Operand::Reg(Register::A), Operand::Imm(distance))
+            .sub(Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
         asm.get_main_instrs()
     }
@@ -250,7 +240,7 @@ impl Sprite {
     pub fn move_down(&mut self, distance: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
-            .add(Operand::Reg(Register::A), Operand::Imm(distance))
+            .add(Operand::Imm(distance))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
         asm.get_main_instrs()
     }
@@ -328,7 +318,7 @@ impl Sprite {
         asm.ld_a_addr_def(var_name)
             .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
             .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .add(Operand::Reg(Register::A), Operand::Reg(Register::B))
+            .add(Operand::Reg(Register::B))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4 + 1));
 
         asm.get_main_instrs()
@@ -339,7 +329,7 @@ impl Sprite {
         asm.ld_a_addr_def(var_name)
             .ld(Operand::Reg(Register::B), Operand::Reg(Register::A))
             .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
-            .add(Operand::Reg(Register::A), Operand::Reg(Register::B))
+            .add(Operand::Reg(Register::B))
             .ld_addr_def_a(&format!("_OAMRAM+{}", self.id * 4));
 
         asm.get_main_instrs()

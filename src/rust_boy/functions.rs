@@ -440,7 +440,7 @@ fn generate_delay() -> Vec<Instr> {
     asm.comment("@param bc: delay counter (higher = longer delay)");
     asm.label("Delay");
     asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.or(Operand::Reg(Register::A), Operand::Reg(Register::C));
+    asm.or(Operand::Reg(Register::C));
     asm.dec(Operand::Reg(Register::BC));
     asm.jr_cond(Condition::NZ, "Delay");
     asm.ret();

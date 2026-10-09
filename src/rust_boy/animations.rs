@@ -70,7 +70,7 @@ impl Animation {
         if self.frame_step == 1 {
             asm.inc(Operand::Reg(Register::A));
         } else {
-            asm.add(Operand::Reg(Register::A), Operand::Imm(self.frame_step));
+            asm.add(Operand::Imm(self.frame_step));
         }
     }
 
@@ -79,7 +79,7 @@ impl Animation {
         if self.frame_step == 1 {
             asm.dec(Operand::Reg(Register::A));
         } else {
-            asm.sub(Operand::Reg(Register::A), Operand::Imm(self.frame_step));
+            asm.sub(Operand::Imm(self.frame_step));
         }
     }
 

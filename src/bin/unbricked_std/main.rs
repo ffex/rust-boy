@@ -2,7 +2,7 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, LabelAllocator, Operand, Register},
+    gb_asm::{Asm, LabelAllocator, Operand},
     gb_std::{
         flow::{Emittable, If},
         graphics::{
@@ -139,7 +139,7 @@ fn main() {
         let ball_y_plus_5 = {
             let mut a = Asm::new();
             a.emit_all(ball.get_y());
-            a.add(Operand::Reg(Register::A), Operand::Imm(5));
+            a.add(Operand::Imm(5));
             a.get_main_instrs()
         };
 
@@ -147,7 +147,7 @@ fn main() {
         let paddle_x_minus_8 = {
             let mut a = Asm::new();
             a.emit_all(paddle.get_x());
-            a.sub(Operand::Reg(Register::A), Operand::Imm(8));
+            a.sub(Operand::Imm(8));
             a.get_main_instrs()
         };
 
@@ -155,7 +155,7 @@ fn main() {
         let paddle_x_plus_16 = {
             let mut a = Asm::new();
             a.emit_all(paddle.get_x());
-            a.add(Operand::Reg(Register::A), Operand::Imm(16));
+            a.add(Operand::Imm(16));
             a.get_main_instrs()
         };
 

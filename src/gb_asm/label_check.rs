@@ -17,7 +17,7 @@
 //! assembles and links the program with rgbasm and rgblink.
 //!
 //! [`jr_range_errors`] also checks that each `jr` reaches its target, which rgbasm
-//! requires: it works on instructions, whose sizes it knows.
+//! requires: it works on instructions, whose sizes it knows ([`instr_size`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -277,13 +277,14 @@ pub(crate) fn assert_links_with(asm: &str, files: &[(&str, &str)]) {
         all
     );
     if std::env::var_os("RGBDS_LINK_CHECK").is_some() {
-        rgbds_link(asm, files);
+        rgbds_link(asm, files, &[]);
     }
 }
 
-/// Assemble and link `asm`, with `files` next to it, with RGBDS in a new temporary
-/// directory; panics with the RGBDS errors if it fails
-fn rgbds_link(asm: &str, files: &[(&str, &str)]) {
+/// Assemble `asm` (`rgbasm_flags` added), with `files` next to it, and link it, with
+/// RGBDS in a new temporary directory, and return the ROM; panics with the RGBDS errors
+/// if it fails
+fn rgbds_link(asm: &str, files: &[(&str, &str)], rgbasm_flags: &[&str]) -> Vec<u8> {
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -299,8 +300,10 @@ fn rgbds_link(asm: &str, files: &[(&str, &str)]) {
         std::fs::write(dir.join(name), text).expect("cannot write an included file");
     }
     let include = concat!(env!("CARGO_MANIFEST_DIR"), "/include");
+    let mut rgbasm = rgbasm_flags.to_vec();
+    rgbasm.extend(["-I", include, "-o", "main.o", "main.asm"]);
     let steps: [(&str, Vec<&str>); 2] = [
-        ("rgbasm", vec!["-I", include, "-o", "main.o", "main.asm"]),
+        ("rgbasm", rgbasm),
         ("rgblink", vec!["-o", "main.gb", "main.o"]),
     ];
     for (tool, args) in steps {
@@ -317,7 +320,9 @@ fn rgbds_link(asm: &str, files: &[(&str, &str)]) {
             asm
         );
     }
+    let rom = std::fs::read(dir.join("main.gb")).expect("cannot read main.gb");
     let _ = std::fs::remove_dir_all(&dir);
+    rom
 }
 
 /// [`assert_labels_ok`] for a piece of generated code, placed after a global label as
@@ -329,15 +334,15 @@ pub(crate) fn assert_code_labels_ok(code: &[Instr]) {
 }
 
 /// Size in bytes of `instr` once assembled; panics on what it does not know
-fn instr_size(instr: &Instr) -> usize {
-    use Operand::{Addr, AddrDef, AddrReg, AddrRegInc, Imm, Imm16, Label, Reg};
+pub(crate) fn instr_size(instr: &Instr) -> usize {
+    use Operand::{Addr, AddrDef, AddrReg, AddrRegDec, AddrRegInc, Imm, Imm16, Label, Reg};
     let wide = |reg: &Register| {
         matches!(
             reg,
             Register::BC | Register::DE | Register::HL | Register::SP | Register::AF
         )
     };
-    // `op a, src` and `op src` (and, cp): register or [hl] 1 byte, immediate 2
+    // `op a, src`: register or [hl] 1 byte, immediate 2
     let alu = |src: &Operand| match src {
         Reg(_) | AddrReg(Register::HL) => 1,
         Imm(_) | Label(_) => 2,
@@ -349,10 +354,10 @@ fn instr_size(instr: &Instr) -> usize {
             (Reg(r), Imm16(_) | Label(_)) if wide(r) => 3,
             (Reg(_), Reg(_)) => 1,
             (Reg(_), Imm(_) | Label(_)) => 2,
-            (Reg(Register::A), Addr(_) | AddrDef(_)) | (Addr(_) | AddrDef(_), Reg(Register::A)) => {
-                3
-            }
-            (Reg(_), AddrReg(_) | AddrRegInc(_)) | (AddrReg(_) | AddrRegInc(_), Reg(_)) => 1,
+            (Reg(Register::A), Addr(_) | AddrDef(_))
+            | (Addr(_) | AddrDef(_), Reg(Register::A | Register::SP)) => 3,
+            (Reg(_), AddrReg(_) | AddrRegInc(_) | AddrRegDec(_))
+            | (AddrReg(_) | AddrRegInc(_) | AddrRegDec(_), Reg(_)) => 1,
             (AddrReg(Register::HL), Imm(_) | Label(_)) => 2,
             (dst, src) => panic!("jr_range_errors: unknown size of ld {}, {}", dst, src),
         },
@@ -366,24 +371,52 @@ fn instr_size(instr: &Instr) -> usize {
             ..
         } => 1,
         Instr::Ldh { .. } => 2,
-        // `add sp, e8` 2 bytes, `add hl, r16` 1
-        Instr::Add {
-            dst: Reg(Register::SP),
-            ..
-        } => 2,
-        Instr::Add { dst: Reg(r), .. } if wide(r) => 1,
-        Instr::Add { src, .. }
-        | Instr::Adc { src, .. }
-        | Instr::Sub { src, .. }
-        | Instr::Or { src, .. }
-        | Instr::Xor { src, .. } => alu(src),
-        Instr::AdcA { operand } | Instr::And { operand } | Instr::Cp { operand } => alu(operand),
-        Instr::Inc { .. } | Instr::Dec { .. } | Instr::Daa | Instr::Ret | Instr::RetCond { .. } => {
-            1
-        }
-        Instr::Srl { .. } | Instr::Swap { .. } => 2,
+        Instr::Add { src }
+        | Instr::Adc { src }
+        | Instr::Sub { src }
+        | Instr::Sbc { src }
+        | Instr::And { src }
+        | Instr::Xor { src }
+        | Instr::Or { src }
+        | Instr::Cp { src } => alu(src),
+        Instr::Inc { .. }
+        | Instr::Dec { .. }
+        | Instr::AddHl { .. }
+        | Instr::Push { .. }
+        | Instr::Pop { .. }
+        | Instr::Rlca
+        | Instr::Rrca
+        | Instr::Rla
+        | Instr::Rra
+        | Instr::Daa
+        | Instr::Cpl
+        | Instr::Scf
+        | Instr::Ccf
+        | Instr::Nop
+        | Instr::Halt
+        | Instr::Di
+        | Instr::Ei
+        | Instr::JpHl
+        | Instr::Ret
+        | Instr::RetCond { .. }
+        | Instr::Reti
+        | Instr::Rst { .. } => 1,
+        // rgbasm follows `stop` with a $00 byte
+        Instr::Stop | Instr::AddSp { .. } | Instr::LdHlSp { .. } => 2,
+        // The `$CB`-prefixed instructions
+        Instr::Rlc { .. }
+        | Instr::Rrc { .. }
+        | Instr::Rl { .. }
+        | Instr::Rr { .. }
+        | Instr::Sla { .. }
+        | Instr::Sra { .. }
+        | Instr::Swap { .. }
+        | Instr::Srl { .. }
+        | Instr::Bit { .. }
+        | Instr::Set { .. }
+        | Instr::Res { .. } => 2,
         Instr::Jr { .. } | Instr::JrCond { .. } => 2,
-        Instr::Jp { .. } | Instr::JpCond { .. } | Instr::Call { .. } => 3,
+        Instr::Jp { .. } | Instr::JpCond { .. } | Instr::Call { .. } | Instr::CallCond { .. } => 3,
         other => panic!("jr_range_errors: unknown size of {}", other),
     }
 }
@@ -439,7 +472,7 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::Condition;
+    use crate::gb_asm::{Condition, R16};
 
     #[test]
     fn test_undefined_symbols() {
@@ -628,7 +661,6 @@ mod tests {
         let a = || Operand::Reg(Register::A);
         let c = || Operand::AddrReg(Register::C);
         let ldh = |dst, src| Instr::Ldh { dst, src };
-        let add = |dst, src| Instr::Add { dst, src };
         // ldh a, [c] and ldh [c], a: 1 byte; ldh with an 8-bit address: 2
         assert_eq!(instr_size(&ldh(a(), c())), 1);
         assert_eq!(instr_size(&ldh(c(), a())), 1);
@@ -637,14 +669,14 @@ mod tests {
             2
         );
         // add sp, e8: 2 bytes; add hl, r16: 1; add a, n8: 2
+        // (every instruction form is checked against rgbasm in `gb_asm::isa_tests`)
+        assert_eq!(instr_size(&Instr::AddSp { offset: 4 }), 2);
+        assert_eq!(instr_size(&Instr::AddHl { src: R16::DE }), 1);
         assert_eq!(
-            instr_size(&add(Operand::Reg(Register::SP), Operand::Imm(4))),
+            instr_size(&Instr::Add {
+                src: Operand::Imm(4)
+            }),
             2
         );
-        assert_eq!(
-            instr_size(&add(Operand::Reg(Register::HL), Operand::Reg(Register::DE))),
-            1
-        );
-        assert_eq!(instr_size(&add(a(), Operand::Imm(4))), 2);
     }
 }

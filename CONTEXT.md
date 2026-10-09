@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 183 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 186 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -90,7 +90,7 @@ rgbfix -v -p 0xFF main.gb
 - **Scratch-`Asm` idiom**: most `gb_std`/`rust_boy` helpers create a fresh `Asm`, emit into its default
   `Chunk::Main` and return `asm.get_main_instrs()`.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:467-646`, `build` prints what `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:496-680`, `build` prints what `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -341,7 +341,7 @@ writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init
 **Status: fixed** on `refactor-p1-init-order`. The start-up code now runs: LCD off → VRAM copies → OAM clear and
 initial sprites → default palettes → every variable set to its initial value (the animation variables
 `wFrameCounter`, `wAnim_{sprite}_Current` and `wAnim_{sprite}_Dir` are created first, so they are included) →
-**user `init()` code** (then the `raw()` code written to `Chunk::Init`, [B15](#b15)) → LCD on (`src/rust_boy/rustboy.rs:493-540`, put together at `:636-639`). So `gb.init(lives.set(3))`,
+**user `init()` code** (then the `raw()` code written to `Chunk::Init`, [B15](#b15)) → LCD on (`src/rust_boy/rustboy.rs:522-569`, put together at `:665-668`). So `gb.init(lives.set(3))`,
 `gb.init(gb.sprites.enable_animation(coin, 0))`, a `PingPong` direction or a palette set in `init()` survive.
 One difference from the fix above: **`rLCDC` stays after the user code**, because turning the LCD on ends
 the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
@@ -357,8 +357,8 @@ pair loaded with an address, and every register, pair and flag after a stub):
 
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
-animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:739-980`,
-`src/rust_boy/animations.rs:86-203`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:545-559`). OAM is only accessible in
+animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:769-1010`,
+`src/rust_boy/animations.rs:86-203`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:574-588`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -396,8 +396,9 @@ chunk the raw code wrote, each one right after the code it generates for that ch
 `Constants`, `Tiles`, `Tilemap` after theirs; `Init` at start-up after the `init()` code and before the LCD is turned on
 (so it runs, like `init()` code); `MainLoop` in the main loop after the `add_to_main_loop` code and before `jp Main` (it
 runs every frame); `Main` where it was, after `jp Main` (reached only through a label); `Functions` after the generated
-functions; `Data` after the variable sections (so inside the last `WRAM0` one, unless the raw code opens a `SECTION`,
-which it must do when the program has no variables). The raw `Functions` and `Data` code is scanned like the rest, so a
+functions; `Data` after the variable sections (so inside the last `WRAM0` one, unless the raw code opens a `SECTION`;
+in a program without variables, raw `Data` code that does not start with a `SECTION` gets `SECTION "Raw Data", WRAM0`,
+where it used to land in the ROM0 section of the code: `test_raw_data_always_lands_in_wram`). The raw `Functions` and `Data` code is scanned like the rest, so a
 builtin a raw routine calls is emitted (with its variables) and a name it defines is the program's ([B26](#b26)). The
 `raw()` doc example is now a compiled doctest: a labelled routine called from the main loop, and `MainLoop` code. No
 example changes (no example writes to another chunk). Tests: `test_raw_keeps_every_chunk` (each chunk, a second
@@ -521,11 +522,11 @@ clear message.
 `sprite()` / `composite()`, which panic with "unknown sprite id N" / "unknown composite sprite id N". The animation methods
 also panic, naming the sprite and listing what it has, on: an unknown name (`enable_animation_by_name`,
 `set_initial_animation_by_name`); an index the sprite does not have (`enable_animation`, `set_initial_animation`, which
-still takes `ANIM_DISABLED`); `enable_animation(.., ANIM_DISABLED)` (use `disable_animation`); `enable_animation` /
+still takes `ANIM_DISABLED`; so `set_initial_animation(id, 0)` must now come after `add_animation`, where it could come
+before it on `refactor`); `enable_animation(.., ANIM_DISABLED)` (use `disable_animation`); `enable_animation` /
 `disable_animation` on a sprite without animations, whose `wAnim_{sprite}_Current` does not exist (it was an undefined
 symbol at link time, see [Checked and refuted](#checked-and-refuted)); and a 256th animation on one sprite (indices are
-`u8` and 255 is `ANIM_DISABLED`: the 256th got index 255, which disables the sprite). `get_composite_sprites` keeps
-returning an `Option` (a query). `TileId` and `VarId` are only used by queries that return an `Option`
+`u8` and 255 is `ANIM_DISABLED`: the 256th got index 255, which disables the sprite). The one exception is `get_composite_sprites`, a query, which keeps returning an `Option` (`None` for an unknown id). `TileId` and `VarId` are only used by queries that return an `Option`
 (`get_address`, `get_label`, `get_type`), so nothing generates code from an unknown one. No example changes. Tests:
 `test_an_unknown_sprite_id_panics` (15 methods), `test_an_unknown_composite_id_panics` (8),
 `test_an_unknown_animation_name_panics`, `test_an_unknown_animation_index_panics`, `test_at_most_255_animations_per_sprite`;
@@ -591,7 +592,7 @@ the main loop, `raw()` code or the animation functions, then from those function
 order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
 nothing. To emit one that only code `build()` does not
 see calls (asm appended to its output, an `INCLUDE`d file), **`RustBoy::keep_function(name)`**
-(`src/rust_boy/rustboy.rs:295`; it takes a builtin name too, and panics on an unknown name, like `call`);
+(`src/rust_boy/rustboy.rs:324`; it takes a builtin name too, and panics on an unknown name, like `call`);
 `use_function(BuiltinFunction)` still forces a builtin. `used_user_functions` is gone. A function is found by
 its label, so `define_function(name, body)` panics if `body` does not define the label `name` (a body labelled
 otherwise used to be emitted anyway and could be called by its own label); another global label in a body (a
@@ -642,7 +643,7 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:592-626`): the global
+Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:621-655`): the global
 symbols of every other chunk and of the animation functions are looked up (`symbols`,
 `src/rust_boy/functions.rs:399`, reads the text of each instruction line by line as RGBDS does, with
 `gb_asm::labels::code_lines`: `;` and `/* … */` comments (also over several lines) and the contents of strings
@@ -657,11 +658,11 @@ the code `build()` generates is not taken for a builtin (for a user function it 
 before, each of these also emitted the builtin `Delay:`, which rgbasm rejected as defined twice. Names defined
 where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path depends on the assembler's
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
-**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:330`): a function of that name is never emitted,
+**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:359`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
 (`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
-and the Data chunk are emitted (`:628-643`), so `UpdateKeys` called without `add_inputs` links too. The scan is
+and the Data chunk are emitted (`:657-677`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
 global label of a body → its function, kept up to date as functions are defined) find a function, also for
 `call` and `keep_function`; each name is handled once (a 100-function, 5000-line program builds in about 6 ms in
@@ -687,7 +688,7 @@ Reachable through `cp_in_memory` (`src/gb_std/graphics/utility.rs:45`) or `gener
 (`src/rust_boy/tiles.rs:252`) with an empty tile set / empty `.2bpp`. *Fix:* skip empty blobs at generation
 time, or test `BC` before the first copy.
 **Status: fixed** on `refactor-p1-builtins` at generation time: `TileManager::generate_memcopy_calls`
-(`src/rust_boy/tiles.rs:402`) skips an empty blob of raw data (`from_raw` with no tiles, a tilemap with no rows).
+(`src/rust_boy/tiles.rs:407`) skips an empty blob of raw data (`from_raw` with no tiles, a tilemap with no rows).
 Its labels are still emitted, with nothing between them, so code that names them still links; with no copy left,
 `Memcopy` is not emitted at all (B26). A file blob (`INCBIN`) is always copied whole, as before: its size is only
 known once assembled, so `TileSource::from_file(path, 0)` now panics (a user error) instead of being taken for an
@@ -720,7 +721,7 @@ before LCD on. Tests: `test_oam_is_cleared_without_sprites`, `test_oam_is_cleare
 #### B29
 **Documentation errors in code and README.**
 - `src/gb_std/inputs.rs:54` says `wCurKeys` "0 = pressed"; after the `xor` it is 1 = pressed.
-- `RustBoy::call` doc example `gb.add_to_main_loop(gb.call("X"))` (`src/rust_boy/rustboy.rs:202, 206` at `4601a5c`; the corrected example is at `:419-425`) does
+- `RustBoy::call` doc example `gb.add_to_main_loop(gb.call("X"))` (`src/rust_boy/rustboy.rs:202, 206` at `4601a5c`; the corrected example is at `:448-454`) does
   not compile (E0499, two `&mut` borrows); hidden by ```` ```ignore ````.
 - README: "Type-safe … compile-time guarantees" (`:12`) is an overclaim; "Complete support for … instruction
   set" (`:19`) — `push/pop/halt/di/ei/reti/sbc/bit/set/res/rl/rr/sla/sra/cpl/nop/scf/ccf/rst` are missing;

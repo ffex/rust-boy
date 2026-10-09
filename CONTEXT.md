@@ -572,13 +572,19 @@ time, or test `BC` before the first copy.
 Its labels are still emitted, with nothing between them, so code that names them still links; with no copy left,
 `Memcopy` is not emitted at all (B26). A file blob (`INCBIN`) is always copied whole, as before: its size is only
 known once assembled, so `TileSource::from_file(path, 0)` now panics (a user error) instead of being taken for an
-empty blob, and so does adding a `TileSource::File(path, 0)` built directly (`add_sprite`, `add_background`). `Memcopy` itself is unchanged, so no ROM changes. Not covered: `gb_std`'s `cp_in_memory` only knows
-labels and cannot see an empty blob (its doc and `memcopy`'s now say the length must be at least 1), and an empty
-`.2bpp` file, or one shorter than the tile count given to `from_file`, is not checked ([B17](#b17)); testing `BC`
-in `Memcopy` would cover these, at 3 bytes and a few cycles per call. Tests: `test_empty_blobs_are_not_copied` runs
+empty blob, and so does adding a `TileSource::File(path, 0)` built directly (`add_sprite`, `add_background`). `Memcopy` itself is unchanged, so no ROM changes. Left open then (fixed since, below): `gb_std`'s `cp_in_memory` only knows labels and cannot see an empty blob, and an empty
+`.2bpp` file was not checked; testing `BC` in `Memcopy` covers these, at 3 bytes and a few cycles per call. Tests: `test_empty_blobs_are_not_copied` runs
 the start-up code with the real `Memcopy` on `gb_asm::test_cpu` (blob lengths from `TestCpu::consts16`): before, the
 first empty blob made it copy past its data; `test_a_tile_file_needs_tiles`,
 `test_a_tile_file_built_directly_needs_tiles`.
+**Then fixed in the routine too** on `refactor-p1-api-safety` (decided by the maintainer): `Memcopy`
+(`src/gb_std/graphics/utility.rs`, `memcopy`) starts with `ld a, b` / `or c` / `ret z`, so a length of 0 copies
+nothing, whoever calls it: `gb_std`'s `cp_in_memory` on an empty blob, an empty `.2bpp` file. The copy loop
+jumps back to a local `.copy` after the test. It costs 3 bytes once (in every example that copies tiles) and 4
+M-cycles per call. `RustBoy` still skips its empty raw blobs (no code for nothing). Still not checked: a `.2bpp` file
+shorter than the tile count given to `from_file` (its size is only known when assembled). Test
+`test_memcopy_with_length_0_copies_nothing` runs the routine on `gb_asm::test_cpu` with `bc` = 0 (before: it copied
+past the data) and with `bc` = 1 to 4.
 
 #### B28
 **OBP1 never initialised; OAM not cleared without sprites.** (Lines at `4601a5c`.) Only `rBGP` and `rOBP0` are written

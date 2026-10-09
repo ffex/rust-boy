@@ -277,10 +277,10 @@ impl TileManager {
     /// Generate the code that copies every blob to VRAM, in creation order
     ///
     /// An empty blob of raw data (`from_raw` with no tiles, a tilemap with no rows) is not
-    /// copied: `Memcopy` copies at least one byte, so a length of 0 would copy 64 KiB
-    /// (B27). Its labels are still emitted, with nothing between them. A file is always
-    /// copied, whole (`from_file` rejects a tile count of 0; how many bytes the file holds
-    /// is only known when it is assembled).
+    /// copied: there is nothing to copy, so no code is spent on it (`Memcopy` itself copies
+    /// nothing for a length of 0, B27). Its labels are still emitted, with nothing between
+    /// them. A file is always copied, whole (`from_file` rejects a tile count of 0; how
+    /// many bytes the file holds is only known when it is assembled).
     pub(crate) fn generate_memcopy_calls(&self) -> Vec<Instr> {
         self.tiles
             .values()

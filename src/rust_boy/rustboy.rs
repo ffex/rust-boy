@@ -2177,8 +2177,9 @@ mod tests {
 
     #[test]
     fn test_empty_blobs_are_not_copied() {
-        // B27: Memcopy copies at least one byte, so an empty blob made it copy 64 KiB
-        // over WRAM, the stack and the I/O registers
+        // B27: Memcopy used to copy at least one byte, so an empty blob made it copy
+        // 64 KiB over WRAM, the stack and the I/O registers; an empty blob gets no copy
+        // code at all (and Memcopy now copies nothing for a length of 0)
         let mut gb = RustBoy::new();
         gb.tiles
             .add_background("NoTiles", TileSource::from_raw(&[]));

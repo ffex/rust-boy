@@ -99,8 +99,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       (branch `refactor-p1-builtins`: `build()` emits every function the generated code refers to, once, with its
       variables; `RustBoy::external_symbol` declares a routine defined outside, e.g. in an `INCLUDE`d file)
 - [x] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
-      (branch `refactor-p1-builtins`: `RustBoy` skips empty raw blobs, `from_file(path, 0)` panics; `gb_std`'s
-      `cp_in_memory` documents a non-empty blob)
+      (branch `refactor-p1-builtins`: `RustBoy` skips empty raw blobs, `from_file(path, 0)` panics; branch
+      `refactor-p1-api-safety`, the maintainer's choice: `Memcopy` tests `bc` first, so a length of 0 copies nothing)
 - [x] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
       (branch `refactor-p1-init-order`: `rOBP1` = `%11100100` like `rBGP`/`rOBP0`; the OAM is always cleared)
 - [x] Code-level doc errors (`inputs.rs` pressed bit, `RustBoy::call` example E0499, unsigned `If` note) — [B29](CONTEXT.md#b29) (branch `refactor-p0-readme`)

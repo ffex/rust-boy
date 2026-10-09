@@ -45,9 +45,7 @@ pub fn add_tilemap(label: &str, tilemap: &[[u8; 32]]) -> Vec<Instr> {
 
 /// Copy the data between `label` and `{label}End` to `addr` with [`memcopy`]
 ///
-/// The data must not be empty: `Memcopy` copies at least one byte, so a length of 0
-/// copies 64 KiB over WRAM, the stack and the I/O registers. The length is only known
-/// once assembled, so it cannot be checked here; `RustBoy` skips its empty blobs.
+/// Empty data (`{label}End` right after `label`) copies nothing.
 pub fn cp_in_memory(label: &str, addr: &str) -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.ld_de_label(label)
@@ -59,24 +57,31 @@ pub fn cp_in_memory(label: &str, addr: &str) -> Vec<Instr> {
 
 /// The `Memcopy` routine: copy `bc` bytes from `de` to `hl`
 ///
-/// - In: `de` = source, `hl` = destination, `bc` = length, **at least 1**: it is a
-///   do-while loop, so a length of 0 copies 64 KiB.
+/// - In: `de` = source, `hl` = destination, `bc` = length; a length of 0 copies nothing.
 /// - Out: `de` and `hl` point after the copied bytes, `bc` = 0.
 /// - Changes: `a` and the flags.
+///
+/// The length is tested before the first byte (3 bytes of code): the copy loop alone
+/// copies at least one byte, so a length of 0 used to wrap to `$FFFF` and copy 64 KiB
+/// over WRAM, the stack and the I/O registers (B27).
 pub fn memcopy() -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.comment("Copy bytes from one area to another");
     asm.comment("@param de: source");
     asm.comment("@param hl: destination");
-    asm.comment("@param bc: length");
+    asm.comment("@param bc: length (0 copies nothing)");
     asm.label("Memcopy");
+    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
+    asm.or(Operand::Reg(Register::A), Operand::Reg(Register::C));
+    asm.ret_cond(Condition::Z);
+    asm.label(".copy");
     asm.ld_a_addr_reg(Register::DE);
     asm.ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A));
     asm.inc(Operand::Reg(Register::DE));
     asm.dec(Operand::Reg(Register::BC));
     asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
     asm.or(Operand::Reg(Register::A), Operand::Reg(Register::C));
-    asm.jp_cond(Condition::NZ, "Memcopy");
+    asm.jp_cond(Condition::NZ, ".copy");
     asm.ret();
     asm.get_main_instrs()
 }
@@ -190,7 +195,7 @@ pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::test_cpu::TestCpu;
+    use crate::gb_asm::test_cpu::{Event, TestCpu};
     use crate::gb_std::graphics::sprites::Sprite;
 
     /// The tile index the tests store at map address `addr`: different for neighbours
@@ -272,5 +277,50 @@ mod tests {
         assert_eq!(written, [Some(10), Some(11), Some(12)]);
         assert_eq!(cpu.mem.get("$C003"), None, "3 bytes only");
         assert_eq!((cpu.b, cpu.c), (0, 0));
+    }
+
+    /// Run `cp_in_memory("Data", "$C000")` then `Memcopy` with a blob of `len` bytes;
+    /// the source holds 4 bytes, `Data+0` to `Data+3`
+    fn run_memcopy(len: u16) -> TestCpu {
+        let mut asm = Asm::new();
+        asm.emit_all(cp_in_memory("Data", "$C000")).ret();
+        asm.emit_all(memcopy());
+        let mut cpu = TestCpu::default();
+        cpu.consts16.insert("DataEnd - Data".to_string(), len);
+        for i in 0..4 {
+            cpu.mem.insert(format!("Data+{}", i), 10 + i);
+        }
+        cpu.run(&asm.get_main_instrs());
+        cpu
+    }
+
+    #[test]
+    fn test_memcopy_with_length_0_copies_nothing() {
+        // B27: Memcopy was a do-while loop, so bc = 0 wrapped to $FFFF and copied
+        // 64 KiB over WRAM, the stack and the I/O registers
+        let cpu = run_memcopy(0);
+        let writes: Vec<_> = cpu
+            .trace
+            .iter()
+            .filter(|event| matches!(event, Event::Write(..)))
+            .collect();
+        assert!(writes.is_empty(), "nothing is written: {:?}", writes);
+        assert_eq!((cpu.b, cpu.c), (0, 0));
+
+        // And every length from 1 on copies exactly that many bytes
+        for len in 1..=4u16 {
+            let cpu = run_memcopy(len);
+            for i in 0..4u16 {
+                let want = (i < len).then_some(10 + i as u8);
+                assert_eq!(
+                    cpu.mem.get(&format!("${:04X}", 0xC000 + i)).copied(),
+                    want,
+                    "length {}, byte {}",
+                    len,
+                    i
+                );
+            }
+            assert_eq!((cpu.b, cpu.c), (0, 0), "length {}", len);
+        }
     }
 }

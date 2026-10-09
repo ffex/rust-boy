@@ -1,7 +1,10 @@
-//! Every instruction form, checked three ways: its RGBDS text, its size
-//! ([`instr_size`], which `jr_range_errors` uses) and, with `RGBDS_LINK_CHECK` set, the
-//! bytes rgbasm 1.0.4 assembles it to, compared with the SM83 opcode table
-//! (<https://gbdev.io/gb-opcodes/optables/>, gbz80(7)).
+//! Every instruction family, with all the operands of the regular families (8-bit loads,
+//! 8-bit ALU, `inc`/`dec`, 16-bit loads and arithmetic, the `$CB` instructions, `push`/
+//! `pop`, the conditional jumps, calls and returns, `rst`), checked three ways: its
+//! RGBDS text, its size ([`instr_size`], which `jr_range_errors` uses) and, with
+//! `RGBDS_LINK_CHECK` set, the bytes rgbasm 1.0.4 assembles it to, compared with the SM83
+//! opcode table (<https://gbdev.io/gb-opcodes/optables/>, gbz80(7)). Forms that take a
+//! symbol or an expression are sampled (`Operand::Label`, `Operand::AddrDef`).
 
 use super::label_check::{instr_size, rgbds_rom};
 use super::{Asm, Condition, Instr, JumpTarget, Operand, R8, R16, R16Stack, Register};
@@ -383,9 +386,182 @@ fn sweep() -> Vec<Case> {
     cases
 }
 
+/// `jr` and `jr cc` to `Target`, at $0000: the first instructions of the program, so the
+/// offset of each (from the end of the `jr`, 2 bytes after its address) is known
+fn relative_jumps() -> Vec<Case> {
+    let target = || JumpTarget::Label("Target".to_string());
+    let mut cases = vec![case(
+        Instr::Jr { target: target() },
+        "jr Target",
+        &[0x18, 0xFE],
+    )];
+    // jr cc: $20 + 8 × condition (nz, z, nc, c)
+    let conditions = [Condition::NZ, Condition::Z, Condition::NC, Condition::C];
+    for (index, condition) in (0u8..).zip(conditions) {
+        let offset = -(2 * (i16::from(index) + 2)); // at address 2 × (index + 1)
+        cases.push(case(
+            Instr::JrCond {
+                condition: condition.clone(),
+                target: target(),
+            },
+            &format!("jr {}, Target", condition),
+            &[0x20 + 8 * index, offset as u8],
+        ));
+    }
+    cases
+}
+
+/// The loads, `inc` / `dec` and the conditional `jp` / `ret`: every operand of the regular
+/// encodings, and each of the other forms
+fn loads_inc_dec_and_conditions() -> Vec<Case> {
+    let mut cases = Vec::new();
+    // ld r8, r8': $40 + 8 × destination + source ($76, `ld [hl], [hl]`, is `halt`)
+    for (dst_index, dst) in (0u8..).zip(R8::ALL) {
+        for (src_index, src) in (0u8..).zip(R8::ALL) {
+            if dst == R8::AtHl && src == R8::AtHl {
+                continue;
+            }
+            cases.push(case(
+                Instr::Ld {
+                    dst: Operand::from(dst),
+                    src: Operand::from(src),
+                },
+                &format!("ld {}, {}", dst, src),
+                &[0x40 + 8 * dst_index + src_index],
+            ));
+        }
+    }
+    // ld r8, n8: $06 + 8 × r8; inc r8: $04 + 8 × r8; dec r8: $05 + 8 × r8
+    for (index, r8) in (0u8..).zip(R8::ALL) {
+        cases.push(case(
+            Instr::Ld {
+                dst: Operand::from(r8),
+                src: Operand::Imm(0x42),
+            },
+            &format!("ld {}, 66", r8),
+            &[0x06 + 8 * index, 0x42],
+        ));
+        cases.push(case(
+            Instr::Inc {
+                operand: Operand::from(r8),
+            },
+            &format!("inc {}", r8),
+            &[0x04 + 8 * index],
+        ));
+        cases.push(case(
+            Instr::Dec {
+                operand: Operand::from(r8),
+            },
+            &format!("dec {}", r8),
+            &[0x05 + 8 * index],
+        ));
+    }
+    // ld r16, n16: $01 + $10 × r16; inc r16: $03 + $10 × r16; dec r16: $0B + $10 × r16
+    let pairs = [Register::BC, Register::DE, Register::HL, Register::SP];
+    for (index, pair) in (0u8..).zip(pairs) {
+        cases.push(case(
+            Instr::Ld {
+                dst: reg(pair.clone()),
+                src: Operand::Imm16(0x1234),
+            },
+            &format!("ld {}, 4660", pair),
+            &[0x01 + 0x10 * index, 0x34, 0x12],
+        ));
+        // An 8-bit value loaded into a pair is still a 16-bit operand: 3 bytes
+        cases.push(case(
+            Instr::Ld {
+                dst: reg(pair.clone()),
+                src: Operand::Imm(5),
+            },
+            &format!("ld {}, 5", pair),
+            &[0x01 + 0x10 * index, 0x05, 0x00],
+        ));
+        cases.push(case(
+            Instr::Inc {
+                operand: reg(pair.clone()),
+            },
+            &format!("inc {}", pair),
+            &[0x03 + 0x10 * index],
+        ));
+        cases.push(case(
+            Instr::Dec {
+                operand: reg(pair.clone()),
+            },
+            &format!("dec {}", pair),
+            &[0x0B + 0x10 * index],
+        ));
+    }
+    // ld through bc / de, with an address, sp
+    let ld = |dst, src, text: &str, bytes: &[u8]| case(Instr::Ld { dst, src }, text, bytes);
+    let a = || reg(Register::A);
+    let at = |r| Operand::AddrReg(r);
+    cases.extend([
+        ld(at(Register::BC), a(), "ld [bc], a", &[0x02]),
+        ld(at(Register::DE), a(), "ld [de], a", &[0x12]),
+        ld(a(), at(Register::BC), "ld a, [bc]", &[0x0A]),
+        ld(a(), at(Register::DE), "ld a, [de]", &[0x1A]),
+        ld(
+            a(),
+            Operand::Addr(0xC000),
+            "ld a, [$c000]",
+            &[0xFA, 0x00, 0xC0],
+        ),
+        ld(
+            Operand::Addr(0xC000),
+            a(),
+            "ld [$c000], a",
+            &[0xEA, 0x00, 0xC0],
+        ),
+        ld(
+            a(),
+            Operand::AddrDef("rLCDC".to_string()),
+            "ld a, [rLCDC]",
+            &[0xFA, 0x40, 0xFF],
+        ),
+        ld(
+            Operand::Addr(0xC000),
+            reg(Register::SP),
+            "ld [$c000], sp",
+            &[0x08, 0x00, 0xC0],
+        ),
+        ld(reg(Register::SP), reg(Register::HL), "ld sp, hl", &[0xF9]),
+        ld(
+            reg(Register::HL),
+            Operand::Label("Target".to_string()),
+            "ld hl, Target",
+            &[0x21, 0x00, 0x00],
+        ),
+    ]);
+    // jp cc: $C2 + 8 × condition; ret cc: $C0 + 8 × condition (nz, z, nc, c)
+    let conditions = [Condition::NZ, Condition::Z, Condition::NC, Condition::C];
+    for (index, condition) in (0u8..).zip(conditions) {
+        cases.push(case(
+            Instr::JpCond {
+                condition: condition.clone(),
+                target: JumpTarget::Addr(0x1234),
+            },
+            &format!("jp {}, $1234", condition),
+            &[0xC2 + 8 * index, 0x34, 0x12],
+        ));
+        cases.push(case(
+            Instr::RetCond {
+                condition: condition.clone(),
+            },
+            &format!("ret {}", condition),
+            &[0xC0 + 8 * index],
+        ));
+    }
+    cases
+}
+
 #[test]
 fn test_every_instruction_form() {
-    let cases: Vec<Case> = sample().into_iter().chain(sweep()).collect();
+    let cases: Vec<Case> = relative_jumps()
+        .into_iter()
+        .chain(sample())
+        .chain(sweep())
+        .chain(loads_inc_dec_and_conditions())
+        .collect();
     for case in &cases {
         assert_eq!(case.instr.to_string(), case.text, "{:?}", case.instr);
         assert_eq!(
@@ -434,7 +610,7 @@ fn panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
 #[test]
 fn test_invalid_operands_are_rejected() {
     type Emit = fn(&mut Asm);
-    let rejected: [(&str, Emit); 10] = [
+    let rejected: [(&str, Emit); 11] = [
         ("bit 8: the bit number must be 0 to 7", |asm| {
             asm.bit(8, R8::A);
         }),
@@ -447,21 +623,30 @@ fn test_invalid_operands_are_rejected() {
         ("rst $40: the vector must be one of", |asm| {
             asm.rst(0x40);
         }),
-        ("and a, Reg(HL): the source of an 8-bit ALU", |asm| {
+        ("and a, hl: the source of an 8-bit ALU", |asm| {
             asm.and(Operand::Reg(Register::HL));
         }),
-        ("cp a, AddrDef(\"wCount\"): the source", |asm| {
+        ("cp a, [wCount]: the source", |asm| {
             asm.cp(Operand::AddrDef("wCount".to_string()));
         }),
-        ("only hl can be incremented or decremented", |asm| {
-            asm.ld(Operand::AddrRegDec(Register::BC), Operand::Reg(Register::A));
-        }),
+        (
+            "ld [bcd], a: only hl can be incremented or decremented",
+            |asm| {
+                asm.ld(Operand::AddrRegDec(Register::BC), Operand::Reg(Register::A));
+            },
+        ),
         ("the destination of sub must be a", |asm| {
             asm.sub_label("hl", "bc");
         }),
-        ("the destination of add must be a or hl", |asm| {
+        ("the destination of add must be a, hl or sp", |asm| {
             asm.add_label("b", "c");
         }),
+        (
+            "the offset of add sp must be a number from -128 to 127",
+            |asm| {
+                asm.add_label("sp", "Offset");
+            },
+        ),
         ("\"bc\" is not an 8-bit register or [hl]", |asm| {
             asm.swap_label("bc");
         }),
@@ -508,6 +693,7 @@ fn test_invalid_operands_are_rejected() {
 fn test_text_helpers_build_the_typed_instructions() {
     let mut asm = Asm::new();
     asm.add_label("hl", "bc")
+        .add_label("sp", "-2")
         .add_label("A", "5")
         .sub_label("a", "8 + 1")
         .or_label("a", "c")
@@ -520,6 +706,7 @@ fn test_text_helpers_build_the_typed_instructions() {
         asm.get_main_instrs(),
         [
             Instr::AddHl { src: R16::BC },
+            Instr::AddSp { offset: -2 },
             Instr::Add { src: label("5") },
             Instr::Sub {
                 src: label("8 + 1")

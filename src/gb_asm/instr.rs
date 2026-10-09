@@ -270,7 +270,7 @@ impl Instr {
                 | Operand::Imm(_)
                 | Operand::Label(_) => Ok(()),
                 other => Err(format!(
-                    "{} a, {:?}: the source of an 8-bit ALU instruction must be an 8-bit \
+                    "{} a, {}: the source of an 8-bit ALU instruction must be an 8-bit \
                      register, [hl], or an 8-bit value",
                     self.mnemonic(),
                     other
@@ -294,9 +294,11 @@ impl Instr {
                     if let Operand::AddrRegInc(reg) | Operand::AddrRegDec(reg) = operand {
                         if *reg != Register::HL {
                             return Err(format!(
-                                "{:?}: only hl can be incremented or decremented in a load \
-                                 ([hli], [hld])",
-                                operand
+                                "{} {}, {}: only hl can be incremented or decremented in a \
+                                 load ([hli], [hld])",
+                                self.mnemonic(),
+                                dst,
+                                src
                             ));
                         }
                     }
@@ -321,6 +323,8 @@ impl Instr {
             Instr::Bit { .. } => "bit",
             Instr::Set { .. } => "set",
             Instr::Res { .. } => "res",
+            Instr::Ld { .. } => "ld",
+            Instr::Ldh { .. } => "ldh",
             _ => "instruction",
         }
     }

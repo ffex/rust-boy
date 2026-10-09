@@ -134,7 +134,7 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [x] Complete the ISA (needed by interrupts, DMA, 16-bit math, audio): `push`/`pop`, `halt`, `stop`,
       `nop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, `rl`/`rr`/`rlc`/`rrc`/`sla`/`sra` (+ `rla`…),
       `cpl`, `scf`/`ccf`, `ld [hl-]`, `ld hl, sp+e`, `jp hl`, `add sp, e` (branch `refactor-p2-isa`, plus `call cc`;
-      every form checked with rgbasm against the SM83 opcode table in `gb_asm::isa_tests`)
+      every family, with all the operands of the regular families, checked with rgbasm against the SM83 opcode table in `gb_asm::isa_tests`)
 - [ ] First-class sections (type, bank, `ALIGN`, `ds n` without fill for RAM); move `Chunk` and the game
       layout out of `gb_asm` into the engine
 - [ ] Label allocator owned by the asm layer; automatic `jr` → `jp` when out of range

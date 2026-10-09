@@ -253,20 +253,28 @@ impl Asm {
         self.emit(Instr::Add { src })
     }
 
-    /// `add a, src` or `add hl, src`, both as text: `add_label("a", "5")`,
-    /// `add_label("hl", "bc")`
+    /// `add a, src`, `add hl, src` or `add sp, src`, both as text: `add_label("a", "5")`,
+    /// `add_label("hl", "bc")`, `add_label("sp", "-2")`
     ///
     /// # Panics
-    /// Panics if `dst` is not `a` or `hl`, or for `hl` if `src` is not `bc`, `de`, `hl`
-    /// or `sp`.
+    /// Panics if `dst` is not `a`, `hl` or `sp`; for `hl` if `src` is not `bc`, `de`, `hl`
+    /// or `sp`; for `sp` if `src` is not a decimal number from -128 to 127 (an expression
+    /// is no longer accepted there).
     #[track_caller]
     pub fn add_label(&mut self, dst: &str, src: &str) -> &mut Self {
         match dst.trim().to_ascii_lowercase().as_str() {
             "a" => self.add(Operand::Label(src.to_string())),
             "hl" => self.add_hl(R16::from_name(src)),
+            "sp" => match src.trim().parse::<i8>() {
+                Ok(offset) => self.add_sp(offset),
+                Err(_) => panic!(
+                    "add_label(\"sp\", {:?}): the offset of add sp must be a number from \
+                     -128 to 127",
+                    src
+                ),
+            },
             _ => panic!(
-                "add_label({:?}, {:?}): the destination of add must be a or hl \
-                 (add_sp for sp)",
+                "add_label({:?}, {:?}): the destination of add must be a, hl or sp",
                 dst, src
             ),
         }

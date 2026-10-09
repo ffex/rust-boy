@@ -362,7 +362,7 @@ pub(crate) fn instr_size(instr: &Instr) -> usize {
     match instr {
         Instr::Label { .. } | Instr::Comment { .. } | Instr::Def { .. } => 0,
         Instr::Ld { dst, src } => match (dst, src) {
-            (Reg(r), Imm16(_) | Label(_)) if wide(r) => 3,
+            (Reg(r), Imm(_) | Imm16(_) | Label(_)) if wide(r) => 3,
             (Reg(_), Reg(_)) => 1,
             (Reg(_), Imm(_) | Label(_)) => 2,
             (Reg(Register::A), Addr(_) | AddrDef(_))
@@ -680,7 +680,7 @@ mod tests {
             2
         );
         // add sp, e8: 2 bytes; add hl, r16: 1; add a, n8: 2
-        // (every instruction form is checked against rgbasm in `gb_asm::isa_tests`)
+        // (every instruction family is checked against rgbasm in `gb_asm::isa_tests`)
         assert_eq!(instr_size(&Instr::AddSp { offset: 4 }), 2);
         assert_eq!(instr_size(&Instr::AddHl { src: R16::DE }), 1);
         assert_eq!(

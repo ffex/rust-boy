@@ -450,11 +450,13 @@ out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it change
 identical), and `TileManager` copies with `gb_std`'s `cp_in_memory`; only `Delay` is `rust_boy`'s own. `gb_std`'s
 Memcopy passes its registers typed instead of as strings (same text). Every caller follows the contract:
 `unbricked_std` drops its four `ld a, [hl]` after `call GetTileByPixel` (its only change: −4 bytes, +1 in the
-routine; the same game in an emulator, 3000 frames compared, see the PR). **Pending, the maintainer's choice:**
-`src/bin/unbricked.rs` still has its own copies of the routines, and its `GetTileByPixel` (`:345`) keeps the old
-contract (`hl` only, no `a`; its callers load `[hl]` themselves). It is the tutorial written instruction by
-instruction with `gb_asm` alone (README), a program of its own and not a layer, and it never links with the
-library's routines; switching it to `gb_std`'s routine would make it a `gb_std` example. Tests run the routine on `gb_asm::test_cpu`
+routine; the same game in an emulator, 3000 frames compared, see the PR). **Decided by the maintainer (no longer pending):**
+`src/bin/unbricked.rs` keeps its own copies of the routines (GetTileByPixel, Memcopy, UpdateKeys), and its
+`GetTileByPixel` (`:345`) keeps the old contract (`hl` only, no `a`; its callers load `[hl]` themselves). It is the
+tutorial written instruction by instruction with `gb_asm` alone (README), a program of its own and not a layer, and
+it never links with the library's routines; switching it to `gb_std`'s routine would make it a `gb_std` example. It
+is the one stated exception to "every routine exists once" (CLAUDE.md, Architecture rules); its `Memcopy` is still
+the do-while loop, which its four callers use with non-empty data (its own tiles and tilemap). Tests run the routine on `gb_asm::test_cpu`
 for 81 pixel positions (`test_get_tile_by_pixel_returns_the_address_and_the_tile`), the `gb_std` callers'
 `get_pivot` → `GetTileByPixel` → tile test, and the `unbricked_rustboy` brick handler, which tests `a`
 (`IfConst`, `IfA`) and blanks the brick through `hl` (`TileRef`); `test_builtins_are_the_gb_std_routines`

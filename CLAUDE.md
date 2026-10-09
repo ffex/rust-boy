@@ -52,6 +52,8 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   (`RustBoy` engine and managers). A layer depends only on the layers below it.
   Target design (Phase 2): `asm` / `hw` (pure data) / `std` / `engine` — see `CONTEXT.md` §3.
 - Every routine (Memcopy, WaitVBlank, UpdateKeys, …) exists **once**. Do not copy a routine into another layer.
+  The one exception, decided by the maintainer: `src/bin/unbricked.rs`, the tutorial written by hand with raw
+  `gb_asm`, keeps its own copies (GetTileByPixel, Memcopy, UpdateKeys); it never links with the library's routines.
 - Generated output must be **deterministic**: never let `HashMap`/`HashSet` iteration order reach the
   output; use `BTreeMap` or an ordered `Vec`. Sprites, tiles, variables and functions are emitted in the
   order they were created.

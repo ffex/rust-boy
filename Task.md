@@ -88,8 +88,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22)
 - [x] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
       (branch `refactor-p1-builtins`: one `GetTileByPixel` in the library, in `gb_std`: `hl` = tile address and
-      `a` = tile index; `rust_boy` emits the `gb_std` routines. Pending, the maintainer's choice: the raw-`gb_asm`
-      example `src/bin/unbricked.rs` keeps its own copies, and its `GetTileByPixel` keeps the old contract, `hl` only)
+      `a` = tile index; `rust_boy` emits the `gb_std` routines. Decided by the maintainer: the raw-`gb_asm`
+      tutorial `src/bin/unbricked.rs` keeps its own copies (GetTileByPixel, Memcopy, UpdateKeys), the one stated
+      exception to "every routine exists once" (CLAUDE.md); its `GetTileByPixel` keeps the old contract, `hl` only)
 - [x] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
       (branch `refactor-p1-builtins`: only used functions, transitively; `RustBoy::keep_function` forces one)
 - [x] Animation labels not namespaced by sprite; validate label names — [B25](CONTEXT.md#b25)

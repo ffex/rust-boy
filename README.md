@@ -132,7 +132,7 @@ RGBDS would reject panics when the section is built: a bank on a memory type wit
 `HRAM`) or out of its range, an address outside the memory type, an alignment no address of it has, `UNION` in ROM.
 A RAM section (every type but `ROM0` and `ROMX`) holds no code or data, it only reserves space: labels and `ds n`
 (`asm.ds("2")`; `ds_fill(n, fill)` fills ROM). Code or data in a RAM section, or a section name used twice (except by
-`UNION`s or `FRAGMENT`s of one memory type), panics when the program is printed.
+`UNION`s or `FRAGMENT`s of one memory type), panics where it is written (`Asm::emit`; in a `RustBoy` program, in `build()`).
 
 ```rust
 use rust_boy::gb_asm::{Asm, MemoryType, Section};

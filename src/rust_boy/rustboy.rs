@@ -1,5 +1,6 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
+use crate::gb_asm::labels::code_lines;
 use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator, is_identifier};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
@@ -15,6 +16,33 @@ use super::variables::VariableManager;
 /// shows shade i (0 lightest, 3 darkest), so both object palettes look like the
 /// background one until the program changes them
 const DEFAULT_PALETTE: u8 = 0b11100100;
+
+/// The `WRAM0` section `build()` opens for the `raw()` code of `Chunk::Data` when no
+/// variable section comes before it and it opens none itself
+const RAW_DATA_SECTION: &str = "Raw Data";
+
+/// Whether `code` starts with a `SECTION` (before any other code; comments are skipped)
+fn opens_section(code: &[Instr]) -> bool {
+    for instr in code {
+        match instr {
+            Instr::Comment { .. } => continue,
+            Instr::Section { .. } => return true,
+            Instr::Raw { line } => {
+                let lines = code_lines(line);
+                match lines.iter().map(|l| l.trim()).find(|l| !l.is_empty()) {
+                    Some(first) => {
+                        return first
+                            .get(..7)
+                            .is_some_and(|word| word.eq_ignore_ascii_case("SECTION"));
+                    }
+                    None => continue, // a comment only
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
 
 /// High-level Game Boy development API
 ///
@@ -219,8 +247,9 @@ impl RustBoy {
     /// - `Header`, `Constants`, `Tiles`, `Tilemap`: after the generated ones (`Header` is
     ///   inside the header section, after its padding).
     /// - `Data`: after the variable sections, so inside the last of them (a `WRAM0`
-    ///   section) unless the raw code opens its own `SECTION`: do it, a program without
-    ///   variables has no such section.
+    ///   section) unless the raw code opens its own `SECTION`. In a program without
+    ///   variables, raw `Data` code that does not start with a `SECTION` gets a `WRAM0`
+    ///   section of its own, `SECTION "Raw Data", WRAM0` (it would land in ROM).
     ///
     /// # Example
     /// ```
@@ -640,6 +669,11 @@ impl RustBoy {
 
         asm.chunk(Chunk::Data);
         asm.emit_all(self.vars.generate_sections());
+        if !raw_data.is_empty() && self.vars.is_empty() && !opens_section(&raw_data) {
+            // No variable section before it: the raw data would land in the ROM0 section
+            // of the code, so it gets a WRAM0 section of its own
+            asm.section(RAW_DATA_SECTION, "WRAM0");
+        }
         asm.emit_all(raw_data);
 
         asm
@@ -1922,6 +1956,56 @@ mod tests {
             out
         );
         assert_links(&out);
+    }
+
+    #[test]
+    fn test_raw_data_always_lands_in_wram() {
+        // Raw Data code without a SECTION, in a program without variables, used to land
+        // in the ROM0 section of the code (`wLonely: db` at $018F)
+        let data_text = |gb: &mut RustBoy| chunk_text(gb, Chunk::Data);
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).comment("my data");
+            asm.raw("wLonely: db");
+        });
+        let data = data_text(&mut gb);
+        assert!(
+            data.starts_with("SECTION \"Raw Data\", WRAM0\n"),
+            "a WRAM0 section first:\n{}",
+            data
+        );
+        assert_links(&gb.build());
+
+        // Raw data that opens its own section (typed or in a raw line) gets none
+        for open in [
+            |asm: &mut Asm| {
+                asm.section("Mine", "WRAM0");
+            },
+            |asm: &mut Asm| {
+                asm.raw("  ; mine\n  section \"Mine\", HRAM");
+            },
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(|asm| {
+                asm.chunk(Chunk::Data);
+                open(asm);
+                asm.raw("hByte: db");
+            });
+            let data = data_text(&mut gb);
+            assert!(!data.contains("Raw Data"), "{}", data);
+            assert_links(&gb.build());
+        }
+
+        // After the variables, the raw data goes in their last section, as documented
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wScore", 0);
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).raw("wMore: db");
+        });
+        let data = data_text(&mut gb);
+        assert!(!data.contains("Raw Data"), "{}", data);
+        assert!(data.contains("wScore: db\nwMore: db"), "{}", data);
+        assert_links(&gb.build());
     }
 
     #[test]

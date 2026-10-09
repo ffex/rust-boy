@@ -476,6 +476,16 @@ the OAM tile byte) and `test_8x16_sprite_after_an_odd_number_of_tiles_panics`. N
 #### B19
 **Every tilemap goes to `$9800`.** `add_tilemap` hardcodes `vram_address: 0x9800`
 (`src/rust_boy/tiles.rs:160`); with two tilemaps, the last one created wins (it was random before B13). No `$9C00`.
+**Status: fixed** on `refactor-p1-api-safety`. `TilemapArea::{Map9800, Map9C00}` (exported, addresses from `hw`) names
+the two maps; `TileManager::add_tilemap_at(name, area, rows)` puts a tilemap at either, and `add_tilemap` is
+`add_tilemap_at(.., Map9800)` as before. A second tilemap on the same map panics, naming both (each is copied to the
+start of its map, so one would replace the other), and so does a tilemap of more than 32 rows (it ran into the next map,
+or out of VRAM from `$9C00`). **`RustBoy::set_background_tilemap(area)`** chooses the map the background shows: `build()`
+adds `| LCDCF_BG9C00` to the LCD-on value for `Map9C00` (for `Map9800`, the default, the LCDC line is unchanged: the flag
+is 0). Not done: the window layer, which could show the other map (Phase 3), and `GetTileByPixel`, which still reads the
+`$9800` map (documented on `set_background_tilemap`). No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
+and `test_a_tilemap_has_at_most_32_rows` (both failed before: no panic), `test_a_tilemap_at_9c00` (the start-up code with
+the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCDC value; linked with RGBDS).
 
 #### B20
 **Silent failures.** Unknown `SpriteId`/`CompositeSpriteId` → empty `Vec` (move/get/enable methods in
@@ -746,7 +756,7 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** no shadow OAM/DMA, no scrolling, no window layer, no palette API/fades, no
-  metasprites beyond 16×16, no text/numbers, no `$9C00` map.
+  metasprites beyond 16×16, no text/numbers (a `$9C00` map exists since [B19](#b19), without a window layer).
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** polling instead of VBlank interrupt + `halt`; no interrupts/timers, scenes, RNG, collision,
   16-bit math, loops/switch.

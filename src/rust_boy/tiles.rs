@@ -100,7 +100,44 @@ pub(crate) struct TileData {
     pub source: TileSource,
     pub vram_address: u16,
     pub is_sprite: bool,  // Sprites go to $8000, background to $9000
-    pub is_tilemap: bool, // Tilemaps go to $9800
+    pub is_tilemap: bool, // Tilemaps go to $9800 or $9C00
+}
+
+/// One of the two background tilemaps in VRAM, 32 x 32 tiles each (B19)
+///
+/// The background shows one of them (LCDC bit 3, `RustBoy::set_background_tilemap`);
+/// the window layer, not supported yet, can show the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TilemapArea {
+    /// The map at `$9800` (`_SCRN0`), the one the background shows by default
+    #[default]
+    Map9800,
+    /// The map at `$9C00` (`_SCRN1`)
+    Map9C00,
+}
+
+impl TilemapArea {
+    /// The VRAM address of the map's first tile
+    pub fn address(self) -> u16 {
+        match self {
+            TilemapArea::Map9800 => hw::SCRN0,
+            TilemapArea::Map9C00 => hw::SCRN1,
+        }
+    }
+
+    /// The `hardware.inc` LCDC flag that makes the background show this map
+    pub(crate) fn lcdc_bg_flag(self) -> &'static str {
+        match self {
+            TilemapArea::Map9800 => hw::LCDCF_BG9800,
+            TilemapArea::Map9C00 => hw::LCDCF_BG9C00,
+        }
+    }
+}
+
+impl std::fmt::Display for TilemapArea {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", MemoryAllocator::format_address(self.address()))
+    }
 }
 
 /// Manages tiles with automatic VRAM allocation
@@ -180,12 +217,57 @@ impl TileManager {
         );
         id
     }
-    /// Add a tilemap (goes to $9800)
-    pub fn add_tilemap(&mut self, name: &str, tilemap: &[[u8; 32]]) -> TileId {
-        let id = TileId(self.next_id);
-        self.next_id += 1;
 
-        // Store tilemap data as raw bytes converted to hex
+    /// Add a tilemap at `$9800`, the map the background shows by default; see
+    /// [`TileManager::add_tilemap_at`]
+    ///
+    /// # Panics
+    /// If `$9800` already has a tilemap, or `tilemap` has more than 32 rows.
+    pub fn add_tilemap(&mut self, name: &str, tilemap: &[[u8; 32]]) -> TileId {
+        self.add_tilemap_at(name, TilemapArea::Map9800, tilemap)
+    }
+
+    /// Add a tilemap at `area`: `$9800` or `$9C00` (B19)
+    ///
+    /// The start-up code copies its rows to the start of that map, row `r` to
+    /// `area + 32 * r`. Which map the background shows is set with
+    /// `RustBoy::set_background_tilemap` (`$9800` by default).
+    ///
+    /// # Panics
+    /// - If `area` already has a tilemap: each one is copied to the start of the map, so
+    ///   the second would replace the first (before, every tilemap went to `$9800` and the
+    ///   last one created won).
+    /// - If `tilemap` has more than 32 rows: a map is 32 x 32 tiles, so a 33rd row would
+    ///   run into the next map, or out of VRAM.
+    pub fn add_tilemap_at(
+        &mut self,
+        name: &str,
+        area: TilemapArea,
+        tilemap: &[[u8; 32]],
+    ) -> TileId {
+        if tilemap.len() > hw::SCRN_ROWS {
+            panic!(
+                "tilemap \"{}\" has {} rows, but a map has {}: the rows past it would run \
+                 past {}",
+                name,
+                tilemap.len(),
+                hw::SCRN_ROWS,
+                area
+            );
+        }
+        if let Some(other) = self
+            .tiles
+            .values()
+            .find(|tile| tile.is_tilemap && tile.vram_address == area.address())
+        {
+            panic!(
+                "tilemap \"{}\": the map at {} already has the tilemap \"{}\", and both would be \
+                 copied there; put one of them at the other map with add_tilemap_at",
+                name, area, other.name
+            );
+        }
+
+        // Store tilemap data as raw bytes converted to hex, 8 rows per entry
         let converted: Vec<[String; 8]> = tilemap
             .chunks(8)
             .map(|chunk| {
@@ -199,18 +281,13 @@ impl TileManager {
             })
             .collect();
 
-        self.tiles.insert(
-            id,
-            TileData {
-                name: name.to_string(),
-                source: TileSource::Raw(converted),
-                vram_address: 0x9800,
-                is_sprite: false,
-                is_tilemap: true,
-            },
-        );
-
-        id
+        self.insert(
+            name,
+            TileSource::Raw(converted),
+            area.address(),
+            false,
+            true,
+        )
     }
 
     /// Get the VRAM address for a tile

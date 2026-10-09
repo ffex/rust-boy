@@ -8,7 +8,7 @@ use crate::hw;
 use super::functions::{BuiltinFunction, FunctionRegistry, defines};
 use super::inputs::InputManager;
 use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
-use super::tiles::TileManager;
+use super::tiles::{TileManager, TilemapArea};
 use super::variables::VariableManager;
 
 /// The palette `build()` writes to `rBGP`, `rOBP0` and `rOBP1` at start-up: colour i
@@ -68,6 +68,9 @@ pub struct RustBoy {
 
     /// Animation delay value in frames (higher = slower animations)
     animation_delay: u8,
+
+    /// The tilemap the background shows (LCDC bit 3)
+    background_tilemap: TilemapArea,
 }
 
 impl RustBoy {
@@ -86,6 +89,7 @@ impl RustBoy {
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
             animation_delay: 8, // Default: update animation every 8 frames
+            background_tilemap: TilemapArea::default(),
         }
     }
 
@@ -113,6 +117,22 @@ impl RustBoy {
     /// The size of every sprite (see [`RustBoy::set_sprite_size`])
     pub fn sprite_size(&self) -> SpriteSize {
         self.sprites.size()
+    }
+
+    /// Set the tilemap the background shows: [`TilemapArea::Map9800`] (the default, as
+    /// on the hardware) or [`TilemapArea::Map9C00`]; `build()` writes it to LCDC
+    /// (`LCDCF_BG9C00`) when it turns the LCD on (B19)
+    ///
+    /// Put a tilemap there with `tiles.add_tilemap_at`. `GetTileByPixel` (and so
+    /// `get_pivot` + `GetTileByPixel` collisions) reads the `$9800` map only.
+    pub fn set_background_tilemap(&mut self, area: TilemapArea) -> &mut Self {
+        self.background_tilemap = area;
+        self
+    }
+
+    /// The tilemap the background shows (see [`RustBoy::set_background_tilemap`])
+    pub fn background_tilemap(&self) -> TilemapArea {
+        self.background_tilemap
     }
 
     /// Define a constant value
@@ -468,11 +488,17 @@ impl RustBoy {
         let mut finish = Asm::new();
         finish.emit_all(self.init_code.clone());
 
-        // Turn on screen, with the sprite size chosen by set_sprite_size
-        finish.ld_a_label(&format!(
+        // Turn on screen, with the sprite size chosen by set_sprite_size, and the
+        // background map chosen by set_background_tilemap (`LCDCF_BG9800` is 0, so it is
+        // left out, as before B19)
+        let mut lcdc = format!(
             "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
             self.sprites.size().lcdc_flag()
-        ));
+        );
+        if self.background_tilemap != TilemapArea::Map9800 {
+            lcdc = format!("{} | {}", lcdc, self.background_tilemap.lcdc_bg_flag());
+        }
+        finish.ld_a_label(&lcdc);
         finish.ld_addr_def_a("rLCDC");
         let startup = startup.get_main_instrs();
         let finish = finish.get_main_instrs();
@@ -1128,6 +1154,76 @@ mod tests {
             message.contains("add_sprite_16x16(\"Player\")") && message.contains("at most 239"),
             "{}",
             message
+        );
+    }
+
+    // ==================== Tilemaps (B19) ====================
+
+    #[test]
+    fn test_a_second_tilemap_on_one_map_panics() {
+        // B19: every tilemap went to $9800, so the second one silently replaced the first
+        let mut gb = RustBoy::new();
+        gb.tiles.add_tilemap("Level", &[[1u8; 32]; 18]);
+        let message = panic_message(|| gb.tiles.add_tilemap("Window", &[[2u8; 32]; 18]));
+        assert!(
+            message.contains("tilemap \"Window\"")
+                && message.contains("$9800")
+                && message.contains("\"Level\""),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "tilemap \"Tall\" has 33 rows, but a map has 32")]
+    fn test_a_tilemap_has_at_most_32_rows() {
+        // B19: a 33rd row ran into the next map ($9C00), or out of VRAM from $9C00
+        RustBoy::new().tiles.add_tilemap("Tall", &[[0u8; 32]; 33]);
+    }
+
+    #[test]
+    fn test_a_tilemap_at_9c00() {
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
+        let level = gb.tiles.add_tilemap("Level", &[[1u8; 32]; 2]);
+        let hud = gb
+            .tiles
+            .add_tilemap_at("Hud", TilemapArea::Map9C00, &[[2u8; 32]; 2]);
+        assert_eq!(gb.tiles.get_address(level), Some(0x9800));
+        assert_eq!(gb.tiles.get_address(hud), Some(0x9C00));
+        // By default the background shows $9800: LCDC as before
+        let out = gb.build();
+        assert_links(&out);
+        assert_eq!(
+            lcdc_on(&out),
+            "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8"
+        );
+
+        // Memcopy runs for real: each map lands at its own address
+        let (code, mut cpu) = startup(&mut gb);
+        for (blob, size) in [("BgTiles", 16), ("Level", 64), ("Hud", 64)] {
+            cpu.consts16.insert(format!("{0}End - {0}", blob), size);
+        }
+        for i in 0..64 {
+            cpu.mem.insert(format!("BgTiles+{}", i % 16), 0);
+            cpu.mem.insert(format!("Level+{}", i), 1);
+            cpu.mem.insert(format!("Hud+{}", i), 2);
+        }
+        cpu.run(&code);
+        for i in 0..64 {
+            assert_eq!(cpu.mem[&format!("${:04X}", 0x9800 + i)], 1);
+            assert_eq!(cpu.mem[&format!("${:04X}", 0x9C00 + i)], 2);
+        }
+
+        // The background can show the $9C00 map instead
+        gb.set_background_tilemap(TilemapArea::Map9C00);
+        assert_eq!(gb.background_tilemap(), TilemapArea::Map9C00);
+        let out = gb.build();
+        assert_links(&out);
+        assert_eq!(
+            lcdc_on(&out),
+            "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8 | LCDCF_BG9C00"
         );
     }
 

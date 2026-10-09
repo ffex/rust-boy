@@ -87,7 +87,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       with its last frame)
 - [x] Sprite and tile counters can desync — [B18](CONTEXT.md#b18) (branch `refactor-p1-api-safety`: a sprite's tile
       index comes from where the tile manager put its tiles; `SpriteManager::add` is no longer public)
-- [ ] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19)
+- [x] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19) (branch `refactor-p1-api-safety`:
+      `tiles.add_tilemap_at(name, TilemapArea::Map9C00, rows)`, `RustBoy::set_background_tilemap`; a second tilemap on
+      one map, or more than 32 rows, panics)
 - [x] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20) (branch `refactor-p1-api-safety`:
       every sprite / composite method panics on an unknown id, an unknown animation name or index, a sprite without
       animations, or a 256th animation)
@@ -152,7 +154,7 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Shadow OAM in WRAM + OAM DMA routine in HRAM (fixes [B12](CONTEXT.md#b12))
 - [ ] VRAM write queue flushed during VBlank (tilemap edits, score)
 - [ ] Background scrolling (`SCX`/`SCY`), camera helpers
-- [ ] Window layer (`WX`/`WY`, `$9C00` map)
+- [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))

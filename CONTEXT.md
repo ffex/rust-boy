@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 147 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 147 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -467,7 +467,7 @@ constants (`TestCpu::consts16`).
 every `user_functions` body; `used_user_functions` (`:71`) is written but never read. Note: filtering on it
 today would break linking, because calls made through `Call`/`IfCall` are not tracked ([B26](#b26)) — fix B26 first.
 **Status: fixed** on `refactor-p1-builtins`, with B26: `FunctionRegistry::generate_used`
-(`src/rust_boy/functions.rs:275`) emits only the user functions the program refers to, from the start-up code,
+(`src/rust_boy/functions.rs:279`) emits only the user functions the program refers to, from the start-up code,
 the main loop, `raw()` code or the animation functions, then from those functions, and so on; in registration
 order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
 nothing. To emit one that only code `build()` does not
@@ -484,7 +484,8 @@ function used to be dropped silently, and `call Jump` reached the constant or th
 reported the name defined twice). A user function that defines a builtin's name, as its own name or as a second
 entry point (a routine bundle with an `UpdateKeys:` inside), always replaces the builtin, also when `use_function`
 forces the builtin; the builtin's variables are then not created. `keep_function` on a function `build()`
-generates (an animation) does nothing, since it is always emitted. No example changes (every example function is used, under its own name). Tests:
+generates (an animation) does nothing once a first `build()` has registered it, since it is always emitted (before
+that its name is unknown, as for `call`). No example changes (every example function is used, under its own name). Tests:
 `test_only_used_user_functions_are_emitted` (unused, an unused cycle, recursive, through another function, by
 address, by `jp`, from raw code, from a raw line after a comment and after a `;` in a string),
 `test_keep_function_emits_a_function_nothing_calls`, `test_keep_function_needs_a_function`,
@@ -524,7 +525,7 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
 Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:512-550`): the global
 symbols of every other chunk and of the animation functions are looked up (`symbols`,
-`src/rust_boy/functions.rs:395`, reads the text of each instruction line by line as RGBDS does, with
+`src/rust_boy/functions.rs:399`, reads the text of each instruction line by line as RGBDS does, with
 `gb_asm::labels::code_lines`: `;` and `/* … */` comments (also over several lines) and the contents of strings
 are skipped, a line ending with `\` continues on the next, a line starting with `Name:` defines `Name`; so
 `call`, `jp`, `ld hl, Name`, `dw Name`, `LOW(Name)` and raw lines of one or several lines count, and sections

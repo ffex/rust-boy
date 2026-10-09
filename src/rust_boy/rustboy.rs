@@ -2074,8 +2074,8 @@ mod tests {
 
     #[test]
     fn test_keep_function_accepts_a_generated_function() {
-        // An animation function is always emitted: keeping it does nothing, it is not an
-        // "unknown function"
+        // An animation function is always emitted: once a build has registered it, keeping it
+        // does nothing, it is not an "unknown function"
         let mut gb = RustBoy::new();
         let coin = gb.add_sprite("Coin", tiles(2), 80, 72, 0);
         gb.sprites

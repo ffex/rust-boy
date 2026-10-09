@@ -154,7 +154,8 @@ impl FunctionRegistry {
 
     /// Emit the function `name` (a user function, or else a builtin) even if no code
     /// calls it. Returns false if there is no such function. A function `build()`
-    /// generates (an animation) is always emitted: keeping it does nothing.
+    /// generates (an animation) is always emitted: once a first `build()` has registered
+    /// it, keeping it does nothing. Before that its name is unknown, as for `call`.
     pub fn keep_function(&mut self, name: &str) -> bool {
         if self.generated.contains(name) {
             return true;
@@ -359,15 +360,15 @@ impl FunctionRegistry {
             code: Vec::new(),
             variables: Vec::new(),
         };
+        // A builtin is only here when no user function defines its label (user names and
+        // labels are looked up first)
         for func in builtins {
-            if !user_labels.contains(func.label()) {
-                used.code.extend(func.generate());
-                used.variables.extend(
-                    func.variables()
-                        .iter()
-                        .filter(|name| !defined.contains(**name) && !user_labels.contains(**name)),
-                );
-            }
+            used.code.extend(func.generate());
+            used.variables.extend(
+                func.variables()
+                    .iter()
+                    .filter(|name| !defined.contains(**name) && !user_labels.contains(**name)),
+            );
         }
         for index in users {
             used.code

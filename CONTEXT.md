@@ -449,6 +449,15 @@ header. (`RustBoy` itself is correct: `src/gb_std/utility.rs:5-7`.)
 **`get_pivot` silently clamps.** `u8::try_from(16 + y_offset).unwrap_or(0)` (`src/rust_boy/sprites.rs:570, 576`;
 `src/gb_std/graphics/sprites.rs:208, 214`) turns out-of-range offsets into `sub 0`. *Fix:* wrapping arithmetic
 or an error.
+**Status: fixed** on `refactor-p1-api-safety`, with both: the two copies are now one, `gb_std::graphics::sprites::pivot`,
+which `Sprite::get_pivot` (`gb_std`) and `SpriteManager::get_pivot` (`rust_boy`) call. It computes `sub (16 + y_offset)`
+and `sub (8 + x_offset)` modulo 256, so `b` = screen x − `x_offset` and `c` = screen y − `y_offset` wrap around like the
+256-pixel background map (positive offsets go left / up, as before: `(0, 1)` is above, `(-1, 0)` is right; see
+[B30](#b30)). An offset out of -255..=255 panics (on a 256-pixel map 256 is 0, so it is a mistake). The examples' offsets
+(±1) give the same code. It takes the OAM addresses from the new `hw` module (`src/hw.rs`, pure data, the start of the
+Phase 2 one: `hw::oam_address`, `OAMA_Y`, `OAM_X_OFFSET`, …). Tests: `test_get_pivot_handles_every_offset` (in both layers,
+every offset from -255 to 255 on the test CPU; it failed before, from `get_pivot(-255, 0)`) and
+`test_get_pivot_rejects_an_offset_past_the_map`.
 
 #### B23
 **Duplicated routines have diverged.** (Lines at `4601a5c`.) `rust_boy`'s `GetTileByPixel` appends `ld a, [hl]`

@@ -86,7 +86,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19)
 - [ ] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20)
 - [x] `basic_usage` + README header without `ds $150 - @, 0` — [B21](CONTEXT.md#b21) (branch `refactor-p0-readme`)
-- [ ] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22)
+- [x] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22) (branch `refactor-p1-api-safety`: one
+      `gb_std` routine for both layers, wrapping arithmetic like the 256-pixel map; an offset beyond ±255 panics)
 - [x] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
       (branch `refactor-p1-builtins`: one `GetTileByPixel` in the library, in `gb_std`: `hl` = tile address and
       `a` = tile index; `rust_boy` emits the `gb_std` routines. Decided by the maintainer: the raw-`gb_asm`

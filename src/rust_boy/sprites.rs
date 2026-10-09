@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use super::tiles::TileId;
 use crate::{
     gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register, is_identifier},
-    gb_std::graphics::sprites::{MoveDir, move_coord_limit},
+    gb_std::graphics::sprites::{MoveDir, move_coord_limit, pivot},
     rust_boy::animations::Animation,
 };
 
@@ -738,29 +738,19 @@ impl SpriteManager {
         )
     }
 
-    /// Get sprite pivot point (for collision detection)
+    /// Get sprite pivot point (for collision detection): the sprite's pixel offset by
+    /// (`x_offset`, `y_offset`) into `b` (x) and `c` (y), as `GetTileByPixel` takes them
+    ///
+    /// A positive offset goes left / up: `(0, 1)` is the pixel above the sprite's
+    /// top-left one, `(-1, 0)` the one to its right. The result wraps around the 256-pixel
+    /// background map. Changes `a`, `b`, `c` and the flags.
+    ///
+    /// # Panics
+    /// If an offset is out of -255 to 255 (on a 256-pixel map, 256 is 0: a mistake).
     pub fn get_pivot(&self, id: SpriteId, x_offset: i16, y_offset: i16) -> Vec<Instr> {
-        if let Some(sprite) = self.sprites.get(&id) {
-            let mut asm = Asm::new();
-            let oam_y_offset = sprite.oam_index * 4;
-            let oam_x_offset = sprite.oam_index * 4 + 1;
-
-            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_y_offset));
-            asm.sub(
-                Operand::Reg(Register::A),
-                Operand::Imm(u8::try_from(16i16 + y_offset).unwrap_or(0)),
-            );
-            asm.ld(Operand::Reg(Register::C), Operand::Reg(Register::A));
-            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_x_offset));
-            asm.sub(
-                Operand::Reg(Register::A),
-                Operand::Imm(u8::try_from(8i16 + x_offset).unwrap_or(0)),
-            );
-            asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-
-            asm.get_main_instrs()
-        } else {
-            Vec::new()
+        match self.sprites.get(&id) {
+            Some(sprite) => pivot(sprite.oam_index, x_offset, y_offset),
+            None => Vec::new(),
         }
     }
 
@@ -1105,6 +1095,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_get_pivot_handles_every_offset() {
+        // B22: out-of-range offsets were clamped to `sub 0`
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        sm.add("Paddle", 16, 128, 0, 1);
+        let ball = sm.add("Ball", 32, 100, 0, 1);
+        crate::gb_std::graphics::sprites::tests::check_pivot(
+            |x, y| sm.get_pivot(ball, x, y),
+            "_OAMRAM+4",
+            "_OAMRAM+5",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "get_pivot: the offset -256 is out of range")]
+    fn test_get_pivot_rejects_an_offset_past_the_map() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let ball = sm.add("Ball", 32, 100, 0, 1);
+        sm.get_pivot(ball, 0, -256);
     }
 
     #[test]

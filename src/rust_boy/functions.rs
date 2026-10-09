@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::gb_asm::labels::{code_lines, split_def, split_label, symbol_words};
-use crate::gb_asm::{Asm, Condition, Instr, R8, R16};
+use crate::gb_asm::{Block, Condition, Instr, R8, R16};
 use crate::gb_std::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
 use crate::gb_std::inputs::update_keys;
 
@@ -434,7 +434,7 @@ fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
 // Function implementations
 
 fn generate_delay() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
 
     asm.comment("Delay loop using BC as counter");
     asm.comment("@param bc: delay counter (higher = longer delay)");
@@ -445,7 +445,7 @@ fn generate_delay() -> Vec<Instr> {
     asm.jr_cond(Condition::NZ, "Delay");
     asm.ret();
 
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 #[cfg(test)]
@@ -454,9 +454,9 @@ mod tests {
     use crate::gb_asm::Expr;
 
     fn function_body(label: &str) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.label(label).ret();
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// The labels of `instrs`, without the `ret`s
@@ -482,12 +482,12 @@ mod tests {
         registry.register_user_function("Echo", function_body("EchoV2"));
 
         // All of them called, in another order
-        let mut calls = Asm::new();
+        let mut calls = Block::new();
         for name in names.iter().rev() {
             calls.call(name);
         }
         assert_eq!(
-            labels(&registry.generate_used(&[&calls.get_main_instrs()], []).code),
+            labels(&registry.generate_used(&[&calls.into_instrs()], []).code),
             [
                 "Golf:", "Alpha:", "EchoV2:", "Hotel:", "Bravo:", "Foxtrot:", "Charlie:", "Delta:",
             ]
@@ -532,18 +532,18 @@ mod tests {
             ("Second", vec!["Second"]),
             ("First", vec!["Second", "Memcopy"]),
         ] {
-            let mut body = Asm::new();
+            let mut body = Block::new();
             body.label(name);
             for callee in calls {
                 body.call(callee);
             }
             body.ret();
-            registry.register_user_function(name, body.get_main_instrs());
+            registry.register_user_function(name, body.into_instrs());
         }
-        let mut main = Asm::new();
+        let mut main = Block::new();
         main.label("Main").call("First").jp("Main");
 
-        let used = registry.generate_used(&[&main.get_main_instrs()], []);
+        let used = registry.generate_used(&[&main.into_instrs()], []);
         let out = text(&used.code);
         // The global labels (Memcopy has a local `.copy:` too)
         let defined: Vec<&str> = out
@@ -555,19 +555,19 @@ mod tests {
 
         // UpdateKeys comes with its variables, however it is reached
         registry.register_user_function("Poll", {
-            let mut body = Asm::new();
+            let mut body = Block::new();
             body.label("Poll").call("UpdateKeys").ret();
-            body.get_main_instrs()
+            body.into_instrs()
         });
-        let mut main = Asm::new();
+        let mut main = Block::new();
         main.call("Poll");
-        let used = registry.generate_used(&[&main.get_main_instrs()], []);
+        let used = registry.generate_used(&[&main.into_instrs()], []);
         assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
     }
 
     #[test]
     fn test_symbols_of_an_instruction() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.label("Start")
             .label(".loop")
             .call("Func")
@@ -588,7 +588,7 @@ mod tests {
             .def("CONSTANT", "Fifth + 1");
         let mut refs = Vec::new();
         let mut defs = BTreeSet::new();
-        for instr in asm.get_main_instrs() {
+        for instr in asm.into_instrs() {
             symbols(&instr, &mut refs, &mut defs);
         }
         // Mnemonics and registers are words too (`call`, `hl`): they never name a function

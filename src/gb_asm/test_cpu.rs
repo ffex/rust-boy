@@ -990,11 +990,11 @@ impl TestCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::Asm;
+    use crate::gb_asm::Block;
 
     #[test]
     fn test_call_and_ret() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.call("Double")
             .call("Double")
             .ld(R8::B, R8::A)
@@ -1007,15 +1007,15 @@ mod tests {
             a: 3,
             ..TestCpu::default()
         };
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!((cpu.a, cpu.b), (12, 12));
     }
 
     #[test]
     fn test_conditional_ret_and_inc_dec() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.dec(R8::A).ret_cond(Condition::Z).inc(R8::B);
-        let code = asm.get_main_instrs();
+        let code = asm.to_vec();
         let mut cpu = TestCpu {
             a: 1,
             ..TestCpu::default()
@@ -1028,7 +1028,7 @@ mod tests {
 
     #[test]
     fn test_register_pairs_stubs_and_trace() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld(R16::HL, "_OAMRAM")
             .ld_a(7)
             .ld(Mem::Hli, R8::A)
@@ -1040,7 +1040,7 @@ mod tests {
             .call("Memcopy");
         let mut cpu = TestCpu::default();
         cpu.stubs.insert("Memcopy".to_string());
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!(cpu.b, 9, "read back through hl");
         assert_eq!(
             cpu.trace,
@@ -1056,14 +1056,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "HL used without an address loaded")]
     fn test_changing_half_of_a_pair_forgets_its_address() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld(R16::HL, "_OAMRAM").ld(R8::L, 4).ld(R8::AtHl, R8::A);
-        TestCpu::default().run(&asm.get_main_instrs());
+        TestCpu::default().run(&asm);
     }
 
     /// Whether running `code` on a fresh CPU with the stub `Memcopy` panics
-    fn panics(code: &Asm) -> bool {
-        let instrs = code.get_main_instrs();
+    fn panics(code: &Block) -> bool {
+        let instrs = code.to_vec();
         std::panic::catch_unwind(move || {
             let mut cpu = TestCpu::default();
             cpu.stubs.insert("Memcopy".to_string());
@@ -1073,9 +1073,9 @@ mod tests {
     }
 
     /// Code appended to a test program
-    type Snippet = fn(&mut Asm);
+    type Snippet = fn(&mut Block);
 
-    fn ld_pair(asm: &mut Asm, pair: R16, address: impl Into<Expr>) {
+    fn ld_pair(asm: &mut Block, pair: R16, address: impl Into<Expr>) {
         asm.ld(pair, address.into());
     }
 
@@ -1088,13 +1088,13 @@ mod tests {
         ];
         for (pair, high, low) in pairs {
             for half in [high, low] {
-                let mut asm = Asm::new();
+                let mut asm = Block::new();
                 ld_pair(&mut asm, pair, "_OAMRAM");
                 asm.ld(R8::A, half);
                 assert!(panics(&asm), "{:?} read after ld {:?}", half, pair);
 
                 // Set again, the half is known (and the pair no longer holds an address)
-                let mut asm = Asm::new();
+                let mut asm = Block::new();
                 ld_pair(&mut asm, pair, "_OAMRAM");
                 asm.ld(half, 3).ld(R8::A, half);
                 assert!(!panics(&asm), "{:?} set after ld {:?}", half, pair);
@@ -1104,8 +1104,8 @@ mod tests {
 
     #[test]
     fn test_a_stub_leaves_registers_pairs_and_flags_unknown() {
-        let after_stub = |tail: &dyn Fn(&mut Asm)| {
-            let mut asm = Asm::new();
+        let after_stub = |tail: &dyn Fn(&mut Block)| {
+            let mut asm = Block::new();
             ld_pair(&mut asm, R16::HL, "_OAMRAM");
             ld_pair(&mut asm, R16::DE, "Tiles");
             ld_pair(&mut asm, R16::BC, Expr::sym("TilesEnd") - "Tiles");
@@ -1150,7 +1150,7 @@ mod tests {
 
     #[test]
     fn test_one_address_has_one_name() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::HL, Expr::sym("_OAMRAM") + 4);
         asm.ld_a(7)
             .ld(Mem::Hli, R8::A)
@@ -1162,7 +1162,7 @@ mod tests {
             .ld_addr_def_a(Expr::sym("_OAMRAM") + 0)
             .ld_a_addr_def(Expr::sym("_OAMRAM") + 5);
         let mut cpu = TestCpu::default();
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!(cpu.a, 8, "[_OAMRAM+5] written through hl, read directly");
         let names: Vec<_> = cpu.mem.keys().cloned().collect();
         assert_eq!(names, ["_OAMRAM", "_OAMRAM+4", "_OAMRAM+5", "_OAMRAM+6"]);
@@ -1171,7 +1171,7 @@ mod tests {
     #[test]
     fn test_local_labels_belong_to_their_global_label() {
         // Each routine has its own .done; `jr .done` stays in its routine
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.call("SetOne")
             .call("SetTwo")
             .ret()
@@ -1188,13 +1188,13 @@ mod tests {
             .label(".done")
             .ret();
         let mut cpu = TestCpu::default();
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!((cpu.b, cpu.c), (1, 2));
     }
 
     #[test]
     fn test_a_pair_holds_a_number() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::BC, "$9800");
         ld_pair(&mut asm, R16::DE, Expr::sym("LenEnd") - "Len");
         // hl set through its halves: $12FF
@@ -1207,7 +1207,7 @@ mod tests {
         let mut cpu = TestCpu::default();
         cpu.consts16.insert("LenEnd - Len".to_string(), 300);
         cpu.mem.insert("$9800".to_string(), 9);
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!((cpu.b, cpu.c), (0x98, 0x00), "ld bc, $9800");
         assert_eq!((cpu.d, cpu.e), (0x01, 0x2C), "ld de, 300");
         assert_eq!((cpu.h, cpu.l), (0x13, 0x01), "[hli] carries into h");
@@ -1317,7 +1317,7 @@ mod tests {
 
     #[test]
     fn test_add_hl() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::HL, "$8000");
         ld_pair(&mut asm, R16::BC, "$0005");
         asm.ld_a(1)
@@ -1334,14 +1334,14 @@ mod tests {
             .ld_b(2)
             .label("End");
         let mut cpu = TestCpu::default();
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!((cpu.d, cpu.e), (0, 0));
         assert_eq!((cpu.a, cpu.b), (1, 2), "flags of add hl");
         assert_eq!((cpu.h, cpu.l), (0x00, 0x05));
 
         // A symbol plus a number is that symbol at an offset; its carry is unknown
-        let symbol_plus_number = |tail: &dyn Fn(&mut Asm)| {
-            let mut asm = Asm::new();
+        let symbol_plus_number = |tail: &dyn Fn(&mut Block)| {
+            let mut asm = Block::new();
             ld_pair(&mut asm, R16::HL, "33");
             ld_pair(&mut asm, R16::BC, "_SCRN0");
             asm.add_hl(R16::BC);
@@ -1350,12 +1350,9 @@ mod tests {
         };
         let mut cpu = TestCpu::default();
         cpu.mem.insert("_SCRN0+33".to_string(), 4);
-        cpu.run(
-            &symbol_plus_number(&|asm| {
-                asm.ld(R8::A, R8::AtHl);
-            })
-            .get_main_instrs(),
-        );
+        cpu.run(&symbol_plus_number(&|asm| {
+            asm.ld(R8::A, R8::AtHl);
+        }));
         assert_eq!(cpu.a, 4);
         assert!(panics(&symbol_plus_number(&|asm| {
             asm.jp_cond(Condition::C, "End").label("End");
@@ -1363,17 +1360,17 @@ mod tests {
 
         // A number from $8000 is a step back, as the sum wraps around at 16 bits:
         // _SCRN0+5 + $FFFF is _SCRN0+4
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::HL, Expr::sym("_SCRN0") + 5);
         ld_pair(&mut asm, R16::DE, "$FFFF");
         asm.add_hl(R16::DE).ld(R8::A, R8::AtHl);
         let mut cpu = TestCpu::default();
         cpu.mem.insert("_SCRN0+4".to_string(), 8);
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!(cpu.a, 8);
 
         // Two symbols cannot be added
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::HL, "_SCRN0");
         asm.add_hl(R16::HL);
         assert!(panics(&asm));
@@ -1381,7 +1378,7 @@ mod tests {
 
     #[test]
     fn test_16_bit_inc_and_dec() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::DE, "Tiles");
         ld_pair(&mut asm, R16::BC, "$0000");
         asm.ld_a(1)
@@ -1396,13 +1393,13 @@ mod tests {
             .label("End");
         let mut cpu = TestCpu::default();
         cpu.mem.insert("Tiles+1".to_string(), 6);
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!(cpu.a, 6, "[Tiles+1]");
         assert_eq!((cpu.b, cpu.c), (0xFF, 0xFF), "$0000 - 1");
         assert_eq!(cpu.h, 1, "Z unchanged");
 
         // Before a symbol, the address is unknown
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::DE, "Tiles");
         asm.dec(R16::DE);
         assert!(panics(&asm));
@@ -1410,7 +1407,7 @@ mod tests {
 
     #[test]
     fn test_srl_adc_and_or() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a(0b11)
             .srl(R8::A) // 1, carry
             .ld(R8::B, R8::A)
@@ -1429,7 +1426,7 @@ mod tests {
             .or(R8::B) // 1
             .label("End");
         let mut cpu = TestCpu::default();
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!(
             (cpu.b, cpu.c, cpu.d, cpu.e, cpu.a),
             (1, 0, 2, 5, 1),
@@ -1439,15 +1436,15 @@ mod tests {
     }
 
     /// Run `a = value`, the carry set to `carry`, then `code`
-    fn run_with(value: u8, carry: bool, code: &dyn Fn(&mut Asm)) -> TestCpu {
-        let mut asm = Asm::new();
+    fn run_with(value: u8, carry: bool, code: &dyn Fn(&mut Block)) -> TestCpu {
+        let mut asm = Block::new();
         asm.ld_a(value).scf();
         if !carry {
             asm.ccf();
         }
         code(&mut asm);
         let mut cpu = TestCpu::default();
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         cpu
     }
 
@@ -1734,12 +1731,12 @@ mod tests {
         }
 
         // On [hl] the result is written back to memory
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::HL, "wValue");
         asm.sra(R8::AtHl).swap(R8::AtHl);
         let mut cpu = TestCpu::default();
         cpu.mem.insert("wValue".to_string(), 0x82);
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!(
             cpu.trace,
             [
@@ -1751,7 +1748,7 @@ mod tests {
 
     #[test]
     fn test_bit_set_res_cpl_scf_ccf() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::HL, "wFlags");
         asm.scf()
             .bit(2, R8::AtHl) // bit set: Z reset, carry unchanged
@@ -1776,7 +1773,7 @@ mod tests {
             .label("End");
         let mut cpu = TestCpu::default();
         cpu.mem.insert("wFlags".to_string(), 0b0000_0100);
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!((cpu.a, cpu.b, cpu.c), (0xF0, 0x20, 1));
         assert!(cpu.zero && cpu.carry);
         assert_eq!(
@@ -1790,7 +1787,7 @@ mod tests {
 
     #[test]
     fn test_push_and_pop() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         ld_pair(&mut asm, R16::BC, "$1234");
         ld_pair(&mut asm, R16::HL, "_OAMRAM");
         asm.push(R16Stack::BC)
@@ -1813,7 +1810,7 @@ mod tests {
             .pop(R16Stack::BC)
             .ret();
         let mut cpu = TestCpu::default();
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!(
             (cpu.a, cpu.h, cpu.l, cpu.b, cpu.c),
             (5, 0x12, 0x34, 0x12, 0x34)
@@ -1827,7 +1824,7 @@ mod tests {
         // `pop bc` after `push af`: b is a, c holds the flags, N and H included, which
         // the model does not know
         let push_af_pop_bc = |read: R8| {
-            let mut asm = Asm::new();
+            let mut asm = Block::new();
             asm.ld_a(3)
                 .push(R16Stack::AF)
                 .pop(R16Stack::BC)
@@ -1837,25 +1834,25 @@ mod tests {
         assert!(!panics(&push_af_pop_bc(R8::B)), "b is a");
         assert!(panics(&push_af_pop_bc(R8::C)), "c is unknown");
         let mut cpu = TestCpu::default();
-        cpu.run(&push_af_pop_bc(R8::B).get_main_instrs());
+        cpu.run(&push_af_pop_bc(R8::B));
         assert_eq!(cpu.e, 3);
 
         // The stack is shared with the calls: a `ret` to a pushed value, a `pop` of a
         // return address, or a `pop` with nothing pushed is not supported
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.push(R16Stack::BC).ret();
         assert!(panics(&asm));
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.call("Routine").ret().label("Routine").pop(R16Stack::BC);
         assert!(panics(&asm));
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.pop(R16Stack::DE);
         assert!(panics(&asm));
     }
 
     #[test]
     fn test_conditional_call() {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a(1)
             .cp_imm(1) // Z set
             .call_cond(Condition::NZ, "SetB") // not taken
@@ -1868,7 +1865,7 @@ mod tests {
             .ld_c(2)
             .ret();
         let mut cpu = TestCpu::default();
-        cpu.run(&asm.get_main_instrs());
+        cpu.run(&asm);
         assert_eq!((cpu.b, cpu.c), (0, 2));
         assert_eq!(cpu.trace, [Event::Call("SetC".to_string())]);
     }
@@ -1913,13 +1910,13 @@ mod tests {
             },
         ];
         for code in unmodelled {
-            let mut asm = Asm::new();
+            let mut asm = Block::new();
             asm.ld_a(0);
             code(&mut asm);
-            assert!(panics(&asm), "{}", asm.get_main_instrs().last().unwrap());
+            assert!(panics(&asm), "{}", asm.to_vec().last().unwrap());
         }
         // `nop` does nothing
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.nop();
         assert!(!panics(&asm));
     }

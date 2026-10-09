@@ -1,13 +1,8 @@
 use crate::gb_asm::{Instr, JumpTarget};
 
-/// Trait for anything that can emit assembly instructions.
-///
-/// This provides a unified interface for both raw instructions and
-/// control flow structures like If statements.
-pub trait Emittable {
-    /// Emit assembly instructions, using the counter for generating unique labels.
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr>;
-}
+// `Emittable` and `boxed` live in the asm layer (`gb_asm::block`), with `Block`; they are
+// re-exported here, where the control-flow structures that implement them are
+pub use crate::gb_asm::{Emittable, boxed};
 
 /// A function call with optional argument setup instructions.
 ///
@@ -53,52 +48,4 @@ impl Emittable for Call {
         });
         instrs
     }
-}
-
-/// Implementation for raw instruction vectors - just returns the instructions.
-impl Emittable for Vec<Instr> {
-    fn emit(&mut self, _counter: &mut usize) -> Vec<Instr> {
-        std::mem::take(self)
-    }
-}
-
-/// Implementation for nested instruction vectors - flattens them.
-/// This allows combining multiple instruction sequences cleanly:
-/// ```ignore
-/// vec![
-///     TileRef::set_tile_label("BLANK_TILE"),
-///     TileRef::next_tile(),
-///     TileRef::set_tile_label("BLANK_TILE"),
-/// ]
-/// ```
-impl Emittable for Vec<Vec<Instr>> {
-    fn emit(&mut self, _counter: &mut usize) -> Vec<Instr> {
-        std::mem::take(self).into_iter().flatten().collect()
-    }
-}
-
-/// Implementation for boxed trait objects - allows mixing different Emittable types.
-/// ```ignore
-/// vec![
-///     boxed(IfConst::eq(...)),
-///     boxed(IfA::eq(...)),
-/// ]
-/// ```
-impl Emittable for Vec<Box<dyn Emittable>> {
-    fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
-        self.iter_mut().flat_map(|e| e.emit(counter)).collect()
-    }
-}
-
-/// Helper to box an Emittable for use in heterogeneous vectors.
-///
-/// # Example
-/// ```ignore
-/// gb.define_function_from("MyFunc", vec![
-///     boxed(IfConst::eq(value, "CONST", body1)),
-///     boxed(IfA::eq("OTHER", body2)),
-/// ]);
-/// ```
-pub fn boxed(e: impl Emittable + 'static) -> Box<dyn Emittable> {
-    Box::new(e)
 }

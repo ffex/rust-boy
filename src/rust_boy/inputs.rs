@@ -70,7 +70,7 @@ impl InputManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::Asm;
+    use crate::gb_asm::Block;
 
     #[test]
     fn test_new_input_manager() {
@@ -81,20 +81,20 @@ mod tests {
     #[test]
     fn test_on_press() {
         let mut inputs = InputManager::new();
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ret();
 
-        inputs.on_press(PadButton::Left, asm.get_main_instrs());
+        inputs.on_press(PadButton::Left, asm.into_instrs());
         assert!(!inputs.is_empty());
     }
 
     #[test]
     fn test_generate_code() {
         let mut inputs = InputManager::new();
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ret();
 
-        inputs.on_press(PadButton::A, asm.get_main_instrs());
+        inputs.on_press(PadButton::A, asm.into_instrs());
         let code = inputs.generate_code(&LabelAllocator::new());
 
         // Should contain check_key generated code

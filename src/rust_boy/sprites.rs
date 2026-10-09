@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use super::memory::{MemoryAllocator, MemoryRegion};
 use super::tiles::TileId;
 use crate::{
-    gb_asm::{Asm, Condition, Expr, Instr, LabelAllocator, Mem, R8, R16, is_identifier},
+    gb_asm::{Block, Condition, Expr, Instr, LabelAllocator, Mem, R8, R16, is_identifier},
     gb_std::graphics::sprites::{MoveDir, move_coord_limit, oam_address, pivot},
     hw,
     rust_boy::animations::Animation,
@@ -620,10 +620,10 @@ impl SpriteManager {
             );
         }
         sprite.check_animation_index(animation_index);
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a(animation_index);
         asm.ld_addr_def_a(sprite.current_var());
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Generate code to enable an animation by name for a sprite
@@ -644,10 +644,10 @@ impl SpriteManager {
     pub fn disable_animation(&self, sprite_id: SpriteId) -> Vec<Instr> {
         let sprite = self.sprite(sprite_id);
         sprite.check_has_animations("disable_animation");
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a(ANIM_DISABLED);
         asm.ld_addr_def_a(sprite.current_var());
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     // ==================== Composite Sprite Methods ====================
@@ -865,14 +865,14 @@ impl SpriteManager {
 
     /// Generate the code that writes every sprite to OAM, at start-up
     pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         // Draw all sprites to OAM (sorted by oam_index to ensure correct order); the
         // OAM was cleared before (gb_std::graphics::sprites::clear_objects_screen)
         asm.ld(R16::HL, hw::OAMRAM);
         let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
         sorted_sprites.sort_by_key(|s| s.oam_index);
-        let write = |asm: &mut Asm, value: u8| {
+        let write = |asm: &mut Block, value: u8| {
             asm.ld_a(value);
             asm.ld(Mem::Hli, R8::A);
         };
@@ -887,7 +887,7 @@ impl SpriteManager {
             write(&mut asm, sprite.flags);
         }
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Generate movement code for a specific sprite: add the value of the variable
@@ -911,13 +911,13 @@ impl SpriteManager {
     /// Add the variable `var_name` to the sprite's coordinate on `axis`
     fn move_var(&self, id: SpriteId, axis: Axis, var_name: &str) -> Vec<Instr> {
         let coord = axis.oam_address(self.sprite(id));
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(var_name);
         asm.ld(R8::B, R8::A);
         asm.ld_a_addr_def(&coord);
         asm.add(R8::B);
         asm.ld_addr_def_a(coord);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move a sprite left by `distance` pixels, but never left of `limit`
@@ -994,9 +994,9 @@ impl SpriteManager {
     /// # Panics
     /// If there is no sprite `id`.
     pub fn get_y(&self, id: SpriteId) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(Axis::Y.oam_address(self.sprite(id)));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Get sprite X position (its OAM X, into `a`)
@@ -1004,9 +1004,9 @@ impl SpriteManager {
     /// # Panics
     /// If there is no sprite `id`.
     pub fn get_x(&self, id: SpriteId) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(Axis::X.oam_address(self.sprite(id)));
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Check if any sprites have been added
@@ -1026,14 +1026,14 @@ impl SpriteManager {
 
         for sprite in self.sprites.values() {
             for animation in &sprite.animations {
-                let mut asm = Asm::new();
+                let mut asm = Block::new();
                 let func_name = animation_label(&sprite.name, &animation.name);
 
                 asm.label(&func_name);
                 asm.emit_all(animation.generate_func(&direction_var(&sprite.name)));
                 asm.ret();
 
-                functions.push((func_name, asm.get_main_instrs()));
+                functions.push((func_name, asm.into_instrs()));
             }
         }
 
@@ -1051,7 +1051,7 @@ impl SpriteManager {
     /// on the number of sprites or animations is a `jp`: a `jr` reaches only 127 bytes
     /// ahead (B9). The only `jr` left skips one `call` and one `jp`, 6 bytes.
     pub(crate) fn generate_animation_calls(&self, delay_value: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         // Increment frame counter
         asm.ld_a_addr_def("wFrameCounter");
@@ -1103,7 +1103,7 @@ impl SpriteManager {
 
         asm.label("AnimEnd");
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Get list of animation variable names (for auto-creating variables)

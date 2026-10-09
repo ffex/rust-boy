@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::gb_asm::{Asm, Expr, Instr, R8};
+use crate::gb_asm::{Block, Expr, Instr, R8};
 
 use super::memory::{MemoryAllocator, MemoryRegion};
 
@@ -56,9 +56,9 @@ impl Var {
                 self.name, value, self.var_type, min, max
             );
         }
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         store(&mut asm, &self.name, self.var_type, value);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// The code that loads the variable's value
@@ -69,14 +69,14 @@ impl Var {
     ///
     /// The `If` comparisons test `a`: they work on 8-bit variables only.
     pub fn get(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a_addr_def(&self.name);
         if self.var_type.size() == 2 {
             asm.ld(R8::L, R8::A);
             asm.ld_a_addr_def(Expr::sym(&self.name) + 1);
             asm.ld(R8::H, R8::A);
         }
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Get the variable name/label
@@ -99,7 +99,7 @@ impl Var {
 ///
 /// One way for `Var::set` and the start-up initialisation. A negative 8-bit value is
 /// written as such (`ld a, -1`, as before); a 16-bit value byte by byte, low byte first.
-fn store(asm: &mut Asm, name: &str, var_type: VarType, value: i32) {
+fn store(asm: &mut Block, name: &str, var_type: VarType, value: i32) {
     match var_type {
         VarType::U8 | VarType::I8 => {
             // A negative value is written as such: `ld a, -1`
@@ -301,9 +301,9 @@ impl VariableManager {
 
     /// Generate variable section instructions for the Data chunk
     pub(crate) fn generate_sections(&self) -> Vec<Instr> {
-        use crate::gb_asm::Asm;
+        use crate::gb_asm::Block;
 
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         for (section_name, var_ids) in &self.sections {
             asm.section(section_name, "WRAM0");
@@ -316,21 +316,21 @@ impl VariableManager {
             }
         }
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Generate initialization code for variables with non-zero initial values
     pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
-        use crate::gb_asm::Asm;
+        use crate::gb_asm::Block;
 
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         // Every variable, even to 0, in creation order
         for var in self.variables.values() {
             store(&mut asm, &var.name, var.var_type, var.initial_value);
         }
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Check if any variables have been created

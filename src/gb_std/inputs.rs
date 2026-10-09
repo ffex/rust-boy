@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Mem, R8};
+use crate::gb_asm::{Block, Condition, Instr, LabelAllocator, Mem, R8};
 use crate::hw;
 
 /// Enum for joypad buttons that can return constant names and values
@@ -57,7 +57,7 @@ impl PadButton {
 /// - wCurKeys: Bitmap of currently pressed keys (1 = pressed, 0 = not pressed)
 /// - wNewKeys: Bitmap of keys that just transitioned to pressed this frame
 pub fn update_keys() -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
 
     asm.label("UpdateKeys");
     asm.ld(R8::A, hw::P1F_GET_BTN);
@@ -92,7 +92,7 @@ pub fn update_keys() -> Vec<Instr> {
     asm.label(".knowret");
     asm.ret();
 
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 /// Run `pressed_func` while `button` is held (its bit is set in `wCurKeys`)
 ///
@@ -109,14 +109,14 @@ pub fn check_key(
 ) -> Vec<Instr> {
     let start = labels.local(button.label());
     let end = format!("{}_end", start);
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.label(&start);
     asm.ld_a_addr_def("wCurKeys");
     asm.and(button.name());
     asm.jp_cond(Condition::Z, &end);
     asm.emit_all(pressed_func);
     asm.label(&end);
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 #[cfg(test)]
@@ -128,9 +128,9 @@ mod tests {
 
     /// Code that sets `var` to 1, to see which bodies ran
     fn mark(var: &str) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a(1).ld_addr_def_a(var);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Runs `code` with `keys` held; returns which of `vars` were marked
@@ -171,9 +171,9 @@ mod tests {
         // so the If's jump to .end_if_0 could not be resolved
         let labels = LabelAllocator::new();
         let load_keys = || {
-            let mut asm = Asm::new();
+            let mut asm = Block::new();
             asm.ld_a_addr_def("wCurKeys");
-            asm.get_main_instrs()
+            asm.into_instrs()
         };
         let body = check_key(&labels, PadButton::Left, mark("wLeft"));
         let code = If::ne(load_keys(), load_keys(), body)

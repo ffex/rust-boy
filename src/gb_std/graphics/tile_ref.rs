@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Expr, Instr, Mem, R8, R16};
+use crate::gb_asm::{Block, Expr, Instr, Mem, R8, R16};
 
 /// A reference to a tile position in the tilemap.
 ///
@@ -42,17 +42,17 @@ impl TileRef {
     /// Load the tilemap address into HL register.
     /// This must be called before using other TileRef methods that operate on [HL].
     pub fn load_address(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_hl(self.tilemap_addr);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Load the tilemap address into HL using a label (or any address [`Expr`]).
     #[track_caller]
     pub fn load_address_label(label: impl Into<Expr>) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld(R16::HL, label.into());
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Set the tile at the current HL address to a specific tile index.
@@ -61,9 +61,9 @@ impl TileRef {
     /// # Arguments
     /// * `tile_index` - The tile index to write (0-255)
     pub fn set_tile(tile_index: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a(tile_index).ld(R8::AtHl, R8::A);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Set the tile at the current HL address using a label/constant.
@@ -74,9 +74,9 @@ impl TileRef {
     ///   [`Expr`])
     #[track_caller]
     pub fn set_tile_label(const_name: impl Into<Expr>) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld(R8::AtHl, const_name.into());
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Set the tile at this TileRef's address to a specific tile index.
@@ -85,34 +85,34 @@ impl TileRef {
     /// # Arguments
     /// * `tile_index` - The tile index to write (0-255)
     pub fn set_tile_at(&self, tile_index: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_hl(self.tilemap_addr)
             .ld_a(tile_index)
             .ld(R8::AtHl, R8::A);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move to the next tile in the tilemap (increment HL).
     /// Used to move right in the tilemap or to the next row after 32 tiles.
     pub fn next_tile() -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.inc(R16::HL);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move to the previous tile in the tilemap (decrement HL).
     /// Used to move left in the tilemap.
     pub fn prev_tile() -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.dec(R16::HL);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Get the current tile index at [HL] into register A.
     pub fn get_tile() -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld(R8::A, R8::AtHl);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Set tile and move to next (using ld [hl+], a pattern).
@@ -121,30 +121,30 @@ impl TileRef {
     /// # Arguments
     /// * `tile_index` - The tile index to write (0-255)
     pub fn set_tile_and_next(tile_index: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.ld_a(tile_index).ld(Mem::Hli, R8::A);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move down one row in the tilemap (add 32 to HL).
     /// The tilemap is 32 tiles wide, so adding 32 moves to the same X position
     /// on the next row.
     pub fn next_row() -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         // ld de, 32
         // add hl, de
         asm.ld_de(32).add_hl(R16::DE);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 
     /// Move up one row in the tilemap (subtract 32 from HL).
     pub fn prev_row() -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         // To subtract 32, we add -32 (0xFFE0 in 16-bit two's complement)
         // ld de, -32 (which is $FFE0)
         // add hl, de
         asm.ld_de(0xFFE0).add_hl(R16::DE);
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }
 

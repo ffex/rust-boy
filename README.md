@@ -16,7 +16,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix�
 |---|---|---|
 | `rust_boy::rust_boy` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
 | `rust_boy::gb_std` | routines | Ready-made routines (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
-| `rust_boy::gb_asm` | assembly | `Asm`: one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
+| `rust_boy::gb_asm` | assembly | `Asm` (a whole program) and `Block` (a piece of code): one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
 
 Each level is built on the one below it, and you can mix them.
 
@@ -102,9 +102,10 @@ Operands are typed: registers are `R8` (`a` … `l`, and `[hl]`) and `R16`, memo
 variables, `DEF` constants) and arithmetic on them. A Rust integer or a symbol name can be passed directly:
 
 ```rust
-use rust_boy::gb_asm::{Asm, Expr, Mem, R8, R16};
+use rust_boy::gb_asm::{Block, Expr, Mem, R8, R16};
 
-let mut asm = Asm::new();
+// A Block is a piece of code, built with the same methods as an Asm
+let mut asm = Block::new();
 asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4) // ld hl, _OAMRAM+4
     .ld(R8::A, Mem::addr("wScore")) // ld a, [wScore]
     .add(R8::B) // add a, b
@@ -112,7 +113,7 @@ asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4) // ld hl, _OAMRAM+4
     .ld(Mem::Hli, R8::A) // ld [hli], a
     .ld(R8::A, Expr::sym("LCDCF_ON") | "LCDCF_BGON") // ld a, LCDCF_ON | LCDCF_BGON
     .sub(-1); // sub a, -1
-let text: Vec<String> = asm.get_main_instrs().iter().map(|i| i.to_string()).collect();
+let text: Vec<String> = asm.iter().map(|i| i.to_string()).collect();
 assert_eq!(text[0], "ld hl, _OAMRAM+4");
 assert_eq!(text[5], "ld a, LCDCF_ON | LCDCF_BGON");
 ```
@@ -174,7 +175,7 @@ Open them in any Game Boy emulator.
 
 ```text
 src/
-├── gb_asm/        # Instr, typed operands and Expr, the Asm builder, unique labels, RGBDS output
+├── gb_asm/        # Instr, typed operands and Expr, the Asm and Block builders, unique labels, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
 ├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)

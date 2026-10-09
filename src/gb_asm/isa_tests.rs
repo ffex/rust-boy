@@ -14,7 +14,8 @@
 
 use super::label_check::{instr_size, rgbds_rom};
 use super::{
-    AluOperand, Asm, Condition, Dst, Expr, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
+    AluOperand, Asm, Block, Condition, Dst, Expr, Instr, JumpTarget, Mem, Operand, R8, R16,
+    R16Stack,
 };
 
 /// An instruction, the text it prints and the bytes of its encoding
@@ -490,7 +491,7 @@ fn test_every_instruction_form() {
     asm.include_hardware()
         .section("Isa", "ROM0[$0000]")
         .label("Target")
-        .emit_all(cases.iter().map(|case| case.instr.clone()).collect());
+        .emit_all(cases.iter().map(|case| case.instr.clone()));
     let Some(rom) = rgbds_rom(&asm.to_asm()) else {
         return; // RGBDS_LINK_CHECK not set: the text and sizes only
     };
@@ -701,13 +702,13 @@ fn test_registers_are_never_expressions() {
     // `adc_label("[hl]")`, `cp_label("b")` in the `unbricked` tutorial): `Instr::check`
     // took them for values, and `instr_size` counted 2 bytes for a 1-byte instruction.
     // Typed, a register is a register and a constant is an `Expr`.
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.or(R8::C)
         .adc(R8::AtHl)
         .cp(R8::B)
         .cp("BRICK_LEFT")
         .add(Expr::sym("DIGIT_OFFSET") + 1);
-    let code = asm.get_main_instrs();
+    let code = asm.into_instrs();
     assert_eq!(
         code,
         [

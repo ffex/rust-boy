@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition as AsmCondition, Expr, Instr, JumpTarget, R8};
+use crate::gb_asm::{Block, Condition as AsmCondition, Expr, Instr, JumpTarget, R8};
 
 use super::emittable::Emittable;
 
@@ -187,7 +187,7 @@ impl If {
     /// Generate assembly for simple conditions (E, NE, LT, GE)
     fn emit_simple(
         &mut self,
-        asm: &mut Asm,
+        asm: &mut Block,
         counter: &mut usize,
         end_label: &str,
         else_label: &str,
@@ -211,7 +211,7 @@ impl If {
     /// Generate assembly for LE (A <= B): true if C || Z
     fn emit_le(
         &mut self,
-        asm: &mut Asm,
+        asm: &mut Block,
         counter: &mut usize,
         end_label: &str,
         else_label: &str,
@@ -247,7 +247,7 @@ impl If {
     }
 
     /// Generate assembly for GT (A > B): true if NC && NZ
-    fn emit_gt(&mut self, asm: &mut Asm, counter: &mut usize, end_label: &str, else_label: &str) {
+    fn emit_gt(&mut self, asm: &mut Block, counter: &mut usize, end_label: &str, else_label: &str) {
         let else_or_end = if self.else_branch.is_some() {
             else_label
         } else {
@@ -283,7 +283,7 @@ impl Emittable for If {
     /// .end_if_N:
     /// ```
     fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         // Get unique counter for this if
         let my_counter = *counter;
@@ -321,7 +321,7 @@ impl Emittable for If {
         // Emit end label
         asm.label(&end_label);
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }
 
@@ -460,7 +460,7 @@ impl IfConst {
     /// Generate assembly for simple conditions (E, NE, LT, GE)
     fn emit_simple(
         &mut self,
-        asm: &mut Asm,
+        asm: &mut Block,
         counter: &mut usize,
         end_label: &str,
         else_label: &str,
@@ -482,7 +482,7 @@ impl IfConst {
     /// Generate assembly for LE (A <= const): true if C || Z
     fn emit_le(
         &mut self,
-        asm: &mut Asm,
+        asm: &mut Block,
         counter: &mut usize,
         end_label: &str,
         else_label: &str,
@@ -509,7 +509,7 @@ impl IfConst {
     }
 
     /// Generate assembly for GT (A > const): true if NC && NZ
-    fn emit_gt(&mut self, asm: &mut Asm, counter: &mut usize, end_label: &str, else_label: &str) {
+    fn emit_gt(&mut self, asm: &mut Block, counter: &mut usize, end_label: &str, else_label: &str) {
         let else_or_end = if self.else_branch.is_some() {
             else_label
         } else {
@@ -540,7 +540,7 @@ impl Emittable for IfConst {
     /// .end_if_N:
     /// ```
     fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         let my_counter = *counter;
         *counter += 1;
@@ -570,7 +570,7 @@ impl Emittable for IfConst {
 
         asm.label(&end_label);
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }
 
@@ -668,7 +668,7 @@ impl IfA {
     /// Generate assembly for simple conditions (E, NE, LT, GE)
     fn emit_simple(
         &mut self,
-        asm: &mut Asm,
+        asm: &mut Block,
         counter: &mut usize,
         end_label: &str,
         else_label: &str,
@@ -690,7 +690,7 @@ impl IfA {
     /// Generate assembly for LE (A <= const): true if C || Z
     fn emit_le(
         &mut self,
-        asm: &mut Asm,
+        asm: &mut Block,
         counter: &mut usize,
         end_label: &str,
         else_label: &str,
@@ -717,7 +717,7 @@ impl IfA {
     }
 
     /// Generate assembly for GT (A > const): true if NC && NZ
-    fn emit_gt(&mut self, asm: &mut Asm, counter: &mut usize, end_label: &str, else_label: &str) {
+    fn emit_gt(&mut self, asm: &mut Block, counter: &mut usize, end_label: &str, else_label: &str) {
         let else_or_end = if self.else_branch.is_some() {
             else_label
         } else {
@@ -747,7 +747,7 @@ impl Emittable for IfA {
     /// .end_if_N:
     /// ```
     fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         let my_counter = *counter;
         *counter += 1;
@@ -774,7 +774,7 @@ impl Emittable for IfA {
 
         asm.label(&end_label);
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }
 
@@ -922,7 +922,7 @@ impl Emittable for IfCall {
     /// .end_if_N:
     /// ```
     fn emit(&mut self, counter: &mut usize) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
 
         let my_counter = *counter;
         *counter += 1;
@@ -958,7 +958,7 @@ impl Emittable for IfCall {
 
         asm.label(&end_label);
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }
 

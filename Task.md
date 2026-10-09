@@ -125,7 +125,9 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] `hw` module: pure data (registers, flags, OAM layout, VRAM map) emitted as `hardware.inc` symbol
       names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine` (started: `src/hw.rs` since
       [B22](CONTEXT.md#b22) holds the VRAM, WRAM and OAM layout the new code uses; the older strings are left)
-- [ ] Move `Emittable` into the asm layer; add a `Block` instruction buffer (stop using `Asm` + `get_main_instrs()` as scratch)
+- [x] Move `Emittable` into the asm layer; add a `Block` instruction buffer (stop using `Asm` + `get_main_instrs()` as scratch)
+      (branch `refactor-p2-typed-operands-2b`: `gb_asm::Block` with the same builders as `Asm`, written once; `Emittable`
+      and `boxed` in `gb_asm`, re-exported by `gb_std::flow`; `gb_std` and `rust_boy` build every snippet in a `Block`)
 - [x] Typed operands: remove string-register helpers (`inc_label("de")`, `ld_hli_label("a")`, …); add an
       `Expr` operand for constants/expressions; reject invalid destinations (branch `refactor-p2-typed-operands`:
       `Dst`/`Operand`/`Mem`/`AluOperand`/`IncDec`, `ld 1, 2` and `inc 5` do not compile, `Instr::check` accepts exactly

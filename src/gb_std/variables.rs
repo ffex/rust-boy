@@ -1,16 +1,16 @@
-use crate::gb_asm::{Asm, Instr};
+use crate::gb_asm::{Block, Instr};
 
 pub fn def_const(name: &str, value: u8) -> Vec<Instr> {
     //TODO probabibly useful
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.def(name, value);
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 pub fn def_var(name: &str, vartype: &str) -> Vec<Instr> {
-    let mut asm = Asm::new();
+    let mut asm = Block::new();
     asm.raw(&format!("{}: {}", name, vartype));
-    asm.get_main_instrs()
+    asm.into_instrs()
 }
 
 pub struct VariableSection {
@@ -38,14 +38,14 @@ impl VariableSection {
     }
 
     pub fn generate(&self) -> Vec<Instr> {
-        let mut asm = Asm::new();
+        let mut asm = Block::new();
         asm.section(&self.name, &self.memory);
 
         for (name, vartype) in &self.data {
             asm.raw(&format!("{}: {}", name, vartype));
         }
 
-        asm.get_main_instrs()
+        asm.into_instrs()
     }
 }
 

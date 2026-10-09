@@ -17,14 +17,16 @@
 //! assembles and links the program with rgbasm and rgblink.
 //!
 //! [`jr_range_errors`] also checks that each `jr` reaches its target, which rgbasm
-//! requires: it works on instructions, whose sizes it knows ([`instr_size`]).
+//! requires: it works on instructions, whose sizes it knows ([`Instr::size`]). It is
+//! written apart from the relaxation of `Asm::to_asm` (`gb_asm::relax`), so a test can
+//! check one with the other.
 //!
 //! [`rgbds_rom`] returns the ROM bytes RGBDS makes of a program, so a test can compare
 //! the encoding of the instructions with the SM83 opcode table (`gb_asm::isa_tests`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{AluOperand, Asm, Dst, Instr, JumpTarget, Mem, Operand, R16};
+use super::{Asm, Instr, JumpTarget};
 
 /// Every label problem in `asm`: a label defined twice, a local label outside any scope,
 /// or a `jp` / `jr` / `call` whose target is not defined (in its own scope, for a local
@@ -267,129 +269,108 @@ pub(crate) fn assert_code_labels_ok(code: &[Instr]) {
     assert_labels_ok(&asm.to_asm());
 }
 
-/// Size in bytes of `instr` once assembled; panics on what it does not know
+/// Size in bytes of `instr` once assembled ([`Instr::size`]); panics on what it does
+/// not know
 ///
 /// It reads the typed operands, so a register is never taken for a value: `cp a, b` is 1
 /// byte, `cp a, n8` 2 (the string helpers put registers in expressions, which were
 /// counted as values).
 pub(crate) fn instr_size(instr: &Instr) -> usize {
-    match instr {
-        Instr::Label { .. } | Instr::Comment { .. } | Instr::Def { .. } => 0,
-        Instr::Ld { dst, src } => match (dst, src) {
-            (Dst::R8(_), Operand::R8(_)) | (Dst::R16(R16::SP), Operand::R16(R16::HL)) => 1,
-            (Dst::R8(_), Operand::Imm(_)) => 2,
-            (Dst::R16(_), Operand::Imm(_)) => 3,
-            (Dst::Mem(Mem::Addr(_)), _) | (_, Operand::Mem(Mem::Addr(_))) => 3,
-            (Dst::Mem(_), Operand::R8(_)) | (Dst::R8(_), Operand::Mem(_)) => 1,
-            (dst, src) => panic!("instr_size: unknown size of ld {}, {}", dst, src),
-        },
-        // `ldh a, [c]` / `ldh [c], a` 1 byte, `ldh a, [n8]` / `ldh [n8], a` 2
-        Instr::Ldh {
-            dst: Dst::Mem(Mem::C),
-            ..
-        }
-        | Instr::Ldh {
-            src: Operand::Mem(Mem::C),
-            ..
-        } => 1,
-        Instr::Ldh { .. } => 2,
-        // `op a, src`: register or [hl] 1 byte, value 2
-        Instr::Add { src }
-        | Instr::Adc { src }
-        | Instr::Sub { src }
-        | Instr::Sbc { src }
-        | Instr::And { src }
-        | Instr::Xor { src }
-        | Instr::Or { src }
-        | Instr::Cp { src } => match src {
-            AluOperand::R8(_) => 1,
-            AluOperand::Imm(_) => 2,
-        },
-        Instr::Inc { .. }
-        | Instr::Dec { .. }
-        | Instr::AddHl { .. }
-        | Instr::Push { .. }
-        | Instr::Pop { .. }
-        | Instr::Rlca
-        | Instr::Rrca
-        | Instr::Rla
-        | Instr::Rra
-        | Instr::Daa
-        | Instr::Cpl
-        | Instr::Scf
-        | Instr::Ccf
-        | Instr::Nop
-        | Instr::Halt
-        | Instr::Di
-        | Instr::Ei
-        | Instr::JpHl
-        | Instr::Ret
-        | Instr::RetCond { .. }
-        | Instr::Reti
-        | Instr::Rst { .. } => 1,
-        // rgbasm follows `stop` with a $00 byte
-        Instr::Stop | Instr::AddSp { .. } | Instr::LdHlSp { .. } => 2,
-        // The `$CB`-prefixed instructions
-        Instr::Rlc { .. }
-        | Instr::Rrc { .. }
-        | Instr::Rl { .. }
-        | Instr::Rr { .. }
-        | Instr::Sla { .. }
-        | Instr::Sra { .. }
-        | Instr::Swap { .. }
-        | Instr::Srl { .. }
-        | Instr::Bit { .. }
-        | Instr::Set { .. }
-        | Instr::Res { .. } => 2,
-        Instr::Jr { .. } | Instr::JrCond { .. } => 2,
-        Instr::Jp { .. } | Instr::JpCond { .. } | Instr::Call { .. } | Instr::CallCond { .. } => 3,
-        other => panic!("jr_range_errors: unknown size of {}", other),
-    }
+    instr
+        .size()
+        .unwrap_or_else(|| panic!("instr_size: unknown size of {}", instr))
 }
 
-/// Every `jr` in `code` whose target, a label in `code`, is out of its reach: the
-/// offset from the end of the `jr` must be in -128..=127 (rgbasm rejects the others).
-/// A local label (`.name`) belongs to the last global label before it, as in RGBDS, so
-/// the same local name in two routines is two labels.
+/// Every `jr` in `code` that does not provably reach its target: the target must be a
+/// label of `code` defined once, in the same section, with only instructions of known
+/// size in between, and the offset from the end of the `jr` must be in -128..=127
+/// (rgbasm rejects the others). A local label (`.name`) belongs to the last global label
+/// before it, as in RGBDS (a `SECTION` ends the scope), so the same local name in two
+/// routines is two labels.
+///
+/// It adds up the sizes between each `jr` and its target, where the relaxation of
+/// `Asm::to_asm` numbers blocks and iterates: after the relaxation, no `jr` is left that
+/// this function reports.
 pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
-    // Full name of a label used under the global label `scope` ("" before the first)
-    let full_name = |scope: &str, name: &str| {
-        if name.starts_with('.') {
-            format!("{}{}", scope, name)
-        } else {
-            name.to_string()
+    // Full name of a label used under the global label `scope`; a piece of code that
+    // starts without a global label has the scope "" (in a program it would come after
+    // one)
+    let full_name = |scope: Option<&str>, name: &str| -> Option<String> {
+        match name.strip_prefix('.') {
+            Some(_) => Some(format!("{}{}", scope.unwrap_or(""), name)),
+            None => Some(name.to_string()),
         }
     };
-    // Address and scope of each instruction, and every label by its full name
-    let mut places = Vec::with_capacity(code.len());
-    let mut labels = BTreeMap::new();
-    let mut scope = "";
-    let mut address = 0;
-    for instr in code {
-        if let Instr::Label { name } = instr {
-            if !name.starts_with('.') {
-                scope = name;
+    // The scope of each instruction, and every label by its full name, with the number
+    // of times it is defined
+    let mut scopes = Vec::with_capacity(code.len());
+    let mut labels: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut scope: Option<&str> = None;
+    for (index, instr) in code.iter().enumerate() {
+        match instr {
+            Instr::Section { .. } => scope = None,
+            Instr::Label { name } => {
+                let name = name.trim_end_matches(':');
+                if !name.contains('.') {
+                    scope = Some(name);
+                }
+                if let Some(full) = full_name(scope, name) {
+                    labels.entry(full).or_default().push(index);
+                }
             }
-            labels.insert(full_name(scope, name), address);
+            _ => {}
         }
-        places.push((address, scope));
-        address += instr_size(instr);
+        scopes.push(scope);
     }
 
     let mut errors = Vec::new();
-    for (instr, (address, scope)) in code.iter().zip(places) {
-        if let Instr::Jr { target } | Instr::JrCond { target, .. } = instr {
-            let JumpTarget::Label(name) = target else {
+    for (index, instr) in code.iter().enumerate() {
+        let (Instr::Jr { target } | Instr::JrCond { target, .. }) = instr else {
+            continue;
+        };
+        let JumpTarget::Label(name) = target else {
+            errors.push(format!("{}: the target is an address", instr));
+            continue;
+        };
+        let target = match full_name(scopes[index], name).and_then(|full| labels.get(&full)) {
+            Some(places) if places.len() == 1 => places[0],
+            Some(_) => {
+                errors.push(format!("{}: target defined twice", instr));
                 continue;
-            };
-            let Some(&to) = labels.get(&full_name(scope, name)) else {
+            }
+            None => {
                 errors.push(format!("{}: target not found", instr));
                 continue;
-            };
-            let offset = to as isize - (address as isize + 2);
-            if !(-128..=127).contains(&offset) {
-                errors.push(format!("{}: offset {} is out of range", instr, offset));
             }
+        };
+        // The instructions between the end of the `jr` and the target (forward), or from
+        // the target to the end of the `jr` (backward)
+        let between = if target > index {
+            &code[index + 1..target]
+        } else {
+            &code[target..=index]
+        };
+        if between
+            .iter()
+            .any(|instr| matches!(instr, Instr::Section { .. }))
+        {
+            errors.push(format!("{}: the target is in another section", instr));
+            continue;
+        }
+        let Some(bytes) = between.iter().map(Instr::size).sum::<Option<usize>>() else {
+            errors.push(format!(
+                "{}: an instruction of unknown size is in the way",
+                instr
+            ));
+            continue;
+        };
+        let offset = if target > index {
+            bytes as isize
+        } else {
+            -(bytes as isize)
+        };
+        if !(-128..=127).contains(&offset) {
+            errors.push(format!("{}: offset {} is out of range", instr, offset));
         }
     }
     errors
@@ -399,7 +380,7 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::gb_asm::Block;
-    use crate::gb_asm::{Condition, IncDec, R8};
+    use crate::gb_asm::{Condition, Dst, IncDec, Mem, Operand, R8, R16};
 
     #[test]
     fn test_undefined_symbols() {

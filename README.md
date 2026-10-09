@@ -16,7 +16,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix�
 |---|---|---|
 | `rust_boy::rust_boy` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
 | `rust_boy::gb_std` | routines | Ready-made routines (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
-| `rust_boy::gb_asm` | assembly | `Asm`: one method per instruction or directive, printed in RGBDS syntax. |
+| `rust_boy::gb_asm` | assembly | `Asm`: one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
 
 Each level is built on the one below it, and you can mix them.
 
@@ -97,6 +97,30 @@ fn main() {
 }
 ```
 
+Operands are typed: registers are `R8` (`a` … `l`, and `[hl]`) and `R16`, memory is `Mem` (`[bc]`, `[de]`,
+`[hli]`, `[hld]`, `[c]`, `[address]`), and values are `Expr`s: numbers, symbols (`hardware.inc` names, labels,
+variables, `DEF` constants) and arithmetic on them. A Rust integer or a symbol name can be passed directly:
+
+```rust
+use rust_boy::gb_asm::{Asm, Expr, Mem, R8, R16};
+
+let mut asm = Asm::new();
+asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4) // ld hl, _OAMRAM+4
+    .ld(R8::A, Mem::addr("wScore")) // ld a, [wScore]
+    .add(R8::B) // add a, b
+    .cp("BRICK_LEFT") // cp a, BRICK_LEFT
+    .ld(Mem::Hli, R8::A) // ld [hli], a
+    .ld(R8::A, Expr::sym("LCDCF_ON") | "LCDCF_BGON") // ld a, LCDCF_ON | LCDCF_BGON
+    .sub(-1); // sub a, -1
+let text: Vec<String> = asm.get_main_instrs().iter().map(|i| i.to_string()).collect();
+assert_eq!(text[0], "ld hl, _OAMRAM+4");
+assert_eq!(text[5], "ld a, LCDCF_ON | LCDCF_BGON");
+```
+
+A value is never a destination, so `asm.ld(1, 2)` does not compile. Operands that make no SM83 instruction
+(`ld [hl], [hl]`, `ld b, [de]`), a value that does not fit (`ld a, 300`) and a register written as text
+(`asm.cp("b")`) panic with a clear message. `Expr::raw("…")` passes any other RGBDS expression through as it is.
+
 ## Building a ROM
 
 ```bash
@@ -130,12 +154,13 @@ Open them in any Game Boy emulator.
 
 - **Instructions** (`gb_asm`): the whole SM83 instruction set, printed in RGBDS syntax: loads (`ld`, `ldh`,
   `ld [hli]`/`[hld]`, `ld hl, sp + e`, `push`/`pop`), the 8-bit ALU on `a` (`add`, `adc`, `sub`, `sbc`, `and`, `xor`,
-  `or`, `cp`, one source each: `asm.cp(Operand::Imm(144))` prints `cp a, 144`), `inc`/`dec`, `add hl, r16`,
+  `or`, `cp`, one source each: `asm.cp(144)` prints `cp a, 144`), `inc`/`dec`, `add hl, r16`,
   `add sp, e`, the rotates and shifts (`rlca`… and `rlc`, `rrc`, `rl`, `rr`, `sla`, `sra`, `swap`, `srl` on a register
   or `[hl]`, `R8`), `bit`/`set`/`res`, `daa`, `cpl`, `scf`/`ccf`, `nop`, `halt`, `stop`, `di`/`ei`, `jp`, `jr`,
   `call` and `ret` (all four also with the `z`/`nz`/`c`/`nc` conditions), `jp hl`, `reti`, `rst`, plus the directives
-  `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines. An operand the
-  instruction does not take (`bit 8`, `rst $09`, `and a, hl`) panics with a clear message.
+  `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines. Operands are
+  typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
+  `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`).
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM variables
   (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and builtin routines that are included only when
@@ -149,7 +174,7 @@ Open them in any Game Boy emulator.
 
 ```text
 src/
-├── gb_asm/        # Instr/Operand types, the Asm builder, unique labels, RGBDS output
+├── gb_asm/        # Instr, typed operands and Expr, the Asm builder, unique labels, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
 ├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)

@@ -686,7 +686,7 @@ impl RustBoy {
     /// // Raw instructions
     /// gb.add_to_main_loop(asm.into_instrs());
     ///
-    /// // If statement (counter managed automatically)
+    /// // If statement (its labels come from the program's allocator, `labels()`)
     /// gb.add_to_main_loop(If::eq(left, right, body));
     /// ```
     pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {

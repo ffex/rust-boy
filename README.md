@@ -122,6 +122,37 @@ A value is never a destination, so `asm.ld(1, 2)` does not compile. Operands tha
 (`ld [hl], [hl]`, `ld b, [de]`), a value that does not fit (`ld a, 300`) and a register written as text
 (`asm.cp("b")`) panic with a clear message. `Expr::raw("…")` passes any other RGBDS expression through as it is.
 
+### Labels and jumps
+
+Generated code never clashes with itself: every label it makes up (the `.end_if_N` of an `If`, key checks, sprite
+moves, the animation dispatcher, …) is a local label numbered by one `LabelAllocator` per program, which the program's
+`Asm` owns: `asm.labels()`, or `gb.labels()` in a `RustBoy` program (pass it to the `gb_std` snippets that take one,
+such as `check_key`). Control flow (`If`, `IfConst`, `IfA`, `IfCall`) is `Emittable`: `asm.emit_code(code)` emits it
+with the program's labels, and `RustBoy` does the same in `init`, `add_to_main_loop` and `define_function_from`.
+
+Write `jr` where you expect a short jump: when the program is printed (`Asm::to_asm`, `RustBoy::build`), each `jr`
+that cannot be shown to reach its target becomes a `jp`: more than 127 bytes ahead or 128 behind, in another section,
+a symbol the program does not define as a label, or behind a line whose size only RGBDS knows (a raw line, an
+`INCLUDE`). A `jr` that grows can push another one out of range, so this is repeated until every `jr` left reaches
+its target. A `jp` is never shortened.
+
+```rust
+use rust_boy::gb_asm::{Asm, Block};
+use rust_boy::gb_std::flow::IfA;
+
+let mut body = Block::new();
+for _ in 0..200 {
+    body.nop();
+}
+let mut asm = Asm::new();
+asm.section("Code", "ROM0").label("Main").ld_a(1);
+asm.emit_code(IfA::eq(1, body)); // its labels come from asm.labels()
+asm.jr("Main"); // more than 200 bytes back
+let text = asm.to_asm();
+assert!(text.contains(".end_if_0:"));
+assert!(text.contains("jp Main"), "printed as a jp");
+```
+
 ## Building a ROM
 
 ```bash
@@ -161,7 +192,8 @@ Open them in any Game Boy emulator.
   `call` and `ret` (all four also with the `z`/`nz`/`c`/`nc` conditions), `jp hl`, `reti`, `rst`, plus the directives
   `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines. Operands are
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
-  `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`).
+  `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
+  and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM variables
   (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and builtin routines that are included only when
@@ -175,7 +207,7 @@ Open them in any Game Boy emulator.
 
 ```text
 src/
-├── gb_asm/        # Instr, typed operands and Expr, the Asm and Block builders, unique labels, RGBDS output
+├── gb_asm/        # Instr, typed operands and Expr, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
 ├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)

@@ -44,13 +44,14 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 206 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 219 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ✅ assembles; the 16×16 player moves as one block and stops at its limits (it collapsed at screen edges, fixed — [B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
-| Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
+| Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); since Phase 2 (`refactor-p2-labels`) every label generated code makes up (`If`, snippets, the OAM clear loop, the animation dispatcher) comes from one `LabelAllocator` per program, owned by its `Asm`, so it is unique in the whole program by construction; unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
+| Jumps | ✅ since Phase 2 (`refactor-p2-labels`) `Asm::to_asm` turns each `jr` that does not reach its target (out of -128..=127, another section, a symbol the program does not define, or behind a line of unknown size) into a `jp`, iterating until every `jr` left is in range (`gb_asm::relax`); no generated program has a `jr` out of range (tested, and checked with RGBDS: opcode and target of every jump) |
 | Start-up code | ✅ `gb.init()` code runs after the variables (animation variables included) and palettes are set, so what it sets survives (was overwritten, fixed — [B11](#b11)); the OAM is always cleared and `rOBP1` is set (fixed — [B28](#b28)); unit tests run the start-up code on `gb_asm::test_cpu` |
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
@@ -65,7 +66,7 @@ rgbfix -v -p 0xFF main.gb
 
 | Layer | Path | LOC | Role |
 |---|---|---|---|
-| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`) | ~2300 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), fluent `Asm` builder for whole programs and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
+| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`) | ~2700 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), fluent `Asm` builder for whole programs and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef` |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
 | **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`, and since `refactor-p2-typed-operands` `rLCDC`, `rLY`, `rP1`, the palettes, `LCDCF_*`, `P1F_*`), `oam_offset`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
@@ -74,28 +75,42 @@ rgbfix -v -p 0xFF main.gb
 ### Key concepts
 
 - **`Emittable`** (`src/gb_asm/block.rs` since `refactor-p2-typed-operands-2b`, re-exported by `gb_std::flow`;
-  it was in `src/gb_std/flow/emittable.rs`): `fn emit(&mut self, counter: &mut usize) -> Vec<Instr>`.
-  Implemented by `Block`, `Vec<Instr>`, `Vec<Vec<Instr>>`, `Vec<Box<dyn Emittable>>`, `Call`, `Op`, `If*`.
-  Everything that goes into the main loop / init / user functions is an `Emittable`.
-- **`If` labels**: each `If*` takes a unique number from `RustBoy::if_counter` and emits *local*
-  labels `.end_if_N`, `.else_N`, `.then_N`. RGBDS local labels are scoped to the **last global label**,
-  so any global label emitted inside an `If` body breaks it ([B7](#b7)).
-- **Snippet labels** (since [B7](#b7)): code that can be emitted more than once (key checks, limited
-  moves) uses *local* labels numbered by a `gb_asm::LabelAllocator` (`.check_left_2`,
-  `.sprite0_left_limit_0_end`). Clones of an allocator share one counter: `RustBoy` owns one and shares
-  it with its `SpriteManager`; `gb_std` callers pass one to `check_key` and `Sprite::move_*_limit`
-  (in a `RustBoy` program, `gb.labels()`).
-  Global labels are left to routines and functions (`Memcopy`, `Anim_{sprite}_{animation}`, user
-  functions) and to the once-per-program `EntryPoint`, `ClearOam`, `Main`, `AnimEnd`.
-- **Chunks** (`src/gb_asm/asm.rs:15-35`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
-  Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`src/gb_asm/codegen.rs:18-28`).
+  it was in `src/gb_std/flow/emittable.rs`): `fn emit(&mut self, labels: &LabelAllocator) -> Vec<Instr>`
+  (since `refactor-p2-labels`; it took the `If` counter, `counter: &mut usize`). Implemented by `Block`,
+  `Vec<Instr>`, `Vec<Vec<Instr>>`, `Vec<Box<dyn Emittable>>`, `Call`, `Op`, `If*`. Everything that goes into the
+  main loop / init / user functions is an `Emittable`; `Asm::emit_code(code)` emits one with the program's labels.
+- **Generated labels** (since `refactor-p2-labels`; [B7](#b7) started it for the snippets): every label that
+  generated code makes up is *local* and comes from one `gb_asm::LabelAllocator` per program. The program's
+  `Asm` owns it (`Asm::labels`; `RustBoy::labels` is the one of its `raw()` `Asm`, shared with its
+  `SpriteManager`); clones share one counter. Each allocation takes the next number `N` and names its labels
+  `.{stem}_N` (`LabelAllocator::local`, or `locals` for several stems with one number), so they are unique in
+  the whole program by construction: `If*` → `.end_if_N`, `.else_N`, `.then_N`; `check_key` →
+  `.check_left_N`, `.check_left_end_N`; a limited move → `.sprite0_left_limit_store_N`, `…_end_N`;
+  `clear_objects_screen` → `.clear_oam_N` (was the global `ClearOam`); the animation dispatcher →
+  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`. The code
+  `build()` generates (start-up, dispatcher) uses a fork of the allocator (`LabelAllocator::fork`: the same
+  sequence from where it is, not shared), so two builds print the same labels ([B14](#b14)). Local labels never
+  change the RGBDS scope, so they can go inside an `If` body. Global labels are left to routines and functions,
+  emitted once (`Memcopy`, `Anim_{sprite}_{animation}`, user functions; their own fixed local labels, such as
+  `.copy`, live in their scope), and to `EntryPoint` and `Main`. `gb_std` callers pass the allocator to
+  `check_key`, `Sprite::move_*_limit` and `clear_objects_screen` (`asm.labels()`, or `gb.labels()`).
+- **Jump relaxation** (since `refactor-p2-labels`, `src/gb_asm/relax.rs`): `Asm::to_asm` / `Asm::program`
+  print the chunks as one program, and each `jr` / `jr cc` that cannot be shown to reach its target becomes
+  `jp` / `jp cc`: the target must be a label of the program defined once (RGBDS scope rules), in the same
+  section, with only instructions of known size in between (`Instr::size`: every instruction, and `db` / `dw` /
+  `ds` / `INCBIN` written with plain numbers), at -128..=127 from the end of the `jr`. Otherwise (another
+  section, an external symbol, an address, a raw line with code, an `INCLUDE`, a string) it is a `jp`. It
+  starts with every `jr` short and grows the ones out of range until none is (a grown jump can push another
+  out of range), which gives the fewest `jp`. A `jp` is never shortened, so the `jp`s of [B9](#b9) stay.
+- **Chunks** (`src/gb_asm/asm.rs:23-43`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
+  Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`CHUNK_ORDER`, `src/gb_asm/codegen.rs:7-17`).
 - **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and
   snippet is built in a `Block` (a checked list of instructions with the same builder methods as `Asm`, expanded from
   one `instruction_builders!` in `src/gb_asm/builders.rs`) and returned with `into_instrs()`. They used to create a
   fresh `Asm`, emit into its default `Chunk::Main` and return `asm.get_main_instrs()` (the scratch-`Asm` idiom). An
   `Asm` is now only a whole program: `RustBoy`'s `raw()` chunks and `build_asm`, and the `gb_asm` example programs.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:496-680`, `build` prints what `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:486-676`, `build` prints what `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -127,7 +142,7 @@ rgbfix -v -p 0xFF main.gb
 The problems are where each layer reaches across the line:
 
 1. **The assembler layer knows the game layout.** `Chunk::{Init, MainLoop, Tiles, Tilemap, Data}`
-   (`src/gb_asm/asm.rs:15-35`) and their fixed order (`src/gb_asm/codegen.rs:18-28`) are engine
+   (`src/gb_asm/asm.rs:23-43`) and their fixed order (`src/gb_asm/codegen.rs:7-17`) are engine
    concepts. `include_hardware()` hardcodes `hardware.inc` (`src/gb_asm/builders.rs:480-484`, since `refactor-p2-typed-operands-2b`).
 2. **L1 is not really typed.** Registers and expressions are passed as strings:
    `ld_hli_label("a")`, `inc_label("de")`, `or_label("a", "c")` (`src/gb_asm/asm.rs:162-167, 382-384, 356-359`).
@@ -189,8 +204,22 @@ The problems are where each layer reaches across the line:
 5. **No layer owns labels.** `gb_std` hardcodes global labels (`Left`, `CheckLeft`, `ClearOam`), `rust_boy`
    builds them with `format!`, `If` uses local labels — they collide and break scoping ([B7](#b7), [B25](#b25)).
    *Since B7/B25:* the asm layer has a `LabelAllocator` that numbers the local labels of snippets, and
-   animation labels are namespaced by sprite; `If` still numbers its labels with its own counter and
-   `ClearOam` stays a fixed global label (emitted once). Making the allocator the only source is Phase 2.
+   animation labels are namespaced by sprite. *Since Phase 2 (`refactor-p2-labels`):* the allocator is the only
+   source of generated labels, owned by the program's `Asm`: `Emittable::emit` takes it instead of the `If`
+   counter, `If*`, the snippets, the OAM clear loop (`ClearOam` was global) and the animation dispatcher
+   (`AnimEnd` was global) take their labels from it, each `.{stem}_N` with one number per allocation (see
+   [Key concepts](#key-concepts)). The asm layer also turns each `jr` out of range into a `jp` when it prints the
+   program (`gb_asm::relax`). **Breaking**, with the migration:
+
+   | Before | After |
+   |---|---|
+   | `impl Emittable for X { fn emit(&mut self, counter: &mut usize) … }` | `fn emit(&mut self, labels: &LabelAllocator)`; take labels with `labels.local(stem)` / `labels.locals([..])` |
+   | `let mut counter = 0; asm.emit_all(code.emit(&mut counter))` | `asm.emit_code(code)` (or `code.emit(asm.labels())`) |
+   | `gb.next_if_counter()` | `gb.next_label_counter()` or `gb.labels().local(stem)` |
+   | `clear_objects_screen()` | `clear_objects_screen(asm.labels())` (after a global label: its loop label is local) |
+   | `LabelAllocator::new()` beside an `Asm` program | `asm.labels()`: the program's allocator |
+   | labels `ClearOam`, `AnimEnd`, `.check_left_N_end`, `.spriteK_left_limit_N_store` / `_end` | `.clear_oam_N`, `.anim_end_N`, `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the dispatcher's: `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`) |
+   | a `jr` that rgbasm rejected as out of range, or to an external symbol | assembles: printed as `jp` |
 
 ### Proposed target
 
@@ -324,8 +353,9 @@ Only label names change in the examples' asm: all 6 ROMs are byte-identical. Tes
 twice, on two buttons, from two `InputManager`s, inside an `If`/else and a function, for single and composite
 sprites, and `gb_std` snippets mixed into a `RustBoy` program; `gb_asm::label_check`
 checks a whole program's labels with the RGBDS scope rules (it agrees with rgbasm/rgblink on all examples).
-`If` keeps its own counter (`.end_if_N`), and `ClearOam`/`AnimEnd` stay global (emitted once, outside user
-code); one allocator for everything is the Phase 2 item.
+`If` kept its own counter (`.end_if_N`), and `ClearOam`/`AnimEnd` stayed global (emitted once, outside user
+code); *since Phase 2 (`refactor-p2-labels`)* one allocator gives every generated label, these included, and the
+suffixed labels end with their number (`.check_left_end_N`, `.sprite0_left_limit_store_N`).
 
 #### B8
 **`move_*_limit` only stops on exact equality.** `cp limit` + `jp z` (`src/rust_boy/sprites.rs:490, 510,
@@ -356,7 +386,9 @@ after each call (with 16 animations on one sprite these two were out of range to
 chosen: it needs `jp hl`, which the typed ISA did not have yet (it does since Phase 2, `refactor-p2-isa`). Test
 `test_animation_dispatch_jumps_stay_in_range` checks every `jr` with `gb_asm::label_check::jr_range_errors`, which
 knows instruction sizes and agrees with RGBDS 1.0.4 (127 and -128 accepted, 128 and -129 rejected); with the old
-code it reports the offsets 285, 144 and 135 that rgblink reports for the same program.
+code it reports the offsets 285, 144 and 135 that rgblink reports for the same program. *Since Phase 2
+(`refactor-p2-labels`)* any `jr` out of range becomes a `jp` when the program is printed (`gb_asm::relax`); these
+`jp`s stay as they are (a `jp` is never shortened), so the examples' ROMs did not change.
 
 #### B10
 **`AnimationType::PingPong` and `::Once` are ignored.** `Animation.anim_type`
@@ -391,7 +423,7 @@ writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init
 **Status: fixed** on `refactor-p1-init-order`. The start-up code now runs: LCD off → VRAM copies → OAM clear and
 initial sprites → default palettes → every variable set to its initial value (the animation variables
 `wFrameCounter`, `wAnim_{sprite}_Current` and `wAnim_{sprite}_Dir` are created first, so they are included) →
-**user `init()` code** (then the `raw()` code written to `Chunk::Init`, [B15](#b15)) → LCD on (`src/rust_boy/rustboy.rs:522-569`, put together at `:665-668`). So `gb.init(lives.set(3))`,
+**user `init()` code** (then the `raw()` code written to `Chunk::Init`, [B15](#b15)) → LCD on (`src/rust_boy/rustboy.rs:515-560`, put together at `:661-664`). So `gb.init(lives.set(3))`,
 `gb.init(gb.sprites.enable_animation(coin, 0))`, a `PingPong` direction or a palette set in `init()` survive.
 One difference from the fix above: **`rLCDC` stays after the user code**, because turning the LCD on ends
 the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
@@ -408,7 +440,7 @@ pair loaded with an address, and every register, pair and flag after a stub):
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
 animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:769-1010`,
-`src/rust_boy/animations.rs:86-203`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:574-588`). OAM is only accessible in
+`src/rust_boy/animations.rs:86-203`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:565-584`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -642,7 +674,7 @@ the main loop, `raw()` code or the animation functions, then from those function
 order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
 nothing. To emit one that only code `build()` does not
 see calls (asm appended to its output, an `INCLUDE`d file), **`RustBoy::keep_function(name)`**
-(`src/rust_boy/rustboy.rs:324`; it takes a builtin name too, and panics on an unknown name, like `call`);
+(`src/rust_boy/rustboy.rs:314`; it takes a builtin name too, and panics on an unknown name, like `call`);
 `use_function(BuiltinFunction)` still forces a builtin. `used_user_functions` is gone. A function is found by
 its label, so `define_function(name, body)` panics if `body` does not define the label `name` (a body labelled
 otherwise used to be emitted anyway and could be called by its own label); another global label in a body (a
@@ -693,7 +725,7 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:621-655`): the global
+Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:617-651`): the global
 symbols of every other chunk and of the animation functions are looked up (`symbols`,
 `src/rust_boy/functions.rs:399`, reads the text of each instruction line by line as RGBDS does, with
 `gb_asm::labels::code_lines`: `;` and `/* … */` comments (also over several lines) and the contents of strings
@@ -708,11 +740,11 @@ the code `build()` generates is not taken for a builtin (for a user function it 
 before, each of these also emitted the builtin `Delay:`, which rgbasm rejected as defined twice. Names defined
 where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path depends on the assembler's
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
-**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:359`): a function of that name is never emitted,
+**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:349`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
 (`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
-and the Data chunk are emitted (`:657-677`), so `UpdateKeys` called without `add_inputs` links too. The scan is
+and the Data chunk are emitted (`:653-673`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
 global label of a body → its function, kept up to date as functions are defined) find a function, also for
 `call` and `keep_function`; each name is handled once (a 100-function, 5000-line program builds in about 6 ms in
@@ -771,7 +803,7 @@ before LCD on. Tests: `test_oam_is_cleared_without_sprites`, `test_oam_is_cleare
 #### B29
 **Documentation errors in code and README.**
 - `src/gb_std/inputs.rs:54` says `wCurKeys` "0 = pressed"; after the `xor` it is 1 = pressed.
-- `RustBoy::call` doc example `gb.add_to_main_loop(gb.call("X"))` (`src/rust_boy/rustboy.rs:202, 206` at `4601a5c`; the corrected example is at `:448-454`) does
+- `RustBoy::call` doc example `gb.add_to_main_loop(gb.call("X"))` (`src/rust_boy/rustboy.rs:202, 206` at `4601a5c`; the corrected example is at `:435-445`) does
   not compile (E0499, two `&mut` borrows); hidden by ```` ```ignore ````.
 - README: "Type-safe … compile-time guarantees" (`:12`) is an overclaim; "Complete support for … instruction
   set" (`:19`) — `push/pop/halt/di/ei/reti/sbc/bit/set/res/rl/rr/sla/sra/cpl/nop/scf/ccf/rst` are missing;

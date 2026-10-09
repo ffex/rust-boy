@@ -217,6 +217,10 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 ### Tooling
 - [ ] One-command build & run: produce `.gb` + `.sym` + `.map` via rgbasm/rgblink/rgbfix and open an emulator
 - [ ] Snapshot tests of generated asm (after [B13](CONTEXT.md#b13))
+- [ ] The committed example asm files (`examples/fosdem/main.asm`, `examples/coin-anim/main.asm`,
+      `examples/unbricked/generated/`, `generated-std/`, `unbricked-rustboy/`) are old snapshots from `main`: they still
+      show `ClearOam`, `AnimEnd` and other code the library no longer generates. Regenerate them (and keep them in sync,
+      e.g. as the snapshot tests above), delete them, or mark them as old snapshots — the maintainer's choice
 - [ ] Headless-emulator tests (run the ROM, assert on memory/registers)
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")

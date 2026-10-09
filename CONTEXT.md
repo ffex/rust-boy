@@ -44,14 +44,14 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 219 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 222 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
 | bin `fosdem` | ✅ assembles; the 16×16 player moves as one block and stops at its limits (it collapsed at screen edges, fixed — [B6](#b6)) |
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
 | Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); since Phase 2 (`refactor-p2-labels`) every label generated code makes up (`If`, snippets, the OAM clear loop, the animation dispatcher) comes from one `LabelAllocator` per program, owned by its `Asm`, so it is unique in the whole program by construction; unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
-| Jumps | ✅ since Phase 2 (`refactor-p2-labels`) `Asm::to_asm` turns each `jr` that does not reach its target (out of -128..=127, another section, a symbol the program does not define, or behind a line of unknown size) into a `jp`, iterating until every `jr` left is in range (`gb_asm::relax`); no generated program has a `jr` out of range (tested, and checked with RGBDS: opcode and target of every jump) |
+| Jumps | ✅ since Phase 2 (`refactor-p2-labels`) `Asm::to_asm` turns each `jr` that does not reach its target (out of -128..=127, another section, a symbol the program does not define, or behind a line of unknown size) into a `jp`, iterating until every `jr` left is in range, and writes `@`-relative targets again so they keep their instruction (`gb_asm::relax`). The `relax` test programs are assembled with RGBDS (`-Werror`) and every jump's opcode and landing address is checked in the ROM; the `RustBoy` test programs are checked with `jr_range_errors` (no `jr` out of range) and `assert_links` (linked with RGBDS under `RGBDS_LINK_CHECK`); the examples are assembled by CI |
 | Start-up code | ✅ `gb.init()` code runs after the variables (animation variables included) and palettes are set, so what it sets survives (was overwritten, fixed — [B11](#b11)); the OAM is always cleared and `rOBP1` is set (fixed — [B28](#b28)); unit tests run the start-up code on `gb_asm::test_cpu` |
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
@@ -99,9 +99,15 @@ rgbfix -v -p 0xFF main.gb
   `jp` / `jp cc`: the target must be a label of the program defined once (RGBDS scope rules), in the same
   section, with only instructions of known size in between (`Instr::size`: every instruction, and `db` / `dw` /
   `ds` / `INCBIN` written with plain numbers), at -128..=127 from the end of the `jr`. Otherwise (another
-  section, an external symbol, an address, a raw line with code, an `INCLUDE`, a string) it is a `jp`. It
-  starts with every `jr` short and grows the ones out of range until none is (a grown jump can push another
-  out of range), which gives the fewest `jp`. A `jp` is never shortened, so the `jp`s of [B9](#b9) stay.
+  section, an external symbol, an address, a raw line with code, an `INCLUDE`, a string, a symbol in `db` /
+  `dw`, which can be an `EQUS`) it is a `jp`. It starts with every `jr` short and grows the ones out of range
+  until none is (a grown jump can push another out of range), which gives the fewest `jp`. A `jp` is never
+  shortened, so the `jp`s of [B9](#b9) stay. A target written from `@` (`jr nz, @+4`, on a `jr`, `jp` or `call`)
+  is the instruction that many bytes from the jump: it is measured like a label and its offset is written again
+  for the relaxed code (a `jp` is one byte longer, so `jp nz, @+4` would land one byte early). If that
+  instruction cannot be found, or a jump target is another expression (`Label + 2`), no jump of the program is
+  changed (printed as written; rgbasm reports a `jr` out of range). Other uses of `@` (`ds $150 - @`, an operand
+  `ld hl, @ + 5`) are not adjusted.
 - **Chunks** (`src/gb_asm/asm.rs:23-43`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
   Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`CHUNK_ORDER`, `src/gb_asm/codegen.rs:7-17`).
 - **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and
@@ -219,7 +225,9 @@ The problems are where each layer reaches across the line:
    | `clear_objects_screen()` | `clear_objects_screen(asm.labels())` (after a global label: its loop label is local) |
    | `LabelAllocator::new()` beside an `Asm` program | `asm.labels()`: the program's allocator |
    | labels `ClearOam`, `AnimEnd`, `.check_left_N_end`, `.spriteK_left_limit_N_store` / `_end` | `.clear_oam_N`, `.anim_end_N`, `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the dispatcher's: `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`) |
-   | a `jr` that rgbasm rejected as out of range, or to an external symbol | assembles: printed as `jp` |
+   | a `jr` that rgbasm rejected as out of range, or to an external symbol | assembles: printed as `jp`, one byte longer and one cycle slower when taken (4 M-cycles, `jr` 3): code of fixed size or timing (an `rst` vector, a raw fixed-size section, a cycle-counted loop) must write jumps that reach |
+   | `LabelAllocator::local("check left")` (any text) | panics: a stem is made of identifier characters (letters, digits, `_`, `#`, `$`, `@`); `locals` also panics on a stem given twice |
+   | a jump target `@+n` with a jump that grows in between | its offset is written again (`jp nz, @+5`); a target `Label + 2` (any other expression) leaves the whole program unrelaxed |
 
 ### Proposed target
 

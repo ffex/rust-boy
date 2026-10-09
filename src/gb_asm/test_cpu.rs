@@ -149,6 +149,17 @@ fn parse_number(text: &str) -> Option<u16> {
     })
 }
 
+/// The byte an 8-bit operand written `text` assembles to, from its value `number` as
+/// [`parse_number`] reads it: 0 to 255, or -128 to -1 (`-1` is `$FF`); anything else
+/// panics (rgbasm would truncate it with a warning)
+fn imm8(text: &str, number: u16) -> u8 {
+    match number {
+        0..=0xFF => number as u8,
+        0xFF80..=0xFFFF if text.trim().starts_with('-') => number as u8,
+        _ => panic!("{} is not an 8-bit value (-128 to 255)", text),
+    }
+}
+
 /// The one name of the memory byte `symbol`: `_OAMRAM+4+1` is `_OAMRAM+5`
 fn normalize(symbol: &str) -> String {
     Pointer::parse(symbol).name()
@@ -625,10 +636,14 @@ impl TestCpu {
                 let name = self.address(reg).name();
                 self.read(&Operand::AddrDef(name))
             }
-            Operand::Label(symbol) => *self
-                .consts
-                .get(symbol)
-                .unwrap_or_else(|| panic!("constant {} not set in the test CPU", symbol)),
+            Operand::Label(symbol) => match parse_number(symbol.trim()) {
+                // A number written as text (`ld a, -1`): an 8-bit operand, -128 to 255
+                Some(number) => imm8(symbol, number),
+                None => *self
+                    .consts
+                    .get(symbol)
+                    .unwrap_or_else(|| panic!("constant {} not set in the test CPU", symbol)),
+            },
             other => panic!("operand {} not supported by the test CPU", other),
         }
     }
@@ -952,6 +967,29 @@ mod tests {
         // Text that starts like a number but is not one panics
         for text in ["$98G0", "$9800 + X", "70000", "0b102", "$", "1+2"] {
             let result = std::panic::catch_unwind(|| parse_number(text));
+            assert!(result.is_err(), "{} should panic", text);
+        }
+    }
+
+    #[test]
+    fn test_an_8_bit_operand_written_as_a_number() {
+        // `ld a, -1` (a number written as text, as `Var::set` emits it) is the byte $FF
+        for (text, value) in [("-1", 0xFF), ("-128", 0x80), ("$10", 0x10), ("255", 0xFF)] {
+            let mut cpu = TestCpu::default();
+            cpu.run(&[Instr::Ld {
+                dst: Operand::Reg(Register::A),
+                src: Operand::Label(text.to_string()),
+            }]);
+            assert_eq!(cpu.a, value, "{}", text);
+        }
+        // Out of the 8-bit range: rgbasm would truncate it, the model panics
+        for text in ["256", "-129", "$FFFF"] {
+            let result = std::panic::catch_unwind(|| {
+                TestCpu::default().run(&[Instr::Ld {
+                    dst: Operand::Reg(Register::A),
+                    src: Operand::Label(text.to_string()),
+                }])
+            });
             assert!(result.is_err(), "{} should panic", text);
         }
     }

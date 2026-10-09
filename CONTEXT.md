@@ -392,6 +392,21 @@ example (`ld a, 0x42; ret`) is dead code. *Fix:* merge all chunks; document plac
 **`Var::set`/`Var::get` ignore 16-bit variables.** `set(value: i8)` (`src/rust_boy/variables.rs:31`) writes
 only the low byte; `get` (`:43`) loads one byte; `var_type` (`:26`) is never read. (Setting a `u8` > 127
 works via `200u8 as i8`, but the API is awkward.) *Fix:* typed setters per `VarType`, 16-bit load/store.
+**Status: fixed** on `refactor-p1-api-safety`. `Var::set(value: impl Into<i32>)` takes any integer (`set(-1)`,
+`set(200u8)`, `set(1000)`) and panics, naming the variable, if the value is out of the range of its type
+(`VarType::range`: `U8` 0 to 255, `I8` -128 to 127, `U16` 0 to 65535, `I16` -32768 to 32767). An 8-bit variable gets the
+same code as before (`ld a, -1` / `ld [name], a`); a 16-bit one both bytes, little-endian as `dw` stores them (`name`,
+then `name+1`). `Var::get` loads an 8-bit variable into `a` as before, a 16-bit one into `hl` (`a` holds the high byte;
+the `If` comparisons, which test `a`, are for 8-bit variables). `set` and the start-up initialisation share one function,
+so an `I16` initial value is written as two plain bytes (`ld a, 255`, was `ld a, -1`: the same byte). `Var::var_type()`
+reads the type, and `Var` is exported. `create_in_section` panics on an initial value out of its type's range (it was
+cut to a byte or a word). Breaking: `set` took an `i8`, so a call with an `i8` *variable* still compiles (`impl
+Into<i32>`), but `u8var.set(200u8 as i8)` (the old workaround, -56) now panics: write `set(200)`. Tests run the code
+on `gb_asm::test_cpu`, which now reads an 8-bit operand written as a number (`ld a, -1`), -128 to 255 like rgbasm, and
+panics outside: `test_set_writes_both_bytes_of_a_16_bit_variable`, `test_get_loads_a_16_bit_variable_into_hl` (both
+failed before: the high byte was not written, `hl` not loaded), `test_set_panics_on_a_value_out_of_the_type_range`,
+`test_set_takes_any_value_of_the_variable_type`, `test_set_and_get_an_8_bit_variable`,
+`test_initial_values_of_every_type`, `test_an_initial_value_must_fit_the_type`. No example changes.
 
 #### B17
 **No bounds or overflow checks.**

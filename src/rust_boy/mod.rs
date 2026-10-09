@@ -19,4 +19,4 @@ pub use memory::MemoryRegion;
 pub use rustboy::RustBoy;
 pub use sprites::{ANIM_DISABLED, CompositeSpriteId, SpriteId, SpriteManager, SpriteSize};
 pub use tiles::{TileId, TileManager, TileSource};
-pub use variables::{VarId, VarType, VariableManager};
+pub use variables::{Var, VarId, VarType, VariableManager};

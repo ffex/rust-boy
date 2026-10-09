@@ -2015,6 +2015,40 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_data_reserves_space_only() {
+        // The Data chunk is in WRAM0: labels and `ds n` are fine there
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wScore", 0);
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).label("wBuffer").ds("16");
+        });
+        assert_links(&gb.build());
+
+        // Code or initialised data there is rejected when the program is built (rgbasm
+        // rejected it: "cannot contain code or data")
+        for write in [
+            |asm: &mut Asm| {
+                asm.ld_a(1);
+            },
+            |asm: &mut Asm| {
+                asm.db("1, 2");
+            },
+            |asm: &mut Asm| {
+                asm.ds_fill("4", "0");
+            },
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(|asm| write(asm.chunk(Chunk::Data)));
+            let message = crate::rust_boy::panic_message(|| gb.build());
+            assert!(
+                message.contains("in the WRAM0 section \"Raw Data\": a RAM section holds no code"),
+                "{}",
+                message
+            );
+        }
+    }
+
+    #[test]
     fn test_raw_init_and_main_loop_code_runs() {
         // B15: raw code was unreachable unless labelled and called; code written to the
         // Init and MainLoop chunks now runs, like `init()` and `add_to_main_loop` code

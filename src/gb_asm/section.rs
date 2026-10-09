@@ -577,3 +577,6 @@ fn only_reserves(line: &str) -> bool {
         word.is_empty() || ["db", "dw", "dl", "ds"].contains(&word.to_ascii_lowercase().as_str())
     })
 }
+
+#[cfg(test)]
+mod tests;

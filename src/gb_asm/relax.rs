@@ -14,6 +14,13 @@
 //!   ([`Instr::size`]) between them, and the offset from the end of the `jr` must be in
 //!   -128..=127.
 //!
+//! **Sections.** Each typed [`Instr::Section`](super::Section) starts a new block, whatever
+//! its memory type, address, bank or kind: rgblink places every section on its own, so a
+//! label in another one is out of reach of a `jr` even when it follows in the text, also
+//! the next piece of a `FRAGMENT` of the same name (other files can add pieces in between)
+//! or a section after a RAM section. A raw line that opens a section is a line of code of
+//! unknown size, which ends a block too.
+//!
 //! Every other `jr` becomes a `jp` with the same condition and target: a target out of
 //! range, in another section, unknown to the program (an external symbol, a label of an
 //! `INCLUDE`d file or of a raw line, an anonymous label `:+`), defined twice, an absolute
@@ -390,7 +397,7 @@ fn relax(program: &[Instr]) -> Option<(Vec<bool>, Vec<(usize, usize)>, Vec<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::label_check::{jr_range_errors, rgbds_rom};
+    use crate::gb_asm::label_check::{jr_range_errors, rgbds_rom, rgbds_rom_and_symbols};
     use crate::gb_asm::{Asm, Chunk, Condition, R8, Section};
 
     /// A program in one ROM0 section at $0000, starting with the global label `Main`,
@@ -1149,5 +1156,96 @@ mod tests {
             asm.jr("@+$04").nop().nop().ret();
         });
         assert_eq!(jr_range_errors(&asm.program()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_typed_sections_split_the_relaxation() {
+        // Each typed SECTION starts a new block, whatever its kind: a jr to a label of
+        // another section is a jp, even a FRAGMENT of the same name (rgblink places each
+        // piece on its own) or a section that follows in the text with only a RAM section
+        // in between. Inside a section, a jr that reaches stays a jr.
+        let mut asm = Asm::new();
+        asm.section(Section::rom0("Code").at(0x0000))
+            .label("Main")
+            .jr(".near");
+        nops(&mut asm, 10);
+        asm.label(".near")
+            .jr("Far")
+            .jr("Second")
+            .jr("AfterRam")
+            .ret()
+            .section(Section::wram0("Vars"))
+            .label("wByte")
+            .ds("1")
+            .section(Section::rom0("Next"))
+            .label("AfterRam")
+            .jr("AfterRam")
+            .section(Section::rom0("Pieces").fragment())
+            .label("First")
+            .jr("First")
+            .section(Section::rom0("Pieces").fragment())
+            .label("Second")
+            .jr("First")
+            .section(Section::romx("Far").at(0x4000).bank(1).align(8))
+            .label("Far")
+            .jr("Far")
+            .jr("Main");
+        let program = asm.program();
+        let kinds: Vec<(&str, &str)> = program
+            .iter()
+            .filter_map(|instr| match instr {
+                Instr::Jr {
+                    target: JumpTarget::Label(target),
+                } => Some(("jr", target.as_str())),
+                Instr::Jp {
+                    target: JumpTarget::Label(target),
+                } => Some(("jp", target.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("jr", ".near"),
+                ("jp", "Far"),
+                ("jp", "Second"),
+                ("jp", "AfterRam"),
+                ("jr", "AfterRam"),
+                ("jr", "First"),
+                ("jp", "First"),
+                ("jr", "Far"),
+                ("jp", "Main"),
+            ]
+        );
+        assert_eq!(jr_range_errors(&program), Vec::<String>::new());
+
+        // RGBDS assembles it, and each jump lands on its label wherever rgblink put it
+        let Some((rom, symbols)) = rgbds_rom_and_symbols(&asm.to_asm()) else {
+            return;
+        };
+        let at = |label: &str| {
+            let (bank, address) = symbols[label];
+            match bank {
+                0 => usize::from(address),
+                bank => bank as usize * 0x4000 + usize::from(address - 0x4000),
+            }
+        };
+        let address = |label: &str| symbols[label].1.to_le_bytes();
+        let jp = |label: &str| [vec![0xC3], address(label).to_vec()].concat();
+        // Main: jr .near (over 10 nops), then three jp
+        assert_eq!(rom[at("Main")..at("Main") + 2], [0x18, 10]);
+        let near = at("Main.near");
+        assert_eq!(rom[near..near + 3], jp("Far")[..]);
+        assert_eq!(rom[near + 3..near + 6], jp("Second")[..]);
+        assert_eq!(rom[near + 6..near + 9], jp("AfterRam")[..]);
+        // A jr to itself is `18 FE`
+        assert_eq!(rom[at("AfterRam")..at("AfterRam") + 2], [0x18, 0xFE]);
+        assert_eq!(rom[at("First")..at("First") + 2], [0x18, 0xFE]);
+        assert_eq!(rom[at("Second")..at("Second") + 3], jp("First")[..]);
+        assert_eq!(symbols["Far"], (1, 0x4000));
+        assert_eq!(
+            rom[at("Far")..at("Far") + 5],
+            [0x18, 0xFE, 0xC3, 0x00, 0x00]
+        );
     }
 }

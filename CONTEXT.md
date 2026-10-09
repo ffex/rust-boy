@@ -87,7 +87,7 @@ rgbfix -v -p 0xFF main.gb
   (in a `RustBoy` program, `gb.labels()`).
   Global labels are left to routines and functions (`Memcopy`, `Anim_{sprite}_{animation}`, user
   functions) and to the once-per-program `EntryPoint`, `ClearOam`, `Main`, `AnimEnd`.
-- **Chunks** (`src/gb_asm/asm.rs:10-30`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
+- **Chunks** (`src/gb_asm/asm.rs:15-35`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
   Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`src/gb_asm/codegen.rs:18-28`).
 - **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and
   snippet is built in a `Block` (a checked list of instructions with the same builder methods as `Asm`, expanded from
@@ -127,8 +127,8 @@ rgbfix -v -p 0xFF main.gb
 The problems are where each layer reaches across the line:
 
 1. **The assembler layer knows the game layout.** `Chunk::{Init, MainLoop, Tiles, Tilemap, Data}`
-   (`src/gb_asm/asm.rs:10-30`) and their fixed order (`src/gb_asm/codegen.rs:18-28`) are engine
-   concepts. `include_hardware()` hardcodes `hardware.inc` (`src/gb_asm/asm.rs:640-644`).
+   (`src/gb_asm/asm.rs:15-35`) and their fixed order (`src/gb_asm/codegen.rs:18-28`) are engine
+   concepts. `include_hardware()` hardcodes `hardware.inc` (`src/gb_asm/builders.rs:480-484`, since `refactor-p2-typed-operands-2b`).
 2. **L1 is not really typed.** Registers and expressions are passed as strings:
    `ld_hli_label("a")`, `inc_label("de")`, `or_label("a", "c")` (`src/gb_asm/asm.rs:162-167, 382-384, 356-359`).
    `Operand::Imm`/`Label` are accepted as destinations, so `ld 1, 2` or `inc 5` compile in Rust and

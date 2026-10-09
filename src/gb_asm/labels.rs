@@ -64,9 +64,185 @@ pub fn is_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '#' | '$' | '@'))
 }
 
+/// The code of each line of `text`, as RGBDS reads it, one entry per line of `text`
+///
+/// Comments are removed: from a `;` to the end of the line, and `/* … */` block comments,
+/// which can span lines. The contents of strings (`"…"`, `'…'`, within one line) are
+/// blanked. So neither is taken for code. A line that ends with `\` (outside a string
+/// and a comment) continues on the next one: the joined code is the entry of its first
+/// line, and the entries of the lines it took are empty, so entries keep their line
+/// numbers. (Triple-quoted and raw strings, and macros, are not handled.)
+pub(crate) fn code_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut in_block = false;
+    // Index of the line a `\` continues, if any
+    let mut continued: Option<usize> = None;
+    for line in text.lines() {
+        let chars: Vec<char> = line.chars().collect();
+        let mut code = String::with_capacity(line.len());
+        let mut quote = None;
+        let mut escaped = false;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            let next = chars.get(i + 1).copied();
+            if in_block {
+                if c == '*' && next == Some('/') {
+                    in_block = false;
+                    code.push(' ');
+                    i += 1;
+                }
+            } else if let Some(q) = quote {
+                let closes = !escaped && c == q;
+                escaped = !escaped && c == '\\';
+                if closes {
+                    quote = None;
+                    code.push(c);
+                } else {
+                    code.push(' ');
+                }
+            } else if c == ';' {
+                break;
+            } else if c == '/' && next == Some('*') {
+                in_block = true;
+                i += 1;
+            } else {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                }
+                code.push(c);
+            }
+            i += 1;
+        }
+        // A `\` at the end of the code continues the line
+        let continues = !in_block && quote.is_none() && code.trim_end().ends_with('\\');
+        if continues {
+            let end = code.trim_end().len() - 1;
+            code.truncate(end);
+        }
+        match continued {
+            Some(first) => {
+                lines[first] = format!("{} {}", lines[first], code);
+                lines.push(String::new());
+            }
+            None => lines.push(code),
+        }
+        continued = match (continues, continued) {
+            (true, Some(first)) => Some(first),
+            (true, None) => Some(lines.len() - 1),
+            (false, _) => None,
+        };
+    }
+    lines
+}
+
+/// The global label a line of code (from [`code_lines`]) starts with (`Name:`,
+/// `Name::`, `Name: db 1`), and the rest of the line
+pub(crate) fn split_label(code: &str) -> (Option<&str>, &str) {
+    match code.split_once(':') {
+        Some((label, rest)) if is_identifier(label.trim()) => {
+            (Some(label.trim()), rest.trim_start_matches(':'))
+        }
+        _ => (None, code),
+    }
+}
+
+/// The symbol a line of code (from [`code_lines`], after its label) defines with `DEF`
+/// (or `REDEF`), and the expression that follows the operator: `DEF Name EQU 5`,
+/// `DEF Name = 5`, `DEF Name += 1`, `DEF Name EQUS "…"`, `DEF Name RB 2`, … (keywords
+/// without case). `None` for any other line. The text of an `EQUS` string is not read
+/// (strings are blanked), so a symbol it names is not seen.
+pub(crate) fn split_def(code: &str) -> Option<(&str, &str)> {
+    let code = code.trim_start();
+    let (keyword, rest) = code.split_once(char::is_whitespace)?;
+    if !keyword.eq_ignore_ascii_case("DEF") && !keyword.eq_ignore_ascii_case("REDEF") {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || "_#$@".contains(c)))
+        .unwrap_or(rest.len());
+    let (name, after) = rest.split_at(end);
+    if !is_identifier(name) {
+        return None;
+    }
+    // The operator: a word (EQU, EQUS, RB, RW, RL) or symbols (=, +=, <<=, …)
+    let after = after.trim_start();
+    let value = match after.split_once(char::is_whitespace) {
+        Some((word, value)) if word.chars().all(|c| c.is_ascii_alphabetic()) => value,
+        _ => after.trim_start_matches(|c: char| "=+-*/%&|^<>!".contains(c)),
+    };
+    let value = if after.chars().all(|c| c.is_ascii_alphabetic()) {
+        "" // `DEF Name RB`: no expression
+    } else {
+        value
+    };
+    Some((name, value))
+}
+
+/// The global symbols a piece of code (from [`code_lines`]) names: each word made of
+/// symbol characters that is an identifier. `Scope.local` names `Scope`; a local label
+/// (`.name`) and a number (`$FF`, `10`) name none. Mnemonics and registers are words too.
+pub(crate) fn symbol_words(code: &str) -> impl Iterator<Item = &str> {
+    code.split(|c: char| !(c.is_ascii_alphanumeric() || "_#$@.".contains(c)))
+        .map(|word| word.split('.').next().unwrap_or_default())
+        .filter(|word| is_identifier(word))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The code of a single line
+    fn code_of_line(line: &str) -> String {
+        let lines = code_lines(line);
+        assert_eq!(lines.len(), 1);
+        lines[0].clone()
+    }
+
+    #[test]
+    fn test_code_lines() {
+        assert_eq!(code_of_line("ld a, 1 ; one"), "ld a, 1 ");
+        assert_eq!(
+            code_of_line("db \"a;b\", LOW(Delay)"),
+            "db \"   \", LOW(Delay)"
+        );
+        assert_eq!(
+            code_of_line("db 'x', \"say \\\"hi\\\"\" ; c"),
+            "db ' ', \"          \" "
+        );
+        // Block comments, on one line and over several; a `/*` in a string is not one
+        assert_eq!(code_of_line("R: /* call Delay */ ret"), "R:   ret");
+        assert_eq!(
+            code_lines("ld a, 1 /* call A\ncall B ; still\n*/ call C\ndb \"/*\", D"),
+            ["ld a, 1 ", "", "  call C", "db \"  \", D"]
+        );
+        // DEF in all its forms; other lines define nothing
+        for (code, def) in [
+            ("DEF Delay EQU 5", Some(("Delay", "5"))),
+            ("  def Delay = Base + 1", Some(("Delay", " Base + 1"))),
+            ("DEF Delay=5", Some(("Delay", "5"))),
+            ("REDEF Count += Step", Some(("Count", " Step"))),
+            ("DEF wKeys RB 2", Some(("wKeys", "2"))),
+            ("DEF wKeys RB", Some(("wKeys", ""))),
+            ("DEF Text EQUS \"   \"", Some(("Text", "\"   \""))),
+            ("ld a, DEF", None),
+            ("DEFINE x", None),
+        ] {
+            assert_eq!(split_def(code), def, "{}", code);
+        }
+        // A `\` at the end of a line continues it; the entries keep their line numbers
+        assert_eq!(
+            code_lines("db 1, \\ ; first\n   Next, \\\n   Last\nret"),
+            ["db 1,     Next,     Last", "", "", "ret"]
+        );
+        assert_eq!(split_label("Name:: db 1"), (Some("Name"), " db 1"));
+        assert_eq!(split_label(".local: ret"), (None, ".local: ret"));
+        let words: Vec<&str> = symbol_words("jp nz, .end_if_0").collect();
+        assert_eq!(words, ["jp", "nz"]);
+        let words: Vec<&str> = symbol_words("ld hl, Scope.local + $10 + 2").collect();
+        assert_eq!(words, ["ld", "hl", "Scope"]);
+    }
 
     #[test]
     fn test_local_labels_are_unique_and_shared_by_clones() {

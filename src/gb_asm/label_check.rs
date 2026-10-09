@@ -7,7 +7,14 @@
 //! - a local label (`.name`) belongs to the current scope, so its full name is
 //!   `Scope.name`; a reference to `.name` is looked up in the scope where it appears.
 //!
-//! Only the targets of `jp`, `jr` and `call` are checked as references.
+//! [`label_errors`] checks the labels: each defined once, and the targets of `jp`, `jr`
+//! and `call` defined, local ones in their scope.
+//!
+//! [`undefined_symbols`] checks every other global symbol the code uses (variables,
+//! constants, `ld hl, Name`, `dw Name`, …): each must be defined in the program (a
+//! label, `name: db`, `DEF`) or by `hardware.inc`. Comments (`;`, `/* … */`) and strings
+//! are skipped. [`assert_links`] runs both checks, and with `RGBDS_LINK_CHECK` set also
+//! assembles and links the program with rgbasm and rgblink.
 //!
 //! [`jr_range_errors`] also checks that each `jr` reaches its target, which rgbasm
 //! requires: it works on instructions, whose sizes it knows.
@@ -108,6 +115,209 @@ pub(crate) fn assert_labels_ok(asm: &str) {
         errors.join("\n"),
         asm
     );
+}
+
+/// Words of an operand that are not symbols, compared without case: registers,
+/// conditions, and every function and section keyword of the RGBDS 1.0.4 lexer
+/// (`src/asm/lexer.cpp`, the `OP_*` and section tokens)
+const KEYWORDS: &[&str] = &[
+    // Registers and conditions
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "h",
+    "l",
+    "af",
+    "bc",
+    "de",
+    "hl",
+    "sp",
+    "hli",
+    "hld",
+    "z",
+    "nz",
+    "nc",
+    // Symbols and sections
+    "def",
+    "bank",
+    "sizeof",
+    "startof",
+    "fragment",
+    "align",
+    "isconst",
+    "high",
+    "low",
+    // Fixed-point math
+    "round",
+    "ceil",
+    "floor",
+    "div",
+    "mul",
+    "fmod",
+    "pow",
+    "log",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "atan2",
+    "bitwidth",
+    "tzcount",
+    // Strings and charmaps
+    "bytelen",
+    "readfile",
+    "strbyte",
+    "strcat",
+    "strchar",
+    "strcmp",
+    "strfind",
+    "strfmt",
+    "strin",
+    "strlen",
+    "strlwr",
+    "strrfind",
+    "strrin",
+    "strrpl",
+    "strslice",
+    "strsub",
+    "strupr",
+    "charcmp",
+    "charlen",
+    "charsize",
+    "charsub",
+    "charval",
+    "incharmap",
+    "revchar",
+];
+
+/// Every global symbol that `asm` uses but neither defines (a label, `name: db`, `DEF`)
+/// nor gets from `hardware.inc`: what rgbasm or rgblink would report as undefined (the
+/// targets of `jp` / `jr` / `call`, variables, constants, `ld hl, Name`, `dw Name`, …).
+/// Comments and strings are skipped; local labels are left to [`label_errors`].
+pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
+    use super::labels::{code_lines, split_def, split_label, symbol_words};
+
+    let hardware_code = code_lines(include_str!("../../include/hardware.inc"));
+    let hardware: BTreeSet<&str> = hardware_code
+        .iter()
+        .filter_map(|code| split_def(code))
+        .map(|(name, _)| name)
+        .collect();
+    let mut defined = BTreeSet::new();
+    let mut used = Vec::new();
+    for (index, code) in code_lines(asm).iter().enumerate() {
+        let (label, rest) = split_label(code);
+        if let Some(label) = label {
+            defined.insert(label.to_string());
+        }
+        // Skip a local label definition (`.loop:`), then split the mnemonic or directive
+        // from its operands
+        let mut rest = rest.trim();
+        if rest.starts_with('.') {
+            if let Some((_, after)) = rest.split_once(':') {
+                rest = after.trim_start_matches(':').trim();
+            }
+        }
+        // `DEF NAME EQU value`, in every form
+        if let Some((name, value)) = split_def(rest) {
+            defined.insert(name.to_string());
+            used.extend(
+                symbol_words(value)
+                    .filter(|word| !KEYWORDS.contains(&word.to_ascii_lowercase().as_str()))
+                    .map(|word| (index + 1, word.to_string())),
+            );
+            continue;
+        }
+        let (first, operands) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        if matches!(
+            first.to_ascii_uppercase().as_str(),
+            "" | "SECTION" | "INCLUDE" | "INCBIN"
+        ) {
+            continue;
+        }
+        for word in symbol_words(operands) {
+            if !KEYWORDS.contains(&word.to_ascii_lowercase().as_str()) {
+                used.push((index + 1, word.to_string()));
+            }
+        }
+    }
+    used.into_iter()
+        .filter(|(_, word)| !defined.contains(word) && !hardware.contains(word.as_str()))
+        .map(|(number, word)| format!("line {}: {} is not defined", number, word))
+        .collect()
+}
+
+/// Panics, with the assembly, unless `asm` would assemble and link as far as its symbols
+/// go: no [`label_errors`] and no [`undefined_symbols`]
+///
+/// With the environment variable `RGBDS_LINK_CHECK` set (and `rgbasm` / `rgblink` on the
+/// `PATH`), it also assembles and links `asm` with RGBDS, `include/` on the include path.
+pub(crate) fn assert_links(asm: &str) {
+    assert_links_with(asm, &[]);
+}
+
+/// [`assert_links`] for a program that `INCLUDE`s other files: `files` are their
+/// (name, text). The checks read them after the program; RGBDS gets them next to it.
+pub(crate) fn assert_links_with(asm: &str, files: &[(&str, &str)]) {
+    let mut all = asm.to_string();
+    for (_, text) in files {
+        all.push('\n');
+        all.push_str(text);
+    }
+    let mut errors = label_errors(&all);
+    errors.extend(undefined_symbols(&all));
+    assert!(
+        errors.is_empty(),
+        "link errors:\n{}\n\nin:\n{}",
+        errors.join("\n"),
+        all
+    );
+    if std::env::var_os("RGBDS_LINK_CHECK").is_some() {
+        rgbds_link(asm, files);
+    }
+}
+
+/// Assemble and link `asm`, with `files` next to it, with RGBDS in a new temporary
+/// directory; panics with the RGBDS errors if it fails
+fn rgbds_link(asm: &str, files: &[(&str, &str)]) {
+    use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "rust-boy-link-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).expect("cannot create a temporary directory");
+    std::fs::write(dir.join("main.asm"), asm).expect("cannot write main.asm");
+    for (name, text) in files {
+        std::fs::write(dir.join(name), text).expect("cannot write an included file");
+    }
+    let include = concat!(env!("CARGO_MANIFEST_DIR"), "/include");
+    let steps: [(&str, Vec<&str>); 2] = [
+        ("rgbasm", vec!["-I", include, "-o", "main.o", "main.asm"]),
+        ("rgblink", vec!["-o", "main.gb", "main.o"]),
+    ];
+    for (tool, args) in steps {
+        let output = Command::new(tool)
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|error| panic!("cannot run {}: {}", tool, error));
+        assert!(
+            output.status.success(),
+            "{} failed:\n{}\n\nin:\n{}",
+            tool,
+            String::from_utf8_lossy(&output.stderr),
+            asm
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// [`assert_labels_ok`] for a piece of generated code, placed after a global label as
@@ -230,6 +440,36 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::gb_asm::Condition;
+
+    #[test]
+    fn test_undefined_symbols() {
+        let asm = "
+            INCLUDE \"hardware.inc\"
+            DEF LIMIT EQU 10 + OTHER
+            SECTION \"Code\", ROM0
+            Main:
+            .loop: ld a, [wCount] ; call NotUsed
+            ld [rLCDC], a
+            cp LIMIT
+            jr nz, .loop
+            call Helper
+            ld hl, Table + 2
+            db \"call Quoted\", LOW(Main)
+            ld a, [hli]
+            dw MUL(3.0, 2.0), STRLEN(\"abc\"), SIZEOF(\"Code\"), BANK(Main), high(Main)
+            jp Main
+            SECTION \"Variables\", WRAM0
+            wCount: db
+        ";
+        assert_eq!(
+            undefined_symbols(asm),
+            [
+                "line 3: OTHER is not defined",
+                "line 10: Helper is not defined",
+                "line 11: Table is not defined",
+            ]
+        );
+    }
 
     #[test]
     fn test_accepts_local_labels_in_their_scope() {

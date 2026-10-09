@@ -86,13 +86,21 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20)
 - [x] `basic_usage` + README header without `ds $150 - @, 0` — [B21](CONTEXT.md#b21) (branch `refactor-p0-readme`)
 - [ ] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22)
-- [ ] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
-- [ ] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
+- [x] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
+      (branch `refactor-p1-builtins`: one `GetTileByPixel` in the library, in `gb_std`: `hl` = tile address and
+      `a` = tile index; `rust_boy` emits the `gb_std` routines. Pending, the maintainer's choice: the raw-`gb_asm`
+      example `src/bin/unbricked.rs` keeps its own copies, and its `GetTileByPixel` keeps the old contract, `hl` only)
+- [x] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
+      (branch `refactor-p1-builtins`: only used functions, transitively; `RustBoy::keep_function` forces one)
 - [x] Animation labels not namespaced by sprite; validate label names — [B25](CONTEXT.md#b25)
       (branch `refactor-p1-unique-labels`: `Anim_{sprite}_{animation}`; sprite, composite and animation names
       must be unique RGBDS identifiers)
-- [ ] Builtins reached through `Call`/`IfCall`/`define_function_from` not auto-included → link error — [B26](CONTEXT.md#b26)
-- [ ] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
+- [x] Builtins reached through `Call`/`IfCall`/`define_function_from` not auto-included → link error — [B26](CONTEXT.md#b26)
+      (branch `refactor-p1-builtins`: `build()` emits every function the generated code refers to, once, with its
+      variables; `RustBoy::external_symbol` declares a routine defined outside, e.g. in an `INCLUDE`d file)
+- [x] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
+      (branch `refactor-p1-builtins`: `RustBoy` skips empty raw blobs, `from_file(path, 0)` panics; `gb_std`'s
+      `cp_in_memory` documents a non-empty blob)
 - [x] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
       (branch `refactor-p1-init-order`: `rOBP1` = `%11100100` like `rBGP`/`rOBP0`; the OAM is always cleared)
 - [x] Code-level doc errors (`inputs.rs` pressed bit, `RustBoy::call` example E0499, unsigned `If` note) — [B29](CONTEXT.md#b29) (branch `refactor-p0-readme`)
@@ -116,8 +124,10 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       (`gb_asm::LabelAllocator` exists since [B7](CONTEXT.md#b7) for snippet labels; `If` still has its own counter;
       since [B9](CONTEXT.md#b9) tests can check that each `jr` reaches its target with `gb_asm::label_check::jr_range_errors`)
 - [ ] Routines as values: `Routine { name, body, deps, clobbers }` → automatic inclusion of dependencies
-      (fixes B26) and a documented calling convention (which registers each routine clobbers)
-- [ ] One source of truth for builtins: `rust_boy` reuses `gb_std`; remove the duplicate `gb_std::graphics::sprites::SpriteManager`
+      and a documented calling convention (which registers each routine clobbers). ([B26](CONTEXT.md#b26) is fixed
+      since by scanning the generated code for function names in `build()`; `GetTileByPixel` documents its registers since [B23](CONTEXT.md#b23))
+- [ ] One source of truth for builtins: `rust_boy` reuses `gb_std` (done for the routines since [B23](CONTEXT.md#b23):
+      only `Delay` is `rust_boy`'s own); remove the duplicate `gb_std::graphics::sprites::SpriteManager`
 - [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s
 - [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
       as `RustBoy::set_sprite_size`

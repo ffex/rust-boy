@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::gb_asm::Instr;
+use crate::gb_std::graphics::utility::cp_in_memory;
 
 /// Unique identifier for a tile or tileset
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -35,7 +36,17 @@ impl TileSource {
 
     /// Create from a .2bpp file path with tile count
     /// Each tile is 16 bytes in 2bpp format
+    ///
+    /// # Panics
+    /// If `tile_count` is 0: the whole file is included and copied to VRAM, so its tile
+    /// count must be the number of tiles in it (VRAM is allocated from the count).
     pub fn from_file(path: &str, tile_count: usize) -> Self {
+        assert!(
+            tile_count > 0,
+            "TileSource::from_file(\"{}\", 0): a tile file needs a tile count of at least 1 \
+             (the number of 16-byte tiles in the file)",
+            path
+        );
         TileSource::File(path.to_string(), tile_count)
     }
 
@@ -53,6 +64,18 @@ impl TileSource {
             TileSource::Raw(tiles) => tiles.len(),
             TileSource::File(_, tile_count) => *tile_count,
         }
+    }
+}
+
+/// Panics if `source` is a file with a tile count of 0 (also built directly as
+/// `TileSource::File`): a file is copied whole, so its count cannot say "empty" (B27)
+fn check_source(name: &str, source: &TileSource) {
+    if let TileSource::File(path, 0) = source {
+        panic!(
+            "tiles \"{}\": the file \"{}\" has a tile count of 0; a tile file needs a tile \
+             count of at least 1 (the number of 16-byte tiles in the file)",
+            name, path
+        );
     }
 }
 
@@ -90,6 +113,7 @@ impl TileManager {
 
     /// Add sprite tiles (allocated from $8000)
     pub fn add_sprite(&mut self, name: &str, source: TileSource) -> TileId {
+        check_source(name, &source);
         let size = source.size_bytes();
         let addr = self.next_sprite_addr;
         self.next_sprite_addr += size;
@@ -113,6 +137,7 @@ impl TileManager {
 
     /// Add background tiles (allocated from $9000)
     pub fn add_background(&mut self, name: &str, source: TileSource) -> TileId {
+        check_source(name, &source);
         let size = source.size_bytes();
         let addr = self.next_bg_addr;
         self.next_bg_addr += size;
@@ -249,21 +274,19 @@ impl TileManager {
         asm.get_main_instrs()
     }
 
-    /// Generate memcopy calls for the Main chunk
+    /// Generate the code that copies every blob to VRAM, in creation order
+    ///
+    /// An empty blob of raw data (`from_raw` with no tiles, a tilemap with no rows) is not
+    /// copied: `Memcopy` copies at least one byte, so a length of 0 would copy 64 KiB
+    /// (B27). Its labels are still emitted, with nothing between them. A file is always
+    /// copied, whole (`from_file` rejects a tile count of 0; how many bytes the file holds
+    /// is only known when it is assembled).
     pub(crate) fn generate_memcopy_calls(&self) -> Vec<Instr> {
-        use crate::gb_asm::Asm;
-
-        let mut asm = Asm::new();
-
-        for tile in self.tiles.values() {
-            let dest_addr = format!("${:04X}", tile.vram_address);
-            asm.ld_de_label(&tile.name)
-                .ld_hl_label(&dest_addr)
-                .ld_bc_label(&format!("{}End - {}", tile.name, tile.name))
-                .call("Memcopy");
-        }
-
-        asm.get_main_instrs()
+        self.tiles
+            .values()
+            .filter(|tile| !matches!(&tile.source, TileSource::Raw(data) if data.is_empty()))
+            .flat_map(|tile| cp_in_memory(&tile.name, &format!("${:04X}", tile.vram_address)))
+            .collect()
     }
 
     /// Check if any tiles have been added

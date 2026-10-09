@@ -89,11 +89,10 @@ fn main() {
             .move_y_var("wBallMomentumY"),
     );
 
-    // Bounce on top
+    // Bounce on top. GetTileByPixel returns the tile index in a, which IsWallTile tests
     asm.label("BounceOnTop");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, 1));
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnTopEnd");
     asm.ld_a(1);
@@ -104,7 +103,6 @@ fn main() {
     asm.label("BounceOnRight");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(-1, 0));
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
     asm.ld_a_label("-1");
@@ -115,7 +113,6 @@ fn main() {
     asm.label("BounceOnLeft");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(1, 0));
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
     asm.ld_a_label("1");
@@ -126,7 +123,6 @@ fn main() {
     asm.label("BounceOnBottom");
     asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, -1));
     asm.call("GetTileByPixel");
-    asm.ld_a_addr_reg(rust_boy::gb_asm::Register::HL);
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
     asm.ld_a_label("-1");

@@ -128,10 +128,14 @@ Open them in any Game Boy emulator.
 
 ## What is supported
 
-- **Instructions** (`gb_asm`): `ld`, `ldh`, `add`, `adc`, `sub`, `inc`, `dec`, `and`, `or`, `xor`, `cp`, `srl`,
-  `swap`, `daa`, `jp`, `jr`, `ret` (also with the `z`/`nz`/`c`/`nc` conditions), `call`, plus the directives
-  `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines.
-  Not yet: `push`/`pop`, `halt`, `di`/`ei`, `reti`, `sbc`, `bit`/`set`/`res`, rotates and most shifts, `cpl`, …
+- **Instructions** (`gb_asm`): the whole SM83 instruction set, printed in RGBDS syntax: loads (`ld`, `ldh`,
+  `ld [hli]`/`[hld]`, `ld hl, sp + e`, `push`/`pop`), the 8-bit ALU on `a` (`add`, `adc`, `sub`, `sbc`, `and`, `xor`,
+  `or`, `cp`, one source each: `asm.cp(Operand::Imm(144))` prints `cp a, 144`), `inc`/`dec`, `add hl, r16`,
+  `add sp, e`, the rotates and shifts (`rlca`… and `rlc`, `rrc`, `rl`, `rr`, `sla`, `sra`, `swap`, `srl` on a register
+  or `[hl]`, `R8`), `bit`/`set`/`res`, `daa`, `cpl`, `scf`/`ccf`, `nop`, `halt`, `stop`, `di`/`ei`, `jp`, `jr`,
+  `call` and `ret` (all four also with the `z`/`nz`/`c`/`nc` conditions), `jp hl`, `reti`, `rst`, plus the directives
+  `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines. An operand the
+  instruction does not take (`bit 8`, `rst $09`, `and a, hl`) panics with a clear message.
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM variables
   (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and builtin routines that are included only when

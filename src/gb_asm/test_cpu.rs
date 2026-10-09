@@ -14,7 +14,14 @@
 //! A pair loaded with a number (`ld bc, $9800`, or a symbol of [`TestCpu::consts16`]),
 //! or whose two registers are known, holds that number, as on the CPU: `ld h, 0` then
 //! `ld l, a` sets `hl`. 16-bit `add hl, rr`, `inc rr` and `dec rr` work on numbers and on
-//! a symbol plus a number (the carry of `add hl` is then unknown). Jumps and
+//! a symbol plus a number (the carry of `add hl` is then unknown). The 8-bit ALU
+//! instructions, the rotates and shifts, `swap`, `bit` / `set` / `res` (on a register or
+//! `[hl]`), `cpl`, `scf`, `ccf` and `nop` are modelled exactly for the Z and C flags; N
+//! and H are not modelled, so `daa` is not either. `push` and `pop` share one stack with
+//! `call` and `ret`, as on the CPU: a pushed pair can be popped into another pair (`push
+//! hl` / `pop de`), with what the model knows of it, but a `ret` to a pushed value or a
+//! `pop` of a return address panics. `halt`, `stop`, `di`, `ei`, `reti`, `rst`, `jp hl`,
+//! `add sp`, `ld hl, sp + e` and `add hl, sp` are not modelled. Jumps and
 //! calls go to labels in the same instruction list, and
 //! execution ends when it runs past the last instruction or on a `ret` with no `call`
 //! to return to (so a routine can be run on its own, or a test can put its routines
@@ -29,7 +36,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Condition, Instr, JumpTarget, Operand, Register};
+use super::{Condition, Instr, JumpTarget, Operand, R16Stack, Register};
 
 /// The address held by a register pair: a symbol plus an offset in bytes, or a number
 /// (an empty symbol, the number in `offset`)
@@ -225,6 +232,25 @@ pub(crate) enum Event {
     Call(String),
 }
 
+/// What `call` and `push` put on the stack of [`TestCpu::run`]
+#[derive(Debug)]
+enum StackEntry {
+    /// The instruction a `ret` goes back to
+    Return(usize),
+    /// A register pair pushed with `push`
+    Pair(Saved),
+}
+
+/// The two bytes `push` saves (high, then low), which of their bits the model does not
+/// know (`unknown`, a mask per byte), and the symbolic address the pair held, if any (its
+/// bytes are then unknown)
+#[derive(Debug)]
+struct Saved {
+    bytes: [u8; 2],
+    unknown: [u8; 2],
+    pointer: Option<Pointer>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct TestCpu {
     pub a: u8,
@@ -303,12 +329,14 @@ impl TestCpu {
 
         let mut pc = 0;
         let mut steps = 0;
-        // Return addresses of the calls in progress
+        // What `call` (the instruction to go back to) and `push` (a register pair) put
+        // on the stack, which they share as on the CPU
         let mut stack = Vec::new();
         while pc < instrs.len() {
             steps += 1;
             assert!(steps <= 100_000, "the code does not terminate");
-            match &instrs[pc] {
+            let instr = &instrs[pc];
+            match instr {
                 Instr::Ld { dst, src } => {
                     if let Operand::Reg(pair @ (Register::BC | Register::DE | Register::HL)) = dst {
                         self.load_pair(pair, src);
@@ -317,24 +345,23 @@ impl TestCpu {
                         self.write(dst, value);
                     }
                 }
-                Instr::Add {
-                    dst: Operand::Reg(Register::A),
-                    src,
-                } => {
-                    let value = self.read(src);
-                    let (result, carry) = self.get(&Register::A).overflowing_add(value);
-                    self.set(&Register::A, result);
-                    self.set_zero(result == 0);
-                    self.set_carry(carry);
+                Instr::Push { pair } => {
+                    let saved = self.save(*pair);
+                    stack.push(StackEntry::Pair(saved));
                 }
-                // `adc a, src` (both forms): a + src + carry
-                Instr::Adc {
-                    dst: Operand::Reg(Register::A),
-                    src,
-                }
-                | Instr::AdcA { operand: src } => {
+                Instr::Pop { pair } => match stack.pop() {
+                    Some(StackEntry::Pair(saved)) => self.restore(*pair, saved),
+                    Some(StackEntry::Return(_)) => panic!(
+                        "pop {}: popping the return address of a call is not supported by the \
+                         test CPU",
+                        pair
+                    ),
+                    None => panic!("pop {} with nothing pushed", pair),
+                },
+                // `add a, src` and `adc a, src` (a + src + carry)
+                Instr::Add { src } | Instr::Adc { src } => {
                     let value = self.read(src);
-                    let carry = self.holds(&Condition::C);
+                    let carry = matches!(instr, Instr::Adc { .. }) && self.holds(&Condition::C);
                     let sum =
                         u16::from(self.get(&Register::A)) + u16::from(value) + u16::from(carry);
                     let result = sum as u8;
@@ -342,13 +369,41 @@ impl TestCpu {
                     self.set_zero(result == 0);
                     self.set_carry(sum > 0xFF);
                 }
+                // `sub a, src`, `sbc a, src` (a - src - carry) and `cp a, src` (the flags
+                // of `sub`, `a` unchanged)
+                Instr::Sub { src } | Instr::Sbc { src } | Instr::Cp { src } => {
+                    let value = self.read(src);
+                    let borrow = matches!(instr, Instr::Sbc { .. }) && self.holds(&Condition::C);
+                    let difference =
+                        i16::from(self.get(&Register::A)) - i16::from(value) - i16::from(borrow);
+                    let result = difference as u8;
+                    self.set_zero(result == 0);
+                    self.set_carry(difference < 0);
+                    if !matches!(instr, Instr::Cp { .. }) {
+                        self.set(&Register::A, result);
+                    }
+                }
+                Instr::And { src } | Instr::Xor { src } | Instr::Or { src } => {
+                    let value = self.read(src);
+                    let a = self.get(&Register::A);
+                    let result = match instr {
+                        Instr::And { .. } => a & value,
+                        Instr::Xor { .. } => a ^ value,
+                        _ => a | value,
+                    };
+                    self.set(&Register::A, result);
+                    self.set_zero(result == 0);
+                    self.set_carry(false);
+                }
                 // `add hl, rr`: the Z flag is unchanged
-                Instr::Add {
-                    dst: Operand::Reg(Register::HL),
-                    src: Operand::Reg(pair @ (Register::BC | Register::DE | Register::HL)),
-                } => {
+                Instr::AddHl { src } => {
+                    let pair = Register::from(*src);
+                    assert!(
+                        pair != Register::SP,
+                        "add hl, sp: sp is not supported by the test CPU"
+                    );
                     let hl = self.address(&Register::HL);
-                    let other = self.address(pair);
+                    let other = self.address(&pair);
                     let result = match (hl.is_number(), other.is_number()) {
                         (true, true) => {
                             let (sum, carry) = hl.offset.overflowing_add(other.offset);
@@ -367,26 +422,13 @@ impl TestCpu {
                             base.moved(i32::from(number as i16))
                         }
                         (false, false) => panic!(
-                            "add hl, {:?}: the sum of {} and {} is not supported by the test CPU",
-                            pair,
+                            "add hl, {}: the sum of {} and {} is not supported by the test CPU",
+                            src,
                             hl.name(),
                             other.name()
                         ),
                     };
                     self.set_pair(&Register::HL, result);
-                }
-                Instr::Sub {
-                    dst: Operand::Reg(Register::A),
-                    src,
-                } => {
-                    let value = self.read(src);
-                    self.compare(value);
-                    let result = self.get(&Register::A).wrapping_sub(value);
-                    self.set(&Register::A, result);
-                }
-                Instr::Cp { operand } => {
-                    let value = self.read(operand);
-                    self.compare(value);
                 }
                 // 16-bit `inc rr` / `dec rr`: no flag changes
                 Instr::Inc {
@@ -415,29 +457,54 @@ impl TestCpu {
                     self.set(reg, value);
                     self.set_zero(value == 0); // carry unchanged
                 }
-                Instr::And { operand } => {
-                    let value = self.get(&Register::A) & self.read(operand);
-                    self.set(&Register::A, value);
-                    self.set_zero(value == 0);
-                    self.set_carry(false);
+                // The rotates on `a`: as `rlc a`, … but Z is always reset
+                Instr::Rlca | Instr::Rrca | Instr::Rla | Instr::Rra => {
+                    let value = self.get(&Register::A);
+                    let (result, carry) = self.rotate(instr, value);
+                    self.set(&Register::A, result);
+                    self.set_zero(false);
+                    self.set_carry(carry);
                 }
-                Instr::Or {
-                    dst: Operand::Reg(Register::A),
-                    src,
-                } => {
-                    let value = self.get(&Register::A) | self.read(src);
-                    self.set(&Register::A, value);
-                    self.set_zero(value == 0);
-                    self.set_carry(false);
+                Instr::Rlc { operand }
+                | Instr::Rrc { operand }
+                | Instr::Rl { operand }
+                | Instr::Rr { operand }
+                | Instr::Sla { operand }
+                | Instr::Sra { operand }
+                | Instr::Swap { operand }
+                | Instr::Srl { operand } => {
+                    let operand = Operand::from(*operand);
+                    let value = self.read(&operand);
+                    let (result, carry) = self.rotate(instr, value);
+                    self.write(&operand, result);
+                    self.set_zero(result == 0);
+                    self.set_carry(carry);
                 }
-                // `srl r`: shift right, bit 0 into the carry
-                Instr::Srl {
-                    operand: Operand::Reg(reg),
-                } => {
-                    let value = self.get(reg);
-                    self.set(reg, value >> 1);
-                    self.set_zero(value >> 1 == 0);
-                    self.set_carry(value & 1 == 1);
+                // `bit n, r8`: Z set when the bit is 0, the carry unchanged
+                Instr::Bit { bit, operand } => {
+                    let value = self.read(&Operand::from(*operand));
+                    self.set_zero(value & (1 << bit) == 0);
+                }
+                // `set` and `res`: no flag changes
+                Instr::Set { bit, operand } | Instr::Res { bit, operand } => {
+                    let operand = Operand::from(*operand);
+                    let value = self.read(&operand);
+                    let result = if matches!(instr, Instr::Set { .. }) {
+                        value | (1 << bit)
+                    } else {
+                        value & !(1 << bit)
+                    };
+                    self.write(&operand, result);
+                }
+                // `cpl`: Z and the carry unchanged
+                Instr::Cpl => {
+                    let value = !self.get(&Register::A);
+                    self.set(&Register::A, value);
+                }
+                Instr::Scf => self.set_carry(true),
+                Instr::Ccf => {
+                    let carry = self.holds(&Condition::C);
+                    self.set_carry(!carry);
                 }
                 Instr::Jp { target: t } | Instr::Jr { target: t } => {
                     pc = target(pc, t);
@@ -456,7 +523,13 @@ impl TestCpu {
                         continue;
                     }
                 }
-                Instr::Call { target: t } => {
+                Instr::Call { target: t } | Instr::CallCond { target: t, .. } => {
+                    if let Instr::CallCond { condition, .. } = instr {
+                        if !self.holds(condition) {
+                            pc += 1;
+                            continue;
+                        }
+                    }
                     if let JumpTarget::Label(name) = t {
                         self.trace.push(Event::Call(name.clone()));
                         if self.stubs.contains(name) {
@@ -469,32 +542,133 @@ impl TestCpu {
                             continue;
                         }
                     }
-                    stack.push(pc + 1);
+                    stack.push(StackEntry::Return(pc + 1));
                     pc = target(pc, t);
                     continue;
                 }
-                Instr::Ret => match stack.pop() {
-                    Some(back) => {
-                        pc = back;
-                        continue;
-                    }
-                    None => return,
-                },
-                Instr::RetCond { condition } => {
-                    if self.holds(condition) {
-                        match stack.pop() {
-                            Some(back) => {
-                                pc = back;
-                                continue;
-                            }
-                            None => return,
+                Instr::Ret | Instr::RetCond { .. } => {
+                    if let Instr::RetCond { condition } = instr {
+                        if !self.holds(condition) {
+                            pc += 1;
+                            continue;
                         }
                     }
+                    match stack.pop() {
+                        Some(StackEntry::Return(back)) => {
+                            pc = back;
+                            continue;
+                        }
+                        Some(StackEntry::Pair(_)) => panic!(
+                            "{}: returning to a value pushed with push is not supported by the \
+                             test CPU",
+                            instr
+                        ),
+                        None => return,
+                    }
                 }
-                Instr::Label { .. } | Instr::Comment { .. } => {}
+                Instr::Nop | Instr::Label { .. } | Instr::Comment { .. } => {}
                 other => panic!("instruction not supported by the test CPU: {}", other),
             }
             pc += 1;
+        }
+    }
+
+    /// The result and the carry of the rotate, shift or swap `instr` on `value`; reads the
+    /// carry only for the rotates through it (`rl`, `rr`, `rla`, `rra`)
+    fn rotate(&self, instr: &Instr, value: u8) -> (u8, bool) {
+        let bit7 = value & 0x80 != 0;
+        let bit0 = value & 1 != 0;
+        match instr {
+            Instr::Rlca | Instr::Rlc { .. } => (value.rotate_left(1), bit7),
+            Instr::Rrca | Instr::Rrc { .. } => (value.rotate_right(1), bit0),
+            Instr::Rla | Instr::Rl { .. } => {
+                let carry = u8::from(self.holds(&Condition::C));
+                ((value << 1) | carry, bit7)
+            }
+            Instr::Rra | Instr::Rr { .. } => {
+                let carry = u8::from(self.holds(&Condition::C));
+                ((value >> 1) | (carry << 7), bit0)
+            }
+            Instr::Sla { .. } => (value << 1, bit7),
+            Instr::Sra { .. } => ((value >> 1) | (value & 0x80), bit0),
+            Instr::Swap { .. } => (value.rotate_left(4), false),
+            Instr::Srl { .. } => (value >> 1, bit0),
+            other => unreachable!("{} is not a rotate", other),
+        }
+    }
+
+    /// What `push pair` puts on the stack
+    fn save(&mut self, pair: R16Stack) -> Saved {
+        let unknown_mask = |unknown: bool| if unknown { 0xFF } else { 0 };
+        match pair {
+            R16Stack::AF => {
+                let flags = (u8::from(self.zero) << 7) | (u8::from(self.carry) << 4);
+                // N and H are not modelled: they are always unknown
+                let mut unknown_flags = 0b0110_0000;
+                if self.unknown & UNKNOWN_ZERO != 0 {
+                    unknown_flags |= 0b1000_0000;
+                }
+                if self.unknown & UNKNOWN_CARRY != 0 {
+                    unknown_flags |= 0b0001_0000;
+                }
+                Saved {
+                    bytes: [self.a, flags],
+                    unknown: [unknown_mask(self.unknown & UNKNOWN_A != 0), unknown_flags],
+                    pointer: None,
+                }
+            }
+            _ => {
+                let reg = Register::from(pair);
+                let (high, low) = Self::halves(&reg);
+                let unknown_high = self.unknown & Self::unknown_bit(&high) != 0;
+                let unknown_low = self.unknown & Self::unknown_bit(&low) != 0;
+                Saved {
+                    bytes: [*self.reg(&high), *self.reg(&low)],
+                    unknown: [unknown_mask(unknown_high), unknown_mask(unknown_low)],
+                    pointer: self.pair(&reg).and_then(|pointer| pointer.clone()),
+                }
+            }
+        }
+    }
+
+    /// `pop pair` of what [`save`](Self::save) put on the stack (from the same pair or
+    /// another one)
+    fn restore(&mut self, pair: R16Stack, saved: Saved) {
+        match pair {
+            R16Stack::AF => {
+                let [a, flags] = saved.bytes;
+                let [unknown_a, unknown_flags] = saved.unknown;
+                self.set(&Register::A, a);
+                self.set_zero(flags & 0b1000_0000 != 0);
+                self.set_carry(flags & 0b0001_0000 != 0);
+                // An address pushed from another pair: its bytes are not known
+                let address = saved.pointer.is_some();
+                if unknown_a != 0 || address {
+                    self.unknown |= UNKNOWN_A;
+                }
+                if unknown_flags & 0b1000_0000 != 0 || address {
+                    self.unknown |= UNKNOWN_ZERO;
+                }
+                if unknown_flags & 0b0001_0000 != 0 || address {
+                    self.unknown |= UNKNOWN_CARRY;
+                }
+            }
+            _ => {
+                let reg = Register::from(pair);
+                if let Some(pointer) = saved.pointer {
+                    self.set_pair(&reg, pointer);
+                    return;
+                }
+                let (high, low) = Self::halves(&reg);
+                for ((half, byte), unknown) in
+                    [high, low].iter().zip(saved.bytes).zip(saved.unknown)
+                {
+                    self.set(half, byte);
+                    if unknown != 0 {
+                        self.unknown |= Self::unknown_bit(half);
+                    }
+                }
+            }
         }
     }
 
@@ -530,13 +704,6 @@ impl TestCpu {
     fn set_carry(&mut self, carry: bool) {
         self.carry = carry;
         self.unknown &= !UNKNOWN_CARRY;
-    }
-
-    /// Flags of `a - value`, as `cp` and `sub` set them
-    fn compare(&mut self, value: u8) {
-        let a = self.get(&Register::A);
-        self.set_zero(a == value);
-        self.set_carry(a < value);
     }
 
     /// The unknown bit of the 8-bit register `reg`
@@ -695,7 +862,7 @@ impl TestCpu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::Asm;
+    use crate::gb_asm::{Asm, R8, R16, R16Stack};
 
     #[test]
     fn test_call_and_ret() {
@@ -706,7 +873,7 @@ mod tests {
             .ret() // ends the run: no call to return to
             .ld_a(99)
             .label("Double")
-            .add(Operand::Reg(Register::A), Operand::Reg(Register::A))
+            .add(Operand::Reg(Register::A))
             .ret();
         let mut cpu = TestCpu {
             a: 3,
@@ -1018,14 +1185,14 @@ mod tests {
         ld_pair(&mut asm, Register::BC, "$0005");
         asm.ld_a(1)
             .cp_imm(1) // Z set, C clear
-            .add(reg(Register::HL), reg(Register::HL)) // $0000, carry
+            .add_hl(R16::HL) // $0000, carry
             .ld(reg(Register::D), reg(Register::H))
             .ld(reg(Register::E), reg(Register::L))
             .ld_a(0)
             .jp_cond(Condition::NC, "End")
             .jp_cond(Condition::NZ, "End")
             .ld_a(1) // carry set and Z unchanged
-            .add(reg(Register::HL), reg(Register::BC)) // $0005, no carry
+            .add_hl(R16::BC) // $0005, no carry
             .jp_cond(Condition::C, "End")
             .ld_b(2)
             .label("End");
@@ -1040,7 +1207,7 @@ mod tests {
             let mut asm = Asm::new();
             ld_pair(&mut asm, Register::HL, "33");
             ld_pair(&mut asm, Register::BC, "_SCRN0");
-            asm.add(reg(Register::HL), reg(Register::BC));
+            asm.add_hl(R16::BC);
             tail(&mut asm);
             asm
         };
@@ -1062,8 +1229,7 @@ mod tests {
         let mut asm = Asm::new();
         ld_pair(&mut asm, Register::HL, "_SCRN0+5");
         ld_pair(&mut asm, Register::DE, "$FFFF");
-        asm.add(reg(Register::HL), reg(Register::DE))
-            .ld_a_addr_reg(Register::HL);
+        asm.add_hl(R16::DE).ld_a_addr_reg(Register::HL);
         let mut cpu = TestCpu::default();
         cpu.mem.insert("_SCRN0+4".to_string(), 8);
         cpu.run(&asm.get_main_instrs());
@@ -1072,7 +1238,7 @@ mod tests {
         // Two symbols cannot be added
         let mut asm = Asm::new();
         ld_pair(&mut asm, Register::HL, "_SCRN0");
-        asm.add(reg(Register::HL), reg(Register::HL));
+        asm.add_hl(R16::HL);
         assert!(panics(&asm));
     }
 
@@ -1109,21 +1275,21 @@ mod tests {
     fn test_srl_adc_and_or() {
         let mut asm = Asm::new();
         asm.ld_a(0b11)
-            .srl(reg(Register::A)) // 1, carry
+            .srl(R8::A) // 1, carry
             .ld(reg(Register::B), reg(Register::A))
-            .srl(reg(Register::A)) // 0, carry, zero
+            .srl(R8::A) // 0, carry, zero
             .ld_a(0xFF)
-            .adc(reg(Register::A), Operand::Imm(0)) // 0xFF + 0 + 1 = 0, carry
+            .adc(Operand::Imm(0)) // 0xFF + 0 + 1 = 0, carry
             .ld(reg(Register::C), reg(Register::A))
-            .adc_a(Operand::Imm(1)) // 0 + 1 + 1 = 2, no carry
+            .adc(Operand::Imm(1)) // 0 + 1 + 1 = 2, no carry
             .ld(reg(Register::D), reg(Register::A))
-            .adc(reg(Register::A), Operand::Imm(3)) // 2 + 3 + 0
+            .adc(Operand::Imm(3)) // 2 + 3 + 0
             .ld(reg(Register::E), reg(Register::A))
             .ld_a(0)
-            .or(reg(Register::A), Operand::Imm(0)) // zero, carry cleared
+            .or(Operand::Imm(0)) // zero, carry cleared
             .jp_cond(Condition::NZ, "End")
             .jp_cond(Condition::C, "End")
-            .or(reg(Register::A), reg(Register::B)) // 1
+            .or(reg(Register::B)) // 1
             .label("End");
         let mut cpu = TestCpu::default();
         cpu.run(&asm.get_main_instrs());
@@ -1133,5 +1299,491 @@ mod tests {
             "srl, adc with and without carry, or"
         );
         assert!(!cpu.zero && !cpu.carry);
+    }
+
+    /// Run `a = value`, the carry set to `carry`, then `code`
+    fn run_with(value: u8, carry: bool, code: &dyn Fn(&mut Asm)) -> TestCpu {
+        let mut asm = Asm::new();
+        asm.ld_a(value).scf();
+        if !carry {
+            asm.ccf();
+        }
+        code(&mut asm);
+        let mut cpu = TestCpu::default();
+        cpu.run(&asm.get_main_instrs());
+        cpu
+    }
+
+    #[test]
+    fn test_sub_sbc_cp_and_xor() {
+        // (a, carry in, code, a after, carry after, zero after)
+        let cases: [(u8, bool, Snippet, u8, bool, bool); 9] = [
+            (
+                0x10,
+                true,
+                |asm| {
+                    asm.sbc(Operand::Imm(0x0F));
+                },
+                0x00,
+                false,
+                true,
+            ),
+            (
+                0x00,
+                true,
+                |asm| {
+                    asm.sbc(Operand::Imm(0x00));
+                },
+                0xFF,
+                true,
+                false,
+            ),
+            (
+                0x05,
+                false,
+                |asm| {
+                    asm.sbc(Operand::Imm(0x03));
+                },
+                0x02,
+                false,
+                false,
+            ),
+            (
+                0x05,
+                true,
+                |asm| {
+                    asm.sbc(Operand::Imm(0x05));
+                },
+                0xFF,
+                true,
+                false,
+            ),
+            (
+                0x05,
+                true,
+                |asm| {
+                    asm.sbc(Operand::Imm(0x04));
+                },
+                0x00,
+                false,
+                true,
+            ),
+            // `sub` ignores the carry, `cp` leaves `a`
+            (
+                0x05,
+                true,
+                |asm| {
+                    asm.sub(Operand::Imm(0x05));
+                },
+                0x00,
+                false,
+                true,
+            ),
+            (
+                0x05,
+                false,
+                |asm| {
+                    asm.cp(Operand::Imm(0x06));
+                },
+                0x05,
+                true,
+                false,
+            ),
+            // `xor` clears the carry
+            (
+                0b1100,
+                true,
+                |asm| {
+                    asm.xor(Operand::Imm(0b1010));
+                },
+                0b0110,
+                false,
+                false,
+            ),
+            (
+                0x5A,
+                true,
+                |asm| {
+                    asm.xor(reg(Register::A));
+                },
+                0x00,
+                false,
+                true,
+            ),
+        ];
+        for (index, (a, carry, code, result, carry_after, zero_after)) in
+            cases.into_iter().enumerate()
+        {
+            let cpu = run_with(a, carry, &code);
+            assert_eq!(
+                (cpu.a, cpu.carry, cpu.zero),
+                (result, carry_after, zero_after),
+                "case {}",
+                index
+            );
+        }
+    }
+
+    #[test]
+    fn test_rotates_shifts_and_swap() {
+        // (instruction, a, carry in, a after, carry after, zero after); the `$CB` forms
+        // set Z from the result, `rlca`, `rrca`, `rla` and `rra` always reset it
+        let cases: [(&str, Snippet, u8, bool, u8, bool, bool); 14] = [
+            (
+                "rlc",
+                |asm| {
+                    asm.rlc(R8::A);
+                },
+                0x85,
+                false,
+                0x0B,
+                true,
+                false,
+            ),
+            (
+                "rrc",
+                |asm| {
+                    asm.rrc(R8::A);
+                },
+                0x01,
+                false,
+                0x80,
+                true,
+                false,
+            ),
+            (
+                "rl",
+                |asm| {
+                    asm.rl(R8::A);
+                },
+                0x80,
+                false,
+                0x00,
+                true,
+                true,
+            ),
+            (
+                "rl",
+                |asm| {
+                    asm.rl(R8::A);
+                },
+                0x01,
+                true,
+                0x03,
+                false,
+                false,
+            ),
+            (
+                "rr",
+                |asm| {
+                    asm.rr(R8::A);
+                },
+                0x01,
+                false,
+                0x00,
+                true,
+                true,
+            ),
+            (
+                "rr",
+                |asm| {
+                    asm.rr(R8::A);
+                },
+                0x02,
+                true,
+                0x81,
+                false,
+                false,
+            ),
+            (
+                "sla",
+                |asm| {
+                    asm.sla(R8::A);
+                },
+                0xC0,
+                false,
+                0x80,
+                true,
+                false,
+            ),
+            (
+                "sra",
+                |asm| {
+                    asm.sra(R8::A);
+                },
+                0x81,
+                false,
+                0xC0,
+                true,
+                false,
+            ),
+            (
+                "swap",
+                |asm| {
+                    asm.swap(R8::A);
+                },
+                0xF0,
+                true,
+                0x0F,
+                false,
+                false,
+            ),
+            (
+                "srl",
+                |asm| {
+                    asm.srl(R8::A);
+                },
+                0x81,
+                false,
+                0x40,
+                true,
+                false,
+            ),
+            (
+                "rlca",
+                |asm| {
+                    asm.rlca();
+                },
+                0x80,
+                false,
+                0x01,
+                true,
+                false,
+            ),
+            (
+                "rla",
+                |asm| {
+                    asm.rla();
+                },
+                0x80,
+                false,
+                0x00,
+                true,
+                false,
+            ),
+            (
+                "rrca",
+                |asm| {
+                    asm.rrca();
+                },
+                0x01,
+                false,
+                0x80,
+                true,
+                false,
+            ),
+            (
+                "rra",
+                |asm| {
+                    asm.rra();
+                },
+                0x01,
+                false,
+                0x00,
+                true,
+                false,
+            ),
+        ];
+        for (name, code, a, carry, result, carry_after, zero_after) in cases {
+            let cpu = run_with(a, carry, &code);
+            assert_eq!(
+                (cpu.a, cpu.carry, cpu.zero),
+                (result, carry_after, zero_after),
+                "{} of {:#04x}, carry {}",
+                name,
+                a,
+                carry
+            );
+        }
+
+        // On [hl] the result is written back to memory
+        let mut asm = Asm::new();
+        ld_pair(&mut asm, Register::HL, "wValue");
+        asm.sra(R8::AtHl).swap(R8::AtHl);
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert("wValue".to_string(), 0x82);
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!(
+            cpu.trace,
+            [
+                Event::Write("wValue".to_string(), 0xC1),
+                Event::Write("wValue".to_string(), 0x1C),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_bit_set_res_cpl_scf_ccf() {
+        let mut asm = Asm::new();
+        ld_pair(&mut asm, Register::HL, "wFlags");
+        asm.scf()
+            .bit(2, R8::AtHl) // bit set: Z reset, carry unchanged
+            .ld_a(0)
+            .jp_cond(Condition::Z, "End")
+            .jp_cond(Condition::NC, "End")
+            .bit(3, R8::AtHl) // bit clear: Z set
+            .jp_cond(Condition::NZ, "End")
+            .set(7, R8::AtHl) // $84
+            .res(2, R8::AtHl) // $80
+            .ld_b(0)
+            .set(0, R8::B)
+            .set(5, R8::B)
+            .res(0, R8::B) // $20
+            .ld_a(0x0F)
+            .cpl() // $F0, Z and carry unchanged
+            .jp_cond(Condition::NZ, "End")
+            .ccf() // carry clear
+            .jp_cond(Condition::C, "End")
+            .ccf() // carry set
+            .ld_c(1)
+            .label("End");
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert("wFlags".to_string(), 0b0000_0100);
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!((cpu.a, cpu.b, cpu.c), (0xF0, 0x20, 1));
+        assert!(cpu.zero && cpu.carry);
+        assert_eq!(
+            cpu.trace,
+            [
+                Event::Write("wFlags".to_string(), 0x84),
+                Event::Write("wFlags".to_string(), 0x80),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_push_and_pop() {
+        let mut asm = Asm::new();
+        ld_pair(&mut asm, Register::BC, "$1234");
+        ld_pair(&mut asm, Register::HL, "_OAMRAM");
+        asm.push(R16Stack::BC)
+            .push(R16Stack::HL)
+            .ld_a(5)
+            .cp_imm(5) // Z set, carry clear
+            .push(R16Stack::AF)
+            .ld_a(0)
+            .cp_imm(1) // Z clear, carry set
+            .call("Routine")
+            .pop(R16Stack::AF) // a = 5, Z set, carry clear
+            .pop(R16Stack::DE) // the address in hl
+            .pop(R16Stack::HL) // $1234
+            .ld(Operand::AddrReg(Register::DE), reg(Register::A))
+            .ret()
+            // A routine that keeps bc
+            .label("Routine")
+            .push(R16Stack::BC)
+            .ld_b(9)
+            .pop(R16Stack::BC)
+            .ret();
+        let mut cpu = TestCpu::default();
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!(
+            (cpu.a, cpu.h, cpu.l, cpu.b, cpu.c),
+            (5, 0x12, 0x34, 0x12, 0x34)
+        );
+        assert!(cpu.zero && !cpu.carry);
+        assert_eq!(
+            cpu.trace.last(),
+            Some(&Event::Write("_OAMRAM".to_string(), 5))
+        );
+
+        // `pop bc` after `push af`: b is a, c holds the flags, N and H included, which
+        // the model does not know
+        let push_af_pop_bc = |read: Register| {
+            let mut asm = Asm::new();
+            asm.ld_a(3)
+                .push(R16Stack::AF)
+                .pop(R16Stack::BC)
+                .ld(reg(Register::E), reg(read));
+            asm
+        };
+        assert!(!panics(&push_af_pop_bc(Register::B)), "b is a");
+        assert!(panics(&push_af_pop_bc(Register::C)), "c is unknown");
+        let mut cpu = TestCpu::default();
+        cpu.run(&push_af_pop_bc(Register::B).get_main_instrs());
+        assert_eq!(cpu.e, 3);
+
+        // The stack is shared with the calls: a `ret` to a pushed value, a `pop` of a
+        // return address, or a `pop` with nothing pushed is not supported
+        let mut asm = Asm::new();
+        asm.push(R16Stack::BC).ret();
+        assert!(panics(&asm));
+        let mut asm = Asm::new();
+        asm.call("Routine").ret().label("Routine").pop(R16Stack::BC);
+        assert!(panics(&asm));
+        let mut asm = Asm::new();
+        asm.pop(R16Stack::DE);
+        assert!(panics(&asm));
+    }
+
+    #[test]
+    fn test_conditional_call() {
+        let mut asm = Asm::new();
+        asm.ld_a(1)
+            .cp_imm(1) // Z set
+            .call_cond(Condition::NZ, "SetB") // not taken
+            .call_cond(Condition::Z, "SetC") // taken
+            .ret()
+            .label("SetB")
+            .ld_b(1)
+            .ret()
+            .label("SetC")
+            .ld_c(2)
+            .ret();
+        let mut cpu = TestCpu::default();
+        cpu.run(&asm.get_main_instrs());
+        assert_eq!((cpu.b, cpu.c), (0, 2));
+        assert_eq!(cpu.trace, [Event::Call("SetC".to_string())]);
+    }
+
+    #[test]
+    fn test_unmodelled_instructions_panic() {
+        // Interrupts, the stack pointer, `daa` (needs the N and H flags) and the jumps to
+        // an address in a register are not modelled
+        let unmodelled: [Snippet; 11] = [
+            |asm| {
+                asm.halt();
+            },
+            |asm| {
+                asm.stop();
+            },
+            |asm| {
+                asm.di();
+            },
+            |asm| {
+                asm.ei();
+            },
+            |asm| {
+                asm.reti();
+            },
+            |asm| {
+                asm.rst(0x38);
+            },
+            |asm| {
+                asm.daa();
+            },
+            |asm| {
+                asm.jp_hl();
+            },
+            |asm| {
+                asm.add_sp(1);
+            },
+            |asm| {
+                asm.ld_hl_sp(1);
+            },
+            |asm| {
+                asm.ld_hl(0).add_hl(R16::SP);
+            },
+        ];
+        for code in unmodelled {
+            let mut asm = Asm::new();
+            asm.ld_a(0);
+            code(&mut asm);
+            assert!(panics(&asm), "{}", asm.get_main_instrs().last().unwrap());
+        }
+        // `nop` does nothing
+        let mut asm = Asm::new();
+        asm.nop();
+        assert!(!panics(&asm));
     }
 }

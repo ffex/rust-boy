@@ -915,7 +915,7 @@ impl SpriteManager {
         asm.ld_a_addr_def(var_name);
         asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
         asm.ld_a_addr_def(&coord);
-        asm.add(Operand::Reg(Register::A), Operand::Reg(Register::B));
+        asm.add(Operand::Reg(Register::B));
         asm.ld_addr_def_a(&coord);
         asm.get_main_instrs()
     }

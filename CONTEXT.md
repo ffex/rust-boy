@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 186 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 196 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -55,6 +55,7 @@ rgbfix -v -p 0xFF main.gb
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
 | API safety | ✅ unknown sprite / composite ids, animation names and indices panic with a clear message (they gave no code, fixed — [B20](#b20)); VRAM tiles, WRAM0 variables and OAM entries are allocated through `MemoryAllocator` and panic when full, sprite positions and animation frames are checked (fixed — [B17](#b17)); a sprite's tile index comes from its VRAM address (fixed — [B18](#b18)); `Var::set`/`get` handle 16-bit variables (fixed — [B16](#b16)); `get_pivot` wraps around the map (fixed — [B22](#b22)); a tilemap can go to `$9C00` (fixed — [B19](#b19)) |
+| Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -64,7 +65,7 @@ rgbfix -v -p 0xFF main.gb
 
 | Layer | Path | LOC | Role |
 |---|---|---|---|
-| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~930 | `Instr`/`Operand`/`Register` enums, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
+| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~1650 | The whole SM83 instruction set as `Instr` (one shape per family, typed `R8`/`R16`/`R16Stack` operands for the new instructions, `Instr::check`; since Phase 2 `refactor-p2-isa`) with `Operand`/`Register`, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`, `Emittable`), a simple `SpriteManager`, `TileRef` |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
 | **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`), `oam_address`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
@@ -123,12 +124,18 @@ The problems are where each layer reaches across the line:
 
 1. **The assembler layer knows the game layout.** `Chunk::{Init, MainLoop, Tiles, Tilemap, Data}`
    (`src/gb_asm/asm.rs:10-30`) and their fixed order (`src/gb_asm/codegen.rs:18-28`) are engine
-   concepts. `include_hardware()` hardcodes `hardware.inc` (`src/gb_asm/asm.rs:393-397`).
+   concepts. `include_hardware()` hardcodes `hardware.inc` (`src/gb_asm/asm.rs:640-644`).
 2. **L1 is not really typed.** Registers and expressions are passed as strings:
-   `ld_hli_label("a")`, `inc_label("de")`, `or_label("a", "c")` (`src/gb_asm/asm.rs:142-147, 250-252, 279-284`).
-   `Operand::Imm`/`Label` are accepted as destinations, so `ld 1, 2` or `sub hl, bc` compile in Rust and
-   fail only in rgbasm. Instruction shapes are inconsistent (`And`/`Cp` take one operand, `Or`/`Xor`/`Sub` two;
-   `AdcA` vs `Adc`).
+   `ld_hli_label("a")`, `inc_label("de")`, `or_label("a", "c")` (`src/gb_asm/asm.rs:162-167, 382-384, 356-359`).
+   `Operand::Imm`/`Label` are accepted as destinations, so `ld 1, 2` or `inc 5` compile in Rust and
+   fail only in rgbasm. Instruction shapes were inconsistent (`And`/`Cp` took one operand, `Or`/`Xor`/`Sub` two;
+   `AdcA` vs `Adc`). *Since Phase 2 (`refactor-p2-isa`):* one shape per family. The 8-bit ALU instructions
+   (`Add`, `Adc`, `Sub`, `Sbc`, `And`, `Xor`, `Or`, `Cp`) take one source and print `op a, src`; `add hl, r16` and
+   `add sp, e8` are `AddHl { src: R16 }` and `AddSp { offset: i8 }`; the rotates, shifts, `swap` and
+   `bit`/`set`/`res` take an `R8` (a register or `[hl]`), `push`/`pop` an `R16Stack`; the ISA is complete; `Instr`
+   derives `Debug` and `PartialEq`. What the types cannot rule out (a bit number above 7, an `rst` vector, a 16-bit
+   ALU source, `[bci]`) is rejected by `Instr::check`, which `Asm::emit` and the RGBDS output call. The string
+   helpers and the operands of `ld`/`ldh`/`inc`/`dec` are still loose: the next Phase 2 PR (typed operands).
 3. **Hardware facts are hardcoded in every layer.** `_OAMRAM+{id*4+1}` strings in both sprite managers,
    `$9800` in three places, VRAM bases in `tiles.rs`, LCDC flags written as strings in each layer
    (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) existed but were unused (used since [B17](#b17)); a first `hw` module (`src/hw.rs`, pure data) exists since [B22](#b22).
@@ -303,7 +310,7 @@ animations is a `jp`: `jp c, AnimEnd`, a sprite's `jp z, .animEnd_{sprite}` (dis
 after each call (with 16 animations on one sprite these two were out of range too). The only `jr` left,
 `jr nz, .skip_{sprite}_{animation}`, always skips 6 bytes (`call` + `jp`). The dispatcher grows by 1 byte per
 `jp` (`fosdem` +11 bytes, `coin-anim` +3: their only change, same animation in an emulator). A jump table was not
-chosen: it needs `jp hl`, which the typed ISA does not have yet (Phase 2). Test
+chosen: it needs `jp hl`, which the typed ISA did not have yet (it does since Phase 2, `refactor-p2-isa`). Test
 `test_animation_dispatch_jumps_stay_in_range` checks every `jr` with `gb_asm::label_check::jr_range_errors`, which
 knows instruction sizes and agrees with RGBDS 1.0.4 (127 and -128 accepted, 128 and -129 rejected); with the old
 code it reports the offsets 285, 144 and 135 that rgblink reports for the same program.
@@ -784,7 +791,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** polling instead of VBlank interrupt + `halt`; no interrupts/timers, scenes, RNG, collision,
   16-bit math, loops/switch.
-- **ISA:** `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`, rotates/shifts, `cpl`, `ld [hl-]`…
+- **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
+  rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine does not use the new instructions yet.
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example); still missing: snapshot tests of
   the generated asm and a one-command "build ROM and run".

@@ -1,4 +1,4 @@
-use super::instr::{Condition, Instr, JumpTarget, Operand, Register};
+use super::instr::{Condition, Instr, JumpTarget, Operand, R8, R16, R16Stack, Register};
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -50,7 +50,14 @@ impl Asm {
     }
 
     /// Emit a single instruction to the current chunk
+    ///
+    /// # Panics
+    /// Panics if [`Instr::check`] rejects one of its operands.
+    #[track_caller]
     pub fn emit(&mut self, instr: Instr) -> &mut Self {
+        if let Err(error) = instr.check() {
+            panic!("invalid instruction: {}", error);
+        }
         self.chunks
             .entry(self.current_chunk)
             .or_default()
@@ -59,7 +66,14 @@ impl Asm {
     }
 
     /// Emit multiple instructions to the current chunk
+    ///
+    /// # Panics
+    /// Panics if [`Instr::check`] rejects an operand of one of them.
+    #[track_caller]
     pub fn emit_all(&mut self, instrs: Vec<Instr>) -> &mut Self {
+        if let Some(error) = instrs.iter().find_map(|instr| instr.check().err()) {
+            panic!("invalid instruction: {}", error);
+        }
         self.chunks
             .entry(self.current_chunk)
             .or_default()
@@ -211,42 +225,154 @@ impl Asm {
     pub fn ld_a_addr_reg(&mut self, reg: Register) -> &mut Self {
         self.ld(Operand::Reg(Register::A), Operand::AddrReg(reg))
     }
+
+    /// `ld hl, sp + offset`
+    pub fn ld_hl_sp(&mut self, offset: i8) -> &mut Self {
+        self.emit(Instr::LdHlSp { offset })
+    }
+
+    /// `push pair`
+    pub fn push(&mut self, pair: R16Stack) -> &mut Self {
+        self.emit(Instr::Push { pair })
+    }
+
+    /// `pop pair`
+    pub fn pop(&mut self, pair: R16Stack) -> &mut Self {
+        self.emit(Instr::Pop { pair })
+    }
+
     // ============================================
-    // Arithmetic instructions
+    // 8-bit arithmetic and logic: `op a, src`
     // ============================================
+    // `src` is an 8-bit register, `[hl]` (`Operand::AddrReg(Register::HL)`), a number
+    // or an expression (`Operand::Label`); anything else panics.
 
-    pub fn add(&mut self, dst: Operand, src: Operand) -> &mut Self {
-        self.emit(Instr::Add { dst, src })
+    /// `add a, src`
+    #[track_caller]
+    pub fn add(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::Add { src })
     }
 
-    pub fn add_label(&mut self, reg_a: &str, reg_b: &str) -> &mut Self {
-        self.add(
-            Operand::Label(reg_a.to_string()),
-            Operand::Label(reg_b.to_string()),
-        )
+    /// `add a, src`, `add hl, src` or `add sp, src`, both as text: `add_label("a", "5")`,
+    /// `add_label("hl", "bc")`, `add_label("sp", "-2")`
+    ///
+    /// # Panics
+    /// Panics if `dst` is not `a`, `hl` or `sp`; for `hl` if `src` is not `bc`, `de`, `hl`
+    /// or `sp`; for `sp` if `src` is not a decimal number from -128 to 127 (an expression
+    /// is no longer accepted there).
+    #[track_caller]
+    pub fn add_label(&mut self, dst: &str, src: &str) -> &mut Self {
+        match dst.trim().to_ascii_lowercase().as_str() {
+            "a" => self.add(Operand::Label(src.to_string())),
+            "hl" => self.add_hl(R16::from_name(src)),
+            "sp" => match src.trim().parse::<i8>() {
+                Ok(offset) => self.add_sp(offset),
+                Err(_) => panic!(
+                    "add_label(\"sp\", {:?}): the offset of add sp must be a number from \
+                     -128 to 127",
+                    src
+                ),
+            },
+            _ => panic!(
+                "add_label({:?}, {:?}): the destination of add must be a, hl or sp",
+                dst, src
+            ),
+        }
     }
 
-    pub fn adc_a(&mut self, operand: Operand) -> &mut Self {
-        self.emit(Instr::AdcA { operand })
+    /// `adc a, src`: `a + src + carry`
+    #[track_caller]
+    pub fn adc(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::Adc { src })
     }
 
-    pub fn adc(&mut self, dst: Operand, src: Operand) -> &mut Self {
-        self.emit(Instr::Adc { dst, src })
+    /// `adc a, src`, the source as text
+    #[track_caller]
+    pub fn adc_label(&mut self, src: &str) -> &mut Self {
+        self.adc(Operand::Label(src.to_string()))
     }
 
-    pub fn adc_label(&mut self, reg: &str) -> &mut Self {
-        self.adc_a(Operand::Label(reg.to_string()))
+    /// `sub a, src`
+    #[track_caller]
+    pub fn sub(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::Sub { src })
     }
 
-    pub fn sub(&mut self, dst: Operand, src: Operand) -> &mut Self {
-        self.emit(Instr::Sub { dst, src })
+    /// `sub a, src`, both as text: `sub_label("a", "8")`
+    ///
+    /// # Panics
+    /// Panics if `dst` is not `a`.
+    #[track_caller]
+    pub fn sub_label(&mut self, dst: &str, src: &str) -> &mut Self {
+        check_dst_a("sub", dst, src);
+        self.sub(Operand::Label(src.to_string()))
     }
 
-    pub fn sub_label(&mut self, reg_a: &str, reg_b: &str) -> &mut Self {
-        self.sub(
-            Operand::Label(reg_a.to_string()),
-            Operand::Label(reg_b.to_string()),
-        )
+    /// `sbc a, src`: `a - src - carry`
+    #[track_caller]
+    pub fn sbc(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::Sbc { src })
+    }
+
+    /// `and a, src`
+    #[track_caller]
+    pub fn and(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::And { src })
+    }
+
+    /// `and a, src`, the source as text
+    #[track_caller]
+    pub fn and_label(&mut self, src: &str) -> &mut Self {
+        self.and(Operand::Label(src.to_string()))
+    }
+
+    /// `xor a, src`
+    #[track_caller]
+    pub fn xor(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::Xor { src })
+    }
+
+    /// `xor a, src`, both as text: `xor_label("a", "b")`
+    ///
+    /// # Panics
+    /// Panics if `dst` is not `a`.
+    #[track_caller]
+    pub fn xor_label(&mut self, dst: &str, src: &str) -> &mut Self {
+        check_dst_a("xor", dst, src);
+        self.xor(Operand::Label(src.to_string()))
+    }
+
+    /// `or a, src`
+    #[track_caller]
+    pub fn or(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::Or { src })
+    }
+
+    /// `or a, src`, both as text: `or_label("a", "c")`
+    ///
+    /// # Panics
+    /// Panics if `dst` is not `a`.
+    #[track_caller]
+    pub fn or_label(&mut self, dst: &str, src: &str) -> &mut Self {
+        check_dst_a("or", dst, src);
+        self.or(Operand::Label(src.to_string()))
+    }
+
+    /// `cp a, src`: the flags of `a - src`
+    #[track_caller]
+    pub fn cp(&mut self, src: Operand) -> &mut Self {
+        self.emit(Instr::Cp { src })
+    }
+
+    /// `cp a, value`
+    pub fn cp_imm(&mut self, value: u8) -> &mut Self {
+        self.cp(Operand::Imm(value))
+    }
+
+    /// `cp a, src`, the source as text
+    #[track_caller]
+    pub fn cp_label(&mut self, src: &str) -> &mut Self {
+        self.cp(Operand::Label(src.to_string()))
     }
 
     pub fn inc(&mut self, operand: Operand) -> &mut Self {
@@ -266,79 +392,167 @@ impl Asm {
     }
 
     // ============================================
-    // Logical instructions
+    // 16-bit arithmetic
     // ============================================
 
-    pub fn and(&mut self, operand: Operand) -> &mut Self {
-        //TODO redo maybe?
-        self.emit(Instr::And { operand })
+    /// `add hl, src`
+    pub fn add_hl(&mut self, src: R16) -> &mut Self {
+        self.emit(Instr::AddHl { src })
     }
 
-    pub fn and_label(&mut self, value: &str) -> &mut Self {
-        self.and(Operand::Label(value.to_string()))
-    }
-
-    pub fn or(&mut self, dst: Operand, src: Operand) -> &mut Self {
-        self.emit(Instr::Or { dst, src })
-    }
-
-    pub fn or_label(&mut self, reg_a: &str, reg_b: &str) -> &mut Self {
-        self.or(
-            Operand::Label(reg_a.to_string()),
-            Operand::Label(reg_b.to_string()),
-        )
-    }
-
-    pub fn xor(&mut self, dst: Operand, src: Operand) -> &mut Self {
-        self.emit(Instr::Xor { dst, src })
-    }
-
-    pub fn xor_label(&mut self, reg_a: &str, reg_b: &str) -> &mut Self {
-        self.xor(
-            Operand::Label(reg_a.to_string()),
-            Operand::Label(reg_b.to_string()),
-        )
-    }
-
-    pub fn cp(&mut self, operand: Operand) -> &mut Self {
-        //TODO check this (cp a, 14)
-        self.emit(Instr::Cp { operand })
-    }
-
-    pub fn cp_imm(&mut self, value: u8) -> &mut Self {
-        self.cp(Operand::Imm(value))
-    }
-
-    pub fn cp_label(&mut self, value: &str) -> &mut Self {
-        self.cp(Operand::Label(value.to_string()))
+    /// `add sp, offset`
+    pub fn add_sp(&mut self, offset: i8) -> &mut Self {
+        self.emit(Instr::AddSp { offset })
     }
 
     // ============================================
-    // Bit shift instructions
+    // Rotates, shifts and swap
     // ============================================
 
-    pub fn srl(&mut self, operand: Operand) -> &mut Self {
+    /// `rlca`: rotate `a` left, bit 7 into the carry and bit 0 (Z reset)
+    pub fn rlca(&mut self) -> &mut Self {
+        self.emit(Instr::Rlca)
+    }
+
+    /// `rrca`: rotate `a` right, bit 0 into the carry and bit 7 (Z reset)
+    pub fn rrca(&mut self) -> &mut Self {
+        self.emit(Instr::Rrca)
+    }
+
+    /// `rla`: rotate `a` left through the carry (Z reset)
+    pub fn rla(&mut self) -> &mut Self {
+        self.emit(Instr::Rla)
+    }
+
+    /// `rra`: rotate `a` right through the carry (Z reset)
+    pub fn rra(&mut self) -> &mut Self {
+        self.emit(Instr::Rra)
+    }
+
+    /// `rlc operand`: rotate left, bit 7 into the carry and bit 0
+    pub fn rlc(&mut self, operand: R8) -> &mut Self {
+        self.emit(Instr::Rlc { operand })
+    }
+
+    /// `rrc operand`: rotate right, bit 0 into the carry and bit 7
+    pub fn rrc(&mut self, operand: R8) -> &mut Self {
+        self.emit(Instr::Rrc { operand })
+    }
+
+    /// `rl operand`: rotate left through the carry
+    pub fn rl(&mut self, operand: R8) -> &mut Self {
+        self.emit(Instr::Rl { operand })
+    }
+
+    /// `rr operand`: rotate right through the carry
+    pub fn rr(&mut self, operand: R8) -> &mut Self {
+        self.emit(Instr::Rr { operand })
+    }
+
+    /// `sla operand`: shift left, bit 7 into the carry
+    pub fn sla(&mut self, operand: R8) -> &mut Self {
+        self.emit(Instr::Sla { operand })
+    }
+
+    /// `sra operand`: shift right, bit 0 into the carry, bit 7 kept (signed halving)
+    pub fn sra(&mut self, operand: R8) -> &mut Self {
+        self.emit(Instr::Sra { operand })
+    }
+
+    /// `srl operand`: shift right, bit 0 into the carry, bit 7 reset
+    pub fn srl(&mut self, operand: R8) -> &mut Self {
         self.emit(Instr::Srl { operand })
     }
 
+    /// `srl operand`, the operand as text (`"a"`, `"[hl]"`)
+    ///
+    /// # Panics
+    /// Panics if `register` is not an 8-bit register or `[hl]`.
+    #[track_caller]
     pub fn srl_label(&mut self, register: &str) -> &mut Self {
-        self.srl(Operand::Label(register.to_string()))
+        self.srl(R8::from_name(register))
     }
 
-    pub fn swap(&mut self, operand: Operand) -> &mut Self {
+    /// `swap operand`: swap the two nibbles
+    pub fn swap(&mut self, operand: R8) -> &mut Self {
         self.emit(Instr::Swap { operand })
     }
 
+    /// `swap operand`, the operand as text (`"a"`, `"[hl]"`)
+    ///
+    /// # Panics
+    /// Panics if `register` is not an 8-bit register or `[hl]`.
+    #[track_caller]
     pub fn swap_label(&mut self, register: &str) -> &mut Self {
-        self.swap(Operand::Label(register.to_string()))
+        self.swap(R8::from_name(register))
     }
 
     // ============================================
-    // Misc instructions
+    // Bit instructions
+    // ============================================
+    // `bit` is 0 to 7; anything else panics.
+
+    /// `bit n, operand`: Z set when bit `n` is 0
+    #[track_caller]
+    pub fn bit(&mut self, bit: u8, operand: R8) -> &mut Self {
+        self.emit(Instr::Bit { bit, operand })
+    }
+
+    /// `set n, operand`
+    #[track_caller]
+    pub fn set(&mut self, bit: u8, operand: R8) -> &mut Self {
+        self.emit(Instr::Set { bit, operand })
+    }
+
+    /// `res n, operand`
+    #[track_caller]
+    pub fn res(&mut self, bit: u8, operand: R8) -> &mut Self {
+        self.emit(Instr::Res { bit, operand })
+    }
+
+    // ============================================
+    // Flags, accumulator and CPU control
     // ============================================
 
     pub fn daa(&mut self) -> &mut Self {
         self.emit(Instr::Daa)
+    }
+
+    /// `cpl`: `a = !a`
+    pub fn cpl(&mut self) -> &mut Self {
+        self.emit(Instr::Cpl)
+    }
+
+    /// `scf`: set the carry
+    pub fn scf(&mut self) -> &mut Self {
+        self.emit(Instr::Scf)
+    }
+
+    /// `ccf`: complement the carry
+    pub fn ccf(&mut self) -> &mut Self {
+        self.emit(Instr::Ccf)
+    }
+
+    pub fn nop(&mut self) -> &mut Self {
+        self.emit(Instr::Nop)
+    }
+
+    pub fn halt(&mut self) -> &mut Self {
+        self.emit(Instr::Halt)
+    }
+
+    pub fn stop(&mut self) -> &mut Self {
+        self.emit(Instr::Stop)
+    }
+
+    /// `di`: disable interrupts
+    pub fn di(&mut self) -> &mut Self {
+        self.emit(Instr::Di)
+    }
+
+    /// `ei`: enable interrupts (after the next instruction)
+    pub fn ei(&mut self) -> &mut Self {
+        self.emit(Instr::Ei)
     }
 
     // ============================================
@@ -356,6 +570,11 @@ impl Asm {
             condition,
             target: JumpTarget::Label(label.to_string()),
         })
+    }
+
+    /// `jp hl`: jump to the address in `hl`
+    pub fn jp_hl(&mut self) -> &mut Self {
+        self.emit(Instr::JpHl)
     }
 
     pub fn jr(&mut self, label: &str) -> &mut Self {
@@ -377,12 +596,34 @@ impl Asm {
         })
     }
 
+    /// `call condition, label`
+    pub fn call_cond(&mut self, condition: Condition, label: &str) -> &mut Self {
+        self.emit(Instr::CallCond {
+            condition,
+            target: JumpTarget::Label(label.to_string()),
+        })
+    }
+
     pub fn ret(&mut self) -> &mut Self {
         self.emit(Instr::Ret)
     }
 
     pub fn ret_cond(&mut self, condition: Condition) -> &mut Self {
         self.emit(Instr::RetCond { condition })
+    }
+
+    /// `reti`: return and enable interrupts
+    pub fn reti(&mut self) -> &mut Self {
+        self.emit(Instr::Reti)
+    }
+
+    /// `rst vector`: call one of the restart vectors `$00`, `$08`, …, `$38`
+    ///
+    /// # Panics
+    /// Panics on any other vector.
+    #[track_caller]
+    pub fn rst(&mut self, vector: u8) -> &mut Self {
+        self.emit(Instr::Rst { vector })
     }
 
     // ============================================
@@ -476,4 +717,17 @@ impl Asm {
             line: line.to_string(),
         })
     }
+}
+
+/// Panics unless `dst`, the destination of an 8-bit ALU instruction written as text, is `a`
+#[track_caller]
+fn check_dst_a(mnemonic: &str, dst: &str, src: &str) {
+    assert!(
+        dst.trim().eq_ignore_ascii_case("a"),
+        "{}_label({:?}, {:?}): the destination of {} must be a",
+        mnemonic,
+        dst,
+        src,
+        mnemonic
+    );
 }

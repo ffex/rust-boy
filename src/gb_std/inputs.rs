@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, R8, Register};
 
 /// Enum for joypad buttons that can return constant names and values
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,8 +71,8 @@ pub fn update_keys() -> Vec<Instr> {
         Operand::Label("P1F_GET_DPAD".to_string()),
     );
     asm.call(".onenibble");
-    asm.swap(Operand::Reg(Register::A));
-    asm.xor(Operand::Reg(Register::A), Operand::Reg(Register::B));
+    asm.swap(R8::A);
+    asm.xor(Operand::Reg(Register::B));
     asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
 
     asm.ld(
@@ -88,7 +88,7 @@ pub fn update_keys() -> Vec<Instr> {
         Operand::Reg(Register::A),
         Operand::AddrDef("wCurKeys".to_string()),
     );
-    asm.xor(Operand::Reg(Register::A), Operand::Reg(Register::B));
+    asm.xor(Operand::Reg(Register::B));
     asm.and(Operand::Reg(Register::B));
     asm.ld(
         Operand::AddrDef("wNewKeys".to_string()),
@@ -119,7 +119,7 @@ pub fn update_keys() -> Vec<Instr> {
         Operand::Reg(Register::A),
         Operand::AddrDef("rP1".to_string()),
     );
-    asm.or(Operand::Reg(Register::A), Operand::Imm(0xF0));
+    asm.or(Operand::Imm(0xF0));
 
     asm.label(".knowret");
     asm.ret();

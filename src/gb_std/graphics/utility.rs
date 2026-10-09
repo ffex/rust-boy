@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, Operand, R8, R16, Register};
 
 //TODO
 // refactor code:
@@ -72,7 +72,7 @@ pub fn memcopy() -> Vec<Instr> {
     asm.comment("@param bc: length (0 copies nothing)");
     asm.label("Memcopy");
     asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.or(Operand::Reg(Register::A), Operand::Reg(Register::C));
+    asm.or(Operand::Reg(Register::C));
     asm.ret_cond(Condition::Z);
     asm.label(".copy");
     asm.ld_a_addr_reg(Register::DE);
@@ -80,7 +80,7 @@ pub fn memcopy() -> Vec<Instr> {
     asm.inc(Operand::Reg(Register::DE));
     asm.dec(Operand::Reg(Register::BC));
     asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.or(Operand::Reg(Register::A), Operand::Reg(Register::C));
+    asm.or(Operand::Reg(Register::C));
     asm.jp_cond(Condition::NZ, ".copy");
     asm.ret();
     asm.get_main_instrs()
@@ -152,25 +152,25 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     asm.ld(Operand::Reg(Register::H), Operand::Imm(0));
 
     // Now we have the position * 8 in hl
-    asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::HL)); // position * 16
-    asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::HL)); // position * 32
+    asm.add_hl(R16::HL); // position * 16
+    asm.add_hl(R16::HL); // position * 32
 
     // Convert the X position to an offset.
     asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.srl(Operand::Reg(Register::A)); // a / 2
-    asm.srl(Operand::Reg(Register::A)); // a / 4
-    asm.srl(Operand::Reg(Register::A)); // a / 8
+    asm.srl(R8::A); // a / 2
+    asm.srl(R8::A); // a / 4
+    asm.srl(R8::A); // a / 8
 
     // Add the two offsets together.
-    asm.add(Operand::Reg(Register::A), Operand::Reg(Register::L));
+    asm.add(Operand::Reg(Register::L));
     asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
-    asm.adc(Operand::Reg(Register::A), Operand::Reg(Register::H));
-    asm.sub(Operand::Reg(Register::A), Operand::Reg(Register::L));
+    asm.adc(Operand::Reg(Register::H));
+    asm.sub(Operand::Reg(Register::L));
     asm.ld(Operand::Reg(Register::H), Operand::Reg(Register::A));
 
     // Add the offset to the tilemap's base address
     asm.ld_bc_label("$9800");
-    asm.add(Operand::Reg(Register::HL), Operand::Reg(Register::BC));
+    asm.add_hl(R16::BC);
 
     // And read the tile there
     asm.ld_a_addr_reg(Register::HL);

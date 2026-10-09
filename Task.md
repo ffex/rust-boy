@@ -128,10 +128,13 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Move `Emittable` into the asm layer; add a `Block` instruction buffer (stop using `Asm` + `get_main_instrs()` as scratch)
 - [ ] Typed operands: remove string-register helpers (`inc_label("de")`, `ld_hli_label("a")`, …); add an
       `Expr` operand for constants/expressions; reject invalid destinations
-- [ ] Consistent instruction shapes (`And`/`Cp` vs `Or`/`Xor`/`Sub`, `AdcA` vs `Adc`); derive `Debug`, `PartialEq` on `Instr`
-- [ ] Complete the ISA (needed by interrupts, DMA, 16-bit math, audio): `push`/`pop`, `halt`, `stop`,
+- [x] Consistent instruction shapes (`And`/`Cp` vs `Or`/`Xor`/`Sub`, `AdcA` vs `Adc`); derive `Debug`, `PartialEq` on `Instr`
+      (branch `refactor-p2-isa`: the 8-bit ALU instructions take one source and print `op a, src`; `AddHl`/`AddSp` for
+      the 16-bit additions; the shifts and bit instructions take an `R8`; `Instr::check` rejects what the types cannot)
+- [x] Complete the ISA (needed by interrupts, DMA, 16-bit math, audio): `push`/`pop`, `halt`, `stop`,
       `nop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, `rl`/`rr`/`rlc`/`rrc`/`sla`/`sra` (+ `rla`…),
-      `cpl`, `scf`/`ccf`, `ld [hl-]`, `ld hl, sp+e`, `jp hl`, `add sp, e`
+      `cpl`, `scf`/`ccf`, `ld [hl-]`, `ld hl, sp+e`, `jp hl`, `add sp, e` (branch `refactor-p2-isa`, plus `call cc`;
+      every family, with all the operands of the regular families, checked with rgbasm against the SM83 opcode table in `gb_asm::isa_tests`)
 - [ ] First-class sections (type, bank, `ALIGN`, `ds n` without fill for RAM); move `Chunk` and the game
       layout out of `gb_asm` into the engine
 - [ ] Label allocator owned by the asm layer; automatic `jr` → `jp` when out of range

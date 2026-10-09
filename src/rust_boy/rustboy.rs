@@ -1467,8 +1467,8 @@ mod tests {
         // Walker starts at tile 2; frames 1..=3 are tiles 4, 6 and 8, two apart
         let walk = function(&out, "Anim_Walker_Walk");
         assert!(walk.contains("add a, 2"), "{}", walk);
-        assert!(walk.contains("cp 4"), "{}", walk);
-        assert!(walk.contains("cp 8"), "{}", walk);
+        assert!(walk.contains("cp a, 4"), "{}", walk);
+        assert!(walk.contains("cp a, 8"), "{}", walk);
         // The reset loads the tile before the first frame, then steps onto it
         assert!(walk.contains("ld a, 2"), "{}", walk);
     }
@@ -1483,7 +1483,7 @@ mod tests {
         let out = gb.build();
         let spin = function(&out, "Anim_Coin_Spin");
         assert!(spin.contains("inc a"), "{}", spin);
-        assert!(spin.contains("cp 6"), "{}", spin);
+        assert!(spin.contains("cp a, 6"), "{}", spin);
         // Frame 0 is tile 0: the reset loads 255, and `inc a` wraps it to 0
         assert!(spin.contains("ld a, 255"), "{}", spin);
     }

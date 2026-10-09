@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Instr, Operand, R16, Register};
 
 /// A reference to a tile position in the tilemap.
 ///
@@ -135,8 +135,7 @@ impl TileRef {
         let mut asm = Asm::new();
         // ld de, 32
         // add hl, de
-        asm.ld_de(32)
-            .add(Operand::Reg(Register::HL), Operand::Reg(Register::DE));
+        asm.ld_de(32).add_hl(R16::DE);
         asm.get_main_instrs()
     }
 
@@ -146,8 +145,7 @@ impl TileRef {
         // To subtract 32, we add -32 (0xFFE0 in 16-bit two's complement)
         // ld de, -32 (which is $FFE0)
         // add hl, de
-        asm.ld_de(0xFFE0)
-            .add(Operand::Reg(Register::HL), Operand::Reg(Register::DE));
+        asm.ld_de(0xFFE0).add_hl(R16::DE);
         asm.get_main_instrs()
     }
 }

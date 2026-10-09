@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Instr, Operand};
 
 use super::emittable::Emittable;
 
@@ -23,7 +23,7 @@ impl Emittable for Op {
 /// ```ignore
 /// let mut a = Asm::new();
 /// a.emit_all(paddle.get_x());
-/// a.sub(Operand::Reg(Register::A), Operand::Imm(8));
+/// a.sub(Operand::Imm(8));
 /// a.get_main_instrs()
 /// ```
 pub trait InstrOps {
@@ -35,14 +35,14 @@ impl InstrOps for Vec<Instr> {
     fn plus(self, value: u8) -> Op {
         let mut asm = Asm::new();
         asm.emit_all(self);
-        asm.add(Operand::Reg(Register::A), Operand::Imm(value));
+        asm.add(Operand::Imm(value));
         Op(asm.get_main_instrs())
     }
 
     fn minus(self, value: u8) -> Op {
         let mut asm = Asm::new();
         asm.emit_all(self);
-        asm.sub(Operand::Reg(Register::A), Operand::Imm(value));
+        asm.sub(Operand::Imm(value));
         Op(asm.get_main_instrs())
     }
 }

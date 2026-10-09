@@ -18,6 +18,9 @@
 //!
 //! [`jr_range_errors`] also checks that each `jr` reaches its target, which rgbasm
 //! requires: it works on instructions, whose sizes it knows ([`instr_size`]).
+//!
+//! [`rgbds_rom`] returns the ROM bytes RGBDS makes of a program, so a test can compare
+//! the encoding of the instructions with the SM83 opcode table (`gb_asm::isa_tests`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -279,6 +282,14 @@ pub(crate) fn assert_links_with(asm: &str, files: &[(&str, &str)]) {
     if std::env::var_os("RGBDS_LINK_CHECK").is_some() {
         rgbds_link(asm, files, &[]);
     }
+}
+
+/// The ROM that RGBDS makes of `asm`, assembled with every rgbasm warning turned into an
+/// error (`-Weverything -Werror`: a truncated operand fails too) and linked:
+/// `None` unless the environment variable `RGBDS_LINK_CHECK` is set (with `rgbasm` and
+/// `rgblink` on the `PATH`). Panics with the RGBDS errors if it fails.
+pub(crate) fn rgbds_rom(asm: &str) -> Option<Vec<u8>> {
+    std::env::var_os("RGBDS_LINK_CHECK").map(|_| rgbds_link(asm, &[], &["-Weverything", "-Werror"]))
 }
 
 /// Assemble `asm` (`rgbasm_flags` added), with `files` next to it, and link it, with

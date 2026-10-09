@@ -3,6 +3,8 @@ pub mod asm;
 mod codegen;
 pub mod instr;
 #[cfg(test)]
+mod isa_tests;
+#[cfg(test)]
 pub(crate) mod label_check;
 pub mod labels;
 #[cfg(test)]

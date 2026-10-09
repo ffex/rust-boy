@@ -474,7 +474,8 @@ enum Place {
 /// Raw lines are never rejected (the escape hatch). A raw line whose code is only labels
 /// and `db` / `dw` / `ds` keeps the current section; any other raw line with code (it may
 /// be a `SECTION`, a `LOAD`, a macro that opens one), and an `INCLUDE`, make the section
-/// unknown, and nothing is checked until the next typed `SECTION`.
+/// unknown, and nothing is checked until the next typed `SECTION`. An instruction whose
+/// text has a line break (a comment or label written with `\n`) is read as a raw line.
 #[derive(Clone, Debug)]
 pub(crate) struct SectionTracker {
     opened: Vec<Section>,
@@ -494,6 +495,17 @@ impl SectionTracker {
     /// Follow `instr`, emitted after everything given so far: `Err` with what is wrong if
     /// it does not belong there (and then nothing changes)
     pub(crate) fn add(&mut self, instr: &Instr) -> Result<(), String> {
+        // A label, comment or data whose text goes on to other lines prints those lines as
+        // code: it is read like a raw line
+        if !matches!(instr, Instr::Raw { .. })
+            && instr.check().is_ok()
+            && instr.to_string().contains('\n')
+        {
+            if !only_reserves(&instr.to_string()) {
+                self.place = Place::Unknown;
+            }
+            return Ok(());
+        }
         match instr {
             Instr::Section(section) => {
                 if let Some(first) = self.opened.iter().find(|s| s.name == section.name) {

@@ -581,6 +581,19 @@ fn test_a_raw_line_or_include_may_change_the_section() {
         );
     }
 
+    // A comment written with a line break prints code: it is read as a raw line
+    let mut asm = Asm::new();
+    asm.section(Section::wram0("Vars"))
+        .comment("note\nSECTION \"Code\", ROM0")
+        .nop();
+    let text = asm.to_asm();
+    assert_ne!(rgbds_accepts(&text), Some(false), "{}", text);
+    let mut asm = Asm::new();
+    asm.section(Section::wram0("Vars"))
+        .comment("note\nwA: ds 1")
+        .nop();
+    assert!(panic_of(|| asm.to_asm()).is_some());
+
     // A typed section after an unknown one is checked again
     let mut asm = Asm::new();
     asm.raw("SECTION \"Code\", ROM0")

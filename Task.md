@@ -84,7 +84,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [ ] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)
 - [ ] Sprite and tile counters can desync — [B18](CONTEXT.md#b18)
 - [ ] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19)
-- [ ] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20)
+- [x] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20) (branch `refactor-p1-api-safety`:
+      every sprite / composite method panics on an unknown id, an unknown animation name or index, a sprite without
+      animations, or a 256th animation)
 - [x] `basic_usage` + README header without `ds $150 - @, 0` — [B21](CONTEXT.md#b21) (branch `refactor-p0-readme`)
 - [x] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22) (branch `refactor-p1-api-safety`: one
       `gb_std` routine for both layers, wrapping arithmetic like the 256-pixel map; an offset beyond ±255 panics)

@@ -437,6 +437,21 @@ tile indices. *Fix:* single source of truth.
 `src/rust_boy/sprites.rs`); `enable_animation_by_name` / `set_initial_animation_by_name` (`:197, :171`) do
 nothing on a typo; `add_animation_with_step` returns 0 for an unknown id. *Fix:* `Result` or panic with a
 clear message.
+**Status: fixed** on `refactor-p1-api-safety` with panics (like the other API checks; a `Result` API is the Phase 2
+`build(&self) -> Result` item). In `SpriteManager` (`src/rust_boy/sprites.rs`), every method that takes a `SpriteId` or a
+`CompositeSpriteId` (moves, `move_*_var`, `get_x`/`get_y`/`get_pivot`, the animation methods) looks it up with
+`sprite()` / `composite()`, which panic with "unknown sprite id N" / "unknown composite sprite id N". The animation methods
+also panic, naming the sprite and listing what it has, on: an unknown name (`enable_animation_by_name`,
+`set_initial_animation_by_name`); an index the sprite does not have (`enable_animation`, `set_initial_animation`, which
+still takes `ANIM_DISABLED`); `enable_animation(.., ANIM_DISABLED)` (use `disable_animation`); `enable_animation` /
+`disable_animation` on a sprite without animations, whose `wAnim_{sprite}_Current` does not exist (it was an undefined
+symbol at link time, see [Checked and refuted](#checked-and-refuted)); and a 256th animation on one sprite (indices are
+`u8` and 255 is `ANIM_DISABLED`: the 256th got index 255, which disables the sprite). `get_composite_sprites` keeps
+returning an `Option` (a query). `TileId` and `VarId` are only used by queries that return an `Option`
+(`get_address`, `get_label`, `get_type`), so nothing generates code from an unknown one. No example changes. Tests:
+`test_an_unknown_sprite_id_panics` (15 methods), `test_an_unknown_composite_id_panics` (8),
+`test_an_unknown_animation_name_panics`, `test_an_unknown_animation_index_panics`, `test_at_most_255_animations_per_sprite`;
+all failed before (no panic).
 
 #### B21
 **`basic_usage` and the README Basic Example lack header padding.** `SECTION "Header", ROM0[$100]` with only
@@ -673,7 +688,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | `Asm::ds` always emits a fill byte, so RAM can't be reserved | True, but a missing feature, not a bug (Phase 2: sections / `ds n` without fill). |
 | Everything in one `ROM0[$100]` section fails above 16 KB | Tile data is copied to VRAM anyway; ROM banking is a feature (Phase 3: MBC). |
 | `If` comparisons are unsigned while `i8` vars exist | Native `cp` semantics, documented in `flow_if.rs:8-15`; only a doc note ([B29](#b29)). |
-| `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20). |
+| `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20) (it panics since). |
 | 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
 | `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |

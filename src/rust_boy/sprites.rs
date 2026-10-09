@@ -6,6 +6,7 @@ use super::tiles::TileId;
 use crate::{
     gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register, is_identifier},
     gb_std::graphics::sprites::{MoveDir, move_coord_limit, pivot},
+    hw,
     rust_boy::animations::Animation,
 };
 
@@ -102,6 +103,82 @@ pub(crate) struct SpriteData {
     pub initial_animation: u8, // Index of initially active animation, or ANIM_DISABLED
 }
 
+impl SpriteData {
+    /// The WRAM variable holding the index of the sprite's current animation
+    /// (`ANIM_DISABLED` for none); only a sprite with animations has one
+    fn current_var(&self) -> String {
+        format!("wAnim_{}_Current", self.name)
+    }
+
+    /// The index of the animation `name` (B20)
+    ///
+    /// # Panics
+    /// If the sprite has no animation of that name.
+    fn animation_index(&self, name: &str) -> u8 {
+        match self.animations.iter().position(|anim| anim.name == name) {
+            Some(index) => index as u8,
+            None => {
+                let names: Vec<&str> = self.animations.iter().map(|a| a.name.as_str()).collect();
+                let has = if names.is_empty() {
+                    "it has no animations".to_string()
+                } else {
+                    format!("its animations: {}", names.join(", "))
+                };
+                panic!(
+                    "sprite \"{}\" has no animation \"{}\" ({})",
+                    self.name, name, has
+                );
+            }
+        }
+    }
+
+    /// Panics unless the sprite has the animation `index` (B20)
+    fn check_animation_index(&self, index: u8) {
+        let count = self.animations.len();
+        if usize::from(index) >= count {
+            let has = match count {
+                0 => "it has no animations".to_string(),
+                _ => format!("it has {}: 0 to {}", count, count - 1),
+            };
+            panic!(
+                "sprite \"{}\" has no animation {} ({})",
+                self.name, index, has
+            );
+        }
+    }
+
+    /// Panics unless the sprite has animations, so its animation variable exists
+    fn check_has_animations(&self, what: &str) {
+        if self.animations.is_empty() {
+            panic!(
+                "{}: sprite \"{}\" has no animations, so it has no animation variable ({} is \
+                 not created); add an animation first",
+                what,
+                self.name,
+                self.current_var()
+            );
+        }
+    }
+}
+
+/// Panics: `id` is not a sprite of this manager (B20)
+fn unknown_sprite(id: SpriteId) -> ! {
+    panic!(
+        "unknown sprite id {}: no sprite of this program has it (sprite ids come from \
+         RustBoy::add_sprite, for this RustBoy)",
+        id.0
+    );
+}
+
+/// Panics: `id` is not a composite sprite of this manager (B20)
+fn unknown_composite(id: CompositeSpriteId) -> ! {
+    panic!(
+        "unknown composite sprite id {}: no composite sprite of this program has it \
+         (composite ids come from RustBoy::add_sprite_16x16, for this RustBoy)",
+        id.0
+    );
+}
+
 /// The axis a sprite moves along
 #[derive(Debug, Clone, Copy)]
 enum Axis {
@@ -121,10 +198,10 @@ impl Axis {
     /// The address of the sprite's coordinate in OAM: Y is byte 0 of its entry, X byte 1
     fn oam_address(self, sprite: &SpriteData) -> String {
         let byte = match self {
-            Axis::Y => 0,
-            Axis::X => 1,
+            Axis::Y => hw::OAMA_Y,
+            Axis::X => hw::OAMA_X,
         };
-        format!("_OAMRAM+{}", sprite.oam_index * 4 + byte)
+        hw::oam_address(sprite.oam_index, byte)
     }
 }
 
@@ -247,6 +324,25 @@ impl SpriteManager {
         self.sprites.get(&id)
     }
 
+    /// The sprite `id`; panics if this manager has none (B20)
+    fn sprite(&self, id: SpriteId) -> &SpriteData {
+        self.sprites.get(&id).unwrap_or_else(|| unknown_sprite(id))
+    }
+
+    /// The sprite `id`, to change it; panics if this manager has none (B20)
+    fn sprite_mut(&mut self, id: SpriteId) -> &mut SpriteData {
+        self.sprites
+            .get_mut(&id)
+            .unwrap_or_else(|| unknown_sprite(id))
+    }
+
+    /// The composite sprite `id`; panics if this manager has none (B20)
+    fn composite(&self, id: CompositeSpriteId) -> &CompositeSpriteData {
+        self.composite_sprites
+            .get(&id)
+            .unwrap_or_else(|| unknown_composite(id))
+    }
+
     /// Add an animation to a sprite; a frame is one sprite's worth of tiles
     /// (1 tile in 8x8 mode, 2 tiles in 8x16 mode)
     /// - `name`: Animation name, unique for this sprite; the animation is played by the
@@ -282,11 +378,14 @@ impl SpriteManager {
     /// Returns the animation index within this sprite
     ///
     /// # Panics
+    /// - If there is no sprite `sprite_id`.
     /// - If `name` is not a valid RGBDS identifier, or the sprite already has an animation
     ///   of that name: it becomes part of labels (`Anim_{sprite name}_{name}`).
     /// - If that label is another animation's: "Big_Coin" + "Spin" and "Big" + "Coin_Spin"
     ///   are both `Anim_Big_Coin_Spin`.
     /// - In 8x16 mode, if `frame_step` is odd: every frame must start on an even tile.
+    /// - If the sprite already has 255 animations: the index is a `u8`, and 255 is
+    ///   [`ANIM_DISABLED`].
     pub fn add_animation_with_step(
         &mut self,
         sprite_id: SpriteId,
@@ -304,26 +403,29 @@ impl SpriteManager {
                 name, frame_step
             );
         }
-        if let Some(sprite) = self.sprites.get(&sprite_id) {
-            self.check_animation_label(sprite, name);
+        let sprite = self.sprite(sprite_id);
+        self.check_animation_label(sprite, name);
+        if sprite.animations.len() >= usize::from(ANIM_DISABLED) {
+            panic!(
+                "sprite \"{}\" already has 255 animations, the most a sprite can have: \
+                 animation indices are 0 to 254, and 255 is ANIM_DISABLED",
+                sprite.name
+            );
         }
-        if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
-            let index = sprite.animations.len() as u8;
-            let animation = Animation {
-                name: name.to_string(),
-                oam_index: sprite.oam_index,
-                base_tile: sprite.tile_index,
-                start_frame,
-                end_frame,
-                anim_type,
-                index,
-                frame_step,
-            };
-            sprite.animations.push(animation);
-            index
-        } else {
-            0
-        }
+        let sprite = self.sprite_mut(sprite_id);
+        let index = sprite.animations.len() as u8;
+        let animation = Animation {
+            name: name.to_string(),
+            oam_index: sprite.oam_index,
+            base_tile: sprite.tile_index,
+            start_frame,
+            end_frame,
+            anim_type,
+            index,
+            frame_step,
+        };
+        sprite.animations.push(animation);
+        index
     }
 
     /// Panics if animation `name` of `sprite` would get the label of an existing animation
@@ -350,61 +452,70 @@ impl SpriteManager {
 
     /// Set the initial animation for a sprite by animation index
     /// Use ANIM_DISABLED (255) to start with no animation
+    ///
+    /// # Panics
+    /// If there is no sprite `sprite_id`, or it has no animation `animation_index` (and
+    /// it is not `ANIM_DISABLED`): add the animations first.
     pub fn set_initial_animation(&mut self, sprite_id: SpriteId, animation_index: u8) {
-        if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
-            sprite.initial_animation = animation_index;
+        let sprite = self.sprite_mut(sprite_id);
+        if animation_index != ANIM_DISABLED {
+            sprite.check_animation_index(animation_index);
         }
+        sprite.initial_animation = animation_index;
     }
 
     /// Set the initial animation for a sprite by animation name
+    ///
+    /// # Panics
+    /// If there is no sprite `sprite_id`, or it has no animation `name`.
     pub fn set_initial_animation_by_name(&mut self, sprite_id: SpriteId, name: &str) {
-        if let Some(sprite) = self.sprites.get_mut(&sprite_id) {
-            for (i, anim) in sprite.animations.iter().enumerate() {
-                if anim.name == name {
-                    sprite.initial_animation = i as u8;
-                    return;
-                }
-            }
-        }
+        let sprite = self.sprite_mut(sprite_id);
+        sprite.initial_animation = sprite.animation_index(name);
     }
 
     /// Generate code to enable an animation by index for a sprite
     /// Sets wAnim_[sprite_name]_Current to the animation index
+    ///
+    /// # Panics
+    /// If there is no sprite `sprite_id`, or it has no animation `animation_index`
+    /// (to stop the animation, use [`SpriteManager::disable_animation`]).
     pub fn enable_animation(&self, sprite_id: SpriteId, animation_index: u8) -> Vec<Instr> {
-        let mut asm = Asm::new();
-
-        if let Some(sprite) = self.sprites.get(&sprite_id) {
-            let var_name = format!("wAnim_{}_Current", sprite.name);
-            asm.ld_a(animation_index);
-            asm.ld_addr_def_a(&var_name);
+        let sprite = self.sprite(sprite_id);
+        if animation_index == ANIM_DISABLED {
+            panic!(
+                "enable_animation(sprite \"{}\", ANIM_DISABLED): to stop the animation, use \
+                 disable_animation",
+                sprite.name
+            );
         }
-
+        sprite.check_animation_index(animation_index);
+        let mut asm = Asm::new();
+        asm.ld_a(animation_index);
+        asm.ld_addr_def_a(&sprite.current_var());
         asm.get_main_instrs()
     }
 
     /// Generate code to enable an animation by name for a sprite
+    ///
+    /// # Panics
+    /// If there is no sprite `sprite_id`, or it has no animation `name`.
     pub fn enable_animation_by_name(&self, sprite_id: SpriteId, name: &str) -> Vec<Instr> {
-        if let Some(sprite) = self.sprites.get(&sprite_id) {
-            for (i, anim) in sprite.animations.iter().enumerate() {
-                if anim.name == name {
-                    return self.enable_animation(sprite_id, i as u8);
-                }
-            }
-        }
-        Vec::new()
+        let index = self.sprite(sprite_id).animation_index(name);
+        self.enable_animation(sprite_id, index)
     }
 
     /// Generate code to disable all animations for a sprite
     /// Sets wAnim_[sprite_name]_Current to ANIM_DISABLED (255)
+    ///
+    /// # Panics
+    /// If there is no sprite `sprite_id`, or it has no animations (it has no animation
+    /// variable to set).
     pub fn disable_animation(&self, sprite_id: SpriteId) -> Vec<Instr> {
+        let sprite = self.sprite(sprite_id);
+        sprite.check_has_animations("disable_animation");
         let mut asm = Asm::new();
-
-        if let Some(sprite) = self.sprites.get(&sprite_id) {
-            let var_name = format!("wAnim_{}_Current", sprite.name);
-            asm.ld_a(ANIM_DISABLED);
-            asm.ld_addr_def_a(&var_name);
-        }
-
+        asm.ld_a(ANIM_DISABLED);
+        asm.ld_addr_def_a(&sprite.current_var());
         asm.get_main_instrs()
     }
 
@@ -432,7 +543,7 @@ impl SpriteManager {
         id
     }
 
-    /// Get the sprite IDs that make up a composite sprite
+    /// Get the sprite IDs that make up a composite sprite (`None` for an unknown id)
     pub fn get_composite_sprites(&self, id: CompositeSpriteId) -> Option<&Vec<SpriteId>> {
         self.composite_sprites.get(&id).map(|c| &c.sprites)
     }
@@ -444,8 +555,9 @@ impl SpriteManager {
     /// Returns the animation index (same for all sprites in the composite)
     ///
     /// # Panics
-    /// If `name` is not a valid RGBDS identifier, or the composite already has an
-    /// animation of that name (see [`SpriteManager::add_animation_with_step`]).
+    /// If there is no composite `composite_id`, if `name` is not a valid RGBDS
+    /// identifier, or the composite already has an animation of that name (see
+    /// [`SpriteManager::add_animation_with_step`]).
     pub fn add_composite_animation(
         &mut self,
         composite_id: CompositeSpriteId,
@@ -457,71 +569,71 @@ impl SpriteManager {
         let mut anim_index = 0u8;
         check_name("animation", name);
 
+        let composite = self.composite(composite_id);
+        if composite.animation_names.iter().any(|anim| anim == name) {
+            panic!(
+                "composite sprite \"{}\" already has an animation \"{}\"",
+                composite.name, name
+            );
+        }
+        let sprite_ids = composite.sprites.clone();
         if let Some(composite) = self.composite_sprites.get_mut(&composite_id) {
-            if composite.animation_names.iter().any(|anim| anim == name) {
-                panic!(
-                    "composite sprite \"{}\" already has an animation \"{}\"",
-                    composite.name, name
-                );
-            }
-            let sprite_ids = composite.sprites.clone();
             composite.animation_names.push(name.to_string());
-
-            for sprite_id in sprite_ids {
-                anim_index =
-                    self.add_animation(sprite_id, name, start_frame, end_frame, anim_type.clone());
-            }
+        }
+        for sprite_id in sprite_ids {
+            anim_index =
+                self.add_animation(sprite_id, name, start_frame, end_frame, anim_type.clone());
         }
 
         anim_index
     }
 
     /// Set the initial animation for all sprites in a composite by animation index
+    ///
+    /// # Panics
+    /// See [`SpriteManager::set_initial_animation`]; also if there is no composite
+    /// `composite_id`.
     pub fn set_composite_initial_animation(
         &mut self,
         composite_id: CompositeSpriteId,
         animation_index: u8,
     ) {
-        if let Some(composite) = self.composite_sprites.get(&composite_id) {
-            let sprite_ids = composite.sprites.clone();
-            for sprite_id in sprite_ids {
-                self.set_initial_animation(sprite_id, animation_index);
-            }
+        for sprite_id in self.composite(composite_id).sprites.clone() {
+            self.set_initial_animation(sprite_id, animation_index);
         }
     }
 
     /// Generate code to enable a composite animation by index
     /// Sets all sprites in the composite to the same animation index
+    ///
+    /// # Panics
+    /// See [`SpriteManager::enable_animation`]; also if there is no composite
+    /// `composite_id`.
     pub fn enable_composite_animation(
         &self,
         composite_id: CompositeSpriteId,
         animation_index: u8,
     ) -> Vec<Instr> {
-        let mut instrs = Vec::new();
-
-        if let Some(composite) = self.composite_sprites.get(&composite_id) {
-            for sprite_id in &composite.sprites {
-                instrs.extend(self.enable_animation(*sprite_id, animation_index));
-            }
-        }
-
-        instrs
+        self.composite(composite_id)
+            .sprites
+            .iter()
+            .flat_map(|sprite_id| self.enable_animation(*sprite_id, animation_index))
+            .collect()
     }
 
     /// Generate code to disable all animations for a composite sprite
     /// Sets all sprites to ANIM_DISABLED (255)
+    ///
+    /// # Panics
+    /// See [`SpriteManager::disable_animation`]; also if there is no composite
+    /// `composite_id`.
     pub fn disable_composite_animation(&self, composite_id: CompositeSpriteId) -> Vec<Instr> {
-        let mut instrs = Vec::new();
-
-        if let Some(composite) = self.composite_sprites.get(&composite_id) {
-            for sprite_id in &composite.sprites {
-                instrs.extend(self.disable_animation(*sprite_id));
-            }
-        }
-
-        instrs
+        self.composite(composite_id)
+            .sprites
+            .iter()
+            .flat_map(|sprite_id| self.disable_animation(*sprite_id))
+            .collect()
     }
-
     /// Move a composite sprite left by `distance` pixels, as one block: no sprite of the
     /// composite goes left of `limit` (an OAM X, screen x + 8)
     ///
@@ -584,13 +696,11 @@ impl SpriteManager {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        let Some(composite) = self.composite_sprites.get(&id) else {
-            return Vec::new();
-        };
-        let members: Vec<&SpriteData> = composite
+        let members: Vec<&SpriteData> = self
+            .composite(id)
             .sprites
             .iter()
-            .filter_map(|sprite_id| self.sprites.get(sprite_id))
+            .map(|sprite_id| self.sprite(*sprite_id))
             .collect();
         let pos = |sprite: &SpriteData| i16::from(axis.position(sprite));
 
@@ -648,40 +758,34 @@ impl SpriteManager {
         asm.get_main_instrs()
     }
 
-    /// Generate movement code for a specific sprite
+    /// Generate movement code for a specific sprite: add the value of the variable
+    /// `var_name` to its X (changes `a`, `b` and the flags)
+    ///
+    /// # Panics
+    /// If there is no sprite `id`.
     pub fn move_x_var(&self, id: SpriteId, var_name: &str) -> Vec<Instr> {
-        if let Some(sprite) = self.sprites.get(&id) {
-            let mut asm = Asm::new();
-            let oam_offset = sprite.oam_index * 4 + 1;
-
-            asm.ld_a_addr_def(var_name);
-            asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
-            asm.add(Operand::Reg(Register::A), Operand::Reg(Register::B));
-            asm.ld_addr_def_a(&format!("_OAMRAM+{}", oam_offset));
-
-            asm.get_main_instrs()
-        } else {
-            Vec::new()
-        }
+        self.move_var(id, Axis::X, var_name)
     }
 
-    /// Generate movement code for Y axis with variable
+    /// Generate movement code for Y axis with variable: add the value of the variable
+    /// `var_name` to the sprite's Y (changes `a`, `b` and the flags)
+    ///
+    /// # Panics
+    /// If there is no sprite `id`.
     pub fn move_y_var(&self, id: SpriteId, var_name: &str) -> Vec<Instr> {
-        if let Some(sprite) = self.sprites.get(&id) {
-            let mut asm = Asm::new();
-            let oam_offset = sprite.oam_index * 4;
+        self.move_var(id, Axis::Y, var_name)
+    }
 
-            asm.ld_a_addr_def(var_name);
-            asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
-            asm.add(Operand::Reg(Register::A), Operand::Reg(Register::B));
-            asm.ld_addr_def_a(&format!("_OAMRAM+{}", oam_offset));
-
-            asm.get_main_instrs()
-        } else {
-            Vec::new()
-        }
+    /// Add the variable `var_name` to the sprite's coordinate on `axis`
+    fn move_var(&self, id: SpriteId, axis: Axis, var_name: &str) -> Vec<Instr> {
+        let coord = axis.oam_address(self.sprite(id));
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(var_name);
+        asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+        asm.ld_a_addr_def(&coord);
+        asm.add(Operand::Reg(Register::A), Operand::Reg(Register::B));
+        asm.ld_addr_def_a(&coord);
+        asm.get_main_instrs()
     }
 
     /// Move a sprite left by `distance` pixels, but never left of `limit`
@@ -691,6 +795,9 @@ impl SpriteManager {
     ///   the same edge whatever the distance, and never wraps around 0 / 255.
     /// - A sprite already past the limit does not move: the move never takes it further,
     ///   and does not pull it back either.
+    ///
+    /// # Panics
+    /// If there is no sprite `id` (the same for every move and getter of a sprite).
     pub fn move_left_limit(&self, id: SpriteId, distance: u8, limit: u8) -> Vec<Instr> {
         self.move_limit(id, Axis::X, MoveDir::Decrease, "left", distance, limit)
     }
@@ -724,9 +831,7 @@ impl SpriteManager {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        let Some(sprite) = self.sprites.get(&id) else {
-            return Vec::new();
-        };
+        let sprite = self.sprite(id);
         move_coord_limit(
             &self.labels,
             &format!("sprite{}_{}_limit", sprite.oam_index, name),
@@ -746,42 +851,31 @@ impl SpriteManager {
     /// background map. Changes `a`, `b`, `c` and the flags.
     ///
     /// # Panics
-    /// If an offset is out of -255 to 255 (on a 256-pixel map, 256 is 0: a mistake).
+    /// If there is no sprite `id`, or an offset is out of -255 to 255 (on a 256-pixel map,
+    /// 256 is 0: a mistake).
     pub fn get_pivot(&self, id: SpriteId, x_offset: i16, y_offset: i16) -> Vec<Instr> {
-        match self.sprites.get(&id) {
-            Some(sprite) => pivot(sprite.oam_index, x_offset, y_offset),
-            None => Vec::new(),
-        }
+        pivot(self.sprite(id).oam_index, x_offset, y_offset)
     }
 
-    /// Get sprite Y position
+    /// Get sprite Y position (its OAM Y, into `a`)
+    ///
+    /// # Panics
+    /// If there is no sprite `id`.
     pub fn get_y(&self, id: SpriteId) -> Vec<Instr> {
-        if let Some(sprite) = self.sprites.get(&id) {
-            let mut asm = Asm::new();
-            let oam_offset = sprite.oam_index * 4;
-
-            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
-
-            asm.get_main_instrs()
-        } else {
-            Vec::new()
-        }
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&Axis::Y.oam_address(self.sprite(id)));
+        asm.get_main_instrs()
     }
 
-    /// Get sprite X position
+    /// Get sprite X position (its OAM X, into `a`)
+    ///
+    /// # Panics
+    /// If there is no sprite `id`.
     pub fn get_x(&self, id: SpriteId) -> Vec<Instr> {
-        if let Some(sprite) = self.sprites.get(&id) {
-            let mut asm = Asm::new();
-            let oam_offset = sprite.oam_index * 4 + 1;
-
-            asm.ld_a_addr_def(&format!("_OAMRAM+{}", oam_offset));
-
-            asm.get_main_instrs()
-        } else {
-            Vec::new()
-        }
+        let mut asm = Asm::new();
+        asm.ld_a_addr_def(&Axis::X.oam_address(self.sprite(id)));
+        asm.get_main_instrs()
     }
-
     /// Check if any sprites have been added
     pub fn is_empty(&self) -> bool {
         self.sprites.is_empty()
@@ -1116,6 +1210,223 @@ mod tests {
         let mut sm = SpriteManager::new(LabelAllocator::new());
         let ball = sm.add("Ball", 32, 100, 0, 1);
         sm.get_pivot(ball, 0, -256);
+    }
+
+    // ==================== Loud failures (B20) ====================
+
+    use crate::rust_boy::panic_message;
+
+    /// A manager with one sprite, "Coin" (4 tiles, two animations, "Spin" and "Flip"),
+    /// one without animations, "Ball", and a 16x16 composite, "Player"
+    fn coin_and_ball() -> (SpriteManager, SpriteId, SpriteId, CompositeSpriteId) {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let coin = gb.add_sprite("Coin", tiles(4), 16, 16, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+        gb.sprites
+            .add_animation(coin, "Flip", 1, 1, AnimationType::Loop);
+        let ball = gb.add_sprite("Ball", tiles(2), 32, 16, 0);
+        let player = gb.add_sprite_16x16("Player", tiles(2), tiles(2), 80, 72, 0);
+        (gb.sprites, coin, ball, player)
+    }
+
+    type SpriteOp = Box<dyn Fn(&mut SpriteManager, SpriteId)>;
+
+    #[test]
+    fn test_an_unknown_sprite_id_panics() {
+        // B20: every method on an unknown id returned no code (or 0), so the program
+        // silently did nothing
+        let ops: Vec<(&str, SpriteOp)> = vec![
+            (
+                "move_left_limit",
+                Box::new(|sm, id| drop(sm.move_left_limit(id, 1, 8))),
+            ),
+            (
+                "move_right_limit",
+                Box::new(|sm, id| drop(sm.move_right_limit(id, 1, 8))),
+            ),
+            (
+                "move_up_limit",
+                Box::new(|sm, id| drop(sm.move_up_limit(id, 1, 8))),
+            ),
+            (
+                "move_down_limit",
+                Box::new(|sm, id| drop(sm.move_down_limit(id, 1, 8))),
+            ),
+            (
+                "move_x_var",
+                Box::new(|sm, id| drop(sm.move_x_var(id, "wDx"))),
+            ),
+            (
+                "move_y_var",
+                Box::new(|sm, id| drop(sm.move_y_var(id, "wDy"))),
+            ),
+            ("get_pivot", Box::new(|sm, id| drop(sm.get_pivot(id, 0, 1)))),
+            ("get_x", Box::new(|sm, id| drop(sm.get_x(id)))),
+            ("get_y", Box::new(|sm, id| drop(sm.get_y(id)))),
+            (
+                "enable_animation",
+                Box::new(|sm, id| drop(sm.enable_animation(id, 0))),
+            ),
+            (
+                "enable_animation_by_name",
+                Box::new(|sm, id| drop(sm.enable_animation_by_name(id, "Spin"))),
+            ),
+            (
+                "disable_animation",
+                Box::new(|sm, id| drop(sm.disable_animation(id))),
+            ),
+            (
+                "add_animation",
+                Box::new(|sm, id| {
+                    sm.add_animation(id, "Spin", 0, 0, AnimationType::Loop);
+                }),
+            ),
+            (
+                "set_initial_animation",
+                Box::new(|sm, id| sm.set_initial_animation(id, 0)),
+            ),
+            (
+                "set_initial_animation_by_name",
+                Box::new(|sm, id| sm.set_initial_animation_by_name(id, "Spin")),
+            ),
+        ];
+        for (name, op) in ops {
+            let (mut sm, ..) = coin_and_ball();
+            let message = panic_message(|| op(&mut sm, SpriteId(99)));
+            assert!(
+                message.contains("unknown sprite id 99"),
+                "{}: {}",
+                name,
+                message
+            );
+        }
+    }
+
+    type CompositeOp = Box<dyn Fn(&mut SpriteManager, CompositeSpriteId)>;
+
+    #[test]
+    fn test_an_unknown_composite_id_panics() {
+        let ops: Vec<(&str, CompositeOp)> = vec![
+            (
+                "move_composite_left_limit",
+                Box::new(|sm, id| drop(sm.move_composite_left_limit(id, 1, 8))),
+            ),
+            (
+                "move_composite_right_limit",
+                Box::new(|sm, id| drop(sm.move_composite_right_limit(id, 1, 8))),
+            ),
+            (
+                "move_composite_up_limit",
+                Box::new(|sm, id| drop(sm.move_composite_up_limit(id, 1, 8))),
+            ),
+            (
+                "move_composite_down_limit",
+                Box::new(|sm, id| drop(sm.move_composite_down_limit(id, 1, 8))),
+            ),
+            (
+                "add_composite_animation",
+                Box::new(|sm, id| {
+                    sm.add_composite_animation(id, "Walk", 0, 0, AnimationType::Loop);
+                }),
+            ),
+            (
+                "set_composite_initial_animation",
+                Box::new(|sm, id| sm.set_composite_initial_animation(id, 0)),
+            ),
+            (
+                "enable_composite_animation",
+                Box::new(|sm, id| drop(sm.enable_composite_animation(id, 0))),
+            ),
+            (
+                "disable_composite_animation",
+                Box::new(|sm, id| drop(sm.disable_composite_animation(id))),
+            ),
+        ];
+        for (name, op) in ops {
+            let (mut sm, ..) = coin_and_ball();
+            let message = panic_message(|| op(&mut sm, CompositeSpriteId(7)));
+            assert!(
+                message.contains("unknown composite sprite id 7"),
+                "{}: {}",
+                name,
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_an_unknown_animation_name_panics() {
+        // B20: a typo did nothing (no code, no initial animation)
+        let (mut sm, coin, ..) = coin_and_ball();
+        let message = panic_message(|| sm.enable_animation_by_name(coin, "Spn"));
+        assert!(
+            message.contains("sprite \"Coin\" has no animation \"Spn\"")
+                && message.contains("Spin, Flip"),
+            "{}",
+            message
+        );
+        let message = panic_message(|| sm.set_initial_animation_by_name(coin, "spin"));
+        assert!(message.contains("no animation \"spin\""), "{}", message);
+        // The right names work
+        let text =
+            |code: Vec<Instr>| -> Vec<String> { code.iter().map(Instr::to_string).collect() };
+        assert_eq!(
+            text(sm.enable_animation_by_name(coin, "Flip")),
+            text(sm.enable_animation(coin, 1))
+        );
+        sm.set_initial_animation_by_name(coin, "Flip");
+        assert_eq!(sm.get(coin).unwrap().initial_animation, 1);
+    }
+
+    #[test]
+    fn test_an_unknown_animation_index_panics() {
+        let (mut sm, coin, ball, player) = coin_and_ball();
+        // Coin has the animations 0 and 1
+        let message = panic_message(|| sm.enable_animation(coin, 2));
+        assert!(
+            message.contains("sprite \"Coin\" has no animation 2 (it has 2: 0 to 1)"),
+            "{}",
+            message
+        );
+        let message = panic_message(|| sm.set_initial_animation(coin, 2));
+        assert!(message.contains("no animation 2"), "{}", message);
+        let message = panic_message(|| sm.enable_composite_animation(player, 0));
+        assert!(message.contains("no animation 0"), "{}", message);
+        // ANIM_DISABLED is the initial "no animation"; enable_animation needs a real one
+        sm.set_initial_animation(coin, ANIM_DISABLED);
+        let message = panic_message(|| sm.enable_animation(coin, ANIM_DISABLED));
+        assert!(message.contains("disable_animation"), "{}", message);
+
+        // A sprite without animations has no animation variable to set
+        // (`wAnim_Ball_Current` would be an undefined symbol)
+        for message in [
+            panic_message(|| sm.enable_animation(ball, 0)),
+            panic_message(|| sm.disable_animation(ball)),
+            panic_message(|| sm.disable_composite_animation(player)),
+        ] {
+            assert!(message.contains("has no animations"), "{}", message);
+        }
+    }
+
+    #[test]
+    fn test_at_most_255_animations_per_sprite() {
+        // B20: the index is a u8 and 255 means "disabled" (ANIM_DISABLED): the 256th
+        // animation got index 255, so enabling it disabled the sprite, and the one after
+        // wrapped to index 0
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let coin = sm.add("Coin", 0, 0, 0, 1);
+        for i in 0..255 {
+            let index = sm.add_animation(coin, &format!("A{}", i), 0, 0, AnimationType::Loop);
+            assert_eq!(index, i as u8);
+        }
+        let message = panic_message(|| sm.add_animation(coin, "A255", 0, 0, AnimationType::Loop));
+        assert!(
+            message.contains("sprite \"Coin\" already has 255 animations"),
+            "{}",
+            message
+        );
     }
 
     #[test]

@@ -404,6 +404,7 @@ mod tests {
     // ==================== Var::set / Var::get (B16) ====================
 
     use crate::gb_asm::test_cpu::TestCpu;
+    use crate::rust_boy::panic_message;
 
     /// A test CPU whose memory holds every variable at its initial value, as the
     /// start-up code leaves it
@@ -491,17 +492,6 @@ mod tests {
         // The same code as before for 8-bit variables
         assert_eq!(lines(momentum.set(-1)), ["ld a, -1", "ld [wMomentum], a"]);
         assert_eq!(lines(lives.get()), ["ld a, [wLives]"]);
-    }
-
-    /// The message `f` panics with; panics if it does not
-    fn panic_message(f: impl FnOnce() -> Vec<Instr> + std::panic::UnwindSafe) -> String {
-        let Err(err) = std::panic::catch_unwind(f) else {
-            panic!("it did not panic");
-        };
-        err.downcast_ref::<String>()
-            .cloned()
-            .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
-            .unwrap_or_default()
     }
 
     #[test]

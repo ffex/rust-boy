@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 196 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 202 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Asm::ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -55,7 +55,7 @@ rgbfix -v -p 0xFF main.gb
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
 | API safety | ✅ unknown sprite / composite ids, animation names and indices panic with a clear message (they gave no code, fixed — [B20](#b20)); VRAM tiles, WRAM0 variables and OAM entries are allocated through `MemoryAllocator` and panic when full, sprite positions and animation frames are checked (fixed — [B17](#b17)); a sprite's tile index comes from its VRAM address (fixed — [B18](#b18)); `Var::set`/`get` handle 16-bit variables (fixed — [B16](#b16)); `get_pivot` wraps around the map (fixed — [B22](#b22)); a tilemap can go to `$9C00` (fixed — [B19](#b19)) |
-| Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`) |
+| Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`). Typed operands since `refactor-p2-typed-operands`: no register or expression is a string any more (`Dst`, `Operand`, `Mem`, `AluOperand`, `IncDec`, and `Expr` for values), a value cannot be a destination, and `Instr::check` accepts exactly the `ld`/`ldh` operand pairs of the opcode table (`isa_tests`: all 91 load opcodes, `Expr` operands assembled by RGBDS, 554 instructions) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -65,10 +65,10 @@ rgbfix -v -p 0xFF main.gb
 
 | Layer | Path | LOC | Role |
 |---|---|---|---|
-| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~1650 | The whole SM83 instruction set as `Instr` (one shape per family, typed `R8`/`R16`/`R16Stack` operands for the new instructions, `Instr::check`; since Phase 2 `refactor-p2-isa`) with `Operand`/`Register`, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
+| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~2100 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`, `Emittable`), a simple `SpriteManager`, `TileRef` |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
-| **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`), `oam_address`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
+| **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`, and since `refactor-p2-typed-operands` `rLCDC`, `rLY`, `rP1`, the palettes, `LCDCF_*`, `P1F_*`), `oam_offset`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
 
 ### Key concepts
@@ -134,8 +134,37 @@ The problems are where each layer reaches across the line:
    `add sp, e8` are `AddHl { src: R16 }` and `AddSp { offset: i8 }`; the rotates, shifts, `swap` and
    `bit`/`set`/`res` take an `R8` (a register or `[hl]`), `push`/`pop` an `R16Stack`; the ISA is complete; `Instr`
    derives `Debug` and `PartialEq`. What the types cannot rule out (a bit number above 7, an `rst` vector, a 16-bit
-   ALU source, `[bci]`) is rejected by `Instr::check`, which `Asm::emit` and the RGBDS output call. The string
-   helpers and the operands of `ld`/`ldh`/`inc`/`dec` are still loose: the next Phase 2 PR (typed operands).
+   ALU source, `[bci]`) is rejected by `Instr::check`, which `Asm::emit` and the RGBDS output call.
+   *Since `refactor-p2-typed-operands`:* every operand is typed and the string helpers are gone. `ld`/`ldh` take a
+   `Dst` (`R8`, `R16` or `Mem`: `[bc]`, `[de]`, `[hli]`, `[hld]`, `[c]`, `[address]`; never a value, so `ld 1, 2` does
+   not compile) and an `Operand` (the same, or a value); the ALU takes an `AluOperand` (`R8` or a value), `inc`/`dec`
+   an `IncDec` (`R8` or `R16`), so `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile either. `Instr::check`
+   accepts exactly the `ld`/`ldh` pairs of the opcode table (`ld [hl], [hl]`, `ld b, [de]`, `ld bc, de`, `ldh b, [c]`
+   panic) and rejects a constant that does not fit its operand (`ld a, 300`). Values are `Expr`s
+   (`src/gb_asm/expr.rs`): numbers (decimal, `$` hex, `%` binary, negative), symbols checked to be RGBDS names and
+   not registers (the string helpers let `cp_label("b")` be an expression, which `instr_size` counted as 2 bytes),
+   `+ - * << >> & | ^`, `-`/`~`, `LOW`/`HIGH`, printed with RGBDS precedence (`&`, `|`, `^` bind tighter than `+`, `-`);
+   `Expr::raw` passes any other RGBDS text. A `&str` where a value is expected is read as a symbol or a number, and
+   panics on anything else (`"TilesEnd - Tiles"`, `"[wScore]"`, `"a"`). Migration from the removed API:
+
+   | Before | After |
+   |---|---|
+   | `ld_a_label("X")`, `ld_hl_label("X")`, `ld_b_label("a")` | `ld(R8::A, "X")`, `ld(R16::HL, "X")`, `ld(R8::B, R8::A)` |
+   | `ld_hli_label("a")`, `ld_addr_label_a("[hl]")` | `ld(Mem::Hli, R8::A)`, `ld(R8::AtHl, R8::A)` |
+   | `ld_a_addr_reg(Register::DE)` / `(Register::HL)` | `ld(R8::A, Mem::De)` / `ld(R8::A, R8::AtHl)` |
+   | `ldh_label("[$FF40]", "a")` | `ldh(Mem::addr(Expr::hex(0xFF40)), R8::A)` |
+   | `add_label("a", "b")`, `add_label("hl", "bc")`, `add_label("sp", "-2")` | `add(R8::B)`, `add_hl(R16::BC)`, `add_sp(-2)` |
+   | `sub_label("a", "8")`, `cp_label("BRICK")`, `and_label("%11110000")` | `sub(8)`, `cp("BRICK")`, `and(Expr::bin(0b11110000))` |
+   | `inc_label("de")`, `dec_label("b")`, `srl_label("a")`, `swap_label("a")` | `inc(R16::DE)`, `dec(R8::B)`, `srl(R8::A)`, `swap(R8::A)` |
+   | `Operand::Reg(Register::A)`, `Operand::Imm(5)`, `Operand::Imm16(n)` | `R8::A`, `5`, `Operand::from(n)` (or just `n`) |
+   | `Operand::AddrDef("x")`, `Operand::AddrReg(Register::HL)`, `Operand::AddrRegInc(..)` | `Mem::addr("x")`, `R8::AtHl`, `Mem::Hli` |
+   | `Operand::Label("TilesEnd - Tiles")` | `Expr::sym("TilesEnd") - "Tiles"` (or `Expr::raw(..)`) |
+   | `ld_a_addr_def(&format!("_OAMRAM+{}", n))`, `hw::oam_address(i, b)` | `ld_a_addr_def(Expr::sym("_OAMRAM") + n)`, `hw::oam_offset(i, b)` |
+
+   `IfConst`/`IfA`, `TileRef::set_tile_label`/`load_address_label` and `cp_in_memory`'s address take an
+   `impl Into<Expr>` (a `&str` still works). A side effect: a `RustBoy` variable whose name is not a valid RGBDS
+   symbol now panics when its code is generated (`Var::set`/`get`, the start-up initialisation); before, rgbasm
+   rejected the output (checking every user name stays the Phase 3 item).
 3. **Hardware facts are hardcoded in every layer.** `_OAMRAM+{id*4+1}` strings in both sprite managers,
    `$9800` in three places, VRAM bases in `tiles.rs`, LCDC flags written as strings in each layer
    (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) existed but were unused (used since [B17](#b17)); a first `hw` module (`src/hw.rs`, pure data) exists since [B22](#b22).
@@ -556,7 +585,7 @@ and `sub (8 + x_offset)` modulo 256, so `b` = screen x − `x_offset` and `c` = 
 256-pixel background map (positive offsets go left / up, as before: `(0, 1)` is above, `(-1, 0)` is right; see
 [B30](#b30)). An offset out of -255..=255 panics (on a 256-pixel map 256 is 0, so it is a mistake). The examples' offsets
 (±1) give the same code. It takes the OAM addresses from the new `hw` module (`src/hw.rs`, pure data, the start of the
-Phase 2 one: `hw::oam_address`, `OAMA_Y`, `OAM_X_OFFSET`, …). Tests: `test_get_pivot_handles_every_offset` (in both layers,
+Phase 2 one: `hw::oam_address`, `OAMA_Y`, `OAM_X_OFFSET`, …; since `refactor-p2-typed-operands` `hw::oam_offset`, the `Expr` being built in `gb_std`). Tests: `test_get_pivot_handles_every_offset` (in both layers,
 every offset from -255 to 255 on the test CPU; it failed before, from `get_pivot(-255, 0)`) and
 `test_get_pivot_rejects_an_offset_past_the_map`.
 

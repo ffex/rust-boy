@@ -65,10 +65,12 @@ fn main() {
 
 ## Low level (`gb_asm`)
 
-The same building blocks the engine uses, one instruction at a time:
+The same building blocks the engine uses, one instruction at a time. An `Asm` is a program: it is printed in the
+order it is written, and knows instructions and sections, not how a game is laid out (the engine puts its parts in
+order with `rust_boy::Layout`, by `Chunk`):
 
 ```rust
-use rust_boy::gb_asm::{Asm, Chunk, Condition, Section};
+use rust_boy::gb_asm::{Asm, Condition, Section};
 
 fn main() {
     let mut asm = Asm::new();
@@ -84,10 +86,10 @@ fn main() {
         .label("EntryPoint")
         .label("MainLoop")
         .call("WaitVBlank")
-        .jp("MainLoop");
+        .jp("MainLoop")
+        .blank_line(); // a blank line in the output
 
-    asm.chunk(Chunk::Functions)
-        .label("WaitVBlank")
+    asm.label("WaitVBlank")
         .ld_a_addr_def("rLY")
         .cp_imm(144)
         .jr_cond(Condition::NZ, "WaitVBlank")
@@ -244,7 +246,7 @@ Open them in any Game Boy emulator.
 src/
 ├── gb_asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
-├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
+├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs, the program layout (chunks)
 ├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)
 ├── bin/           # the example programs
 └── lib.rs

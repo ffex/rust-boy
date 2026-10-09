@@ -786,11 +786,7 @@ fn test_builders_emit_their_instruction() {
         .call_cond(Condition::Z, "Routine")
         .reti()
         .rst(0x28);
-    let text: Vec<String> = asm
-        .get_main_instrs()
-        .iter()
-        .map(|instr| instr.to_string())
-        .collect();
+    let text: Vec<String> = asm.instrs().iter().map(|instr| instr.to_string()).collect();
     assert_eq!(
         text,
         [

@@ -398,7 +398,7 @@ fn relax(program: &[Instr]) -> Option<(Vec<bool>, Vec<(usize, usize)>, Vec<Optio
 mod tests {
     use super::*;
     use crate::gb_asm::label_check::{jr_range_errors, rgbds_rom, rgbds_rom_and_symbols};
-    use crate::gb_asm::{Asm, Chunk, Condition, R8, Section};
+    use crate::gb_asm::{Asm, Condition, R8, Section};
 
     /// A program in one ROM0 section at $0000, starting with the global label `Main`,
     /// then the code `build` writes
@@ -550,7 +550,7 @@ mod tests {
             asm.label(".near").ret();
         });
         // Before the relaxation, only the jump to .t3 is out of range
-        let code = asm.get_main_instrs();
+        let code = asm.instrs().to_vec();
         assert_eq!(
             jr_range_errors(&code),
             ["jr c, .t3: offset 130 is out of range"]
@@ -570,7 +570,7 @@ mod tests {
             nops(asm, 128);
             asm.label(".far").ret();
         });
-        let code = asm.get_main_instrs();
+        let code = asm.instrs().to_vec();
         assert_eq!(
             jr_range_errors(&code),
             ["jr .far: offset 130 is out of range"]
@@ -606,7 +606,7 @@ mod tests {
             })
         };
         let asm = ladder(128);
-        let code = asm.get_main_instrs();
+        let code = asm.instrs().to_vec();
         assert_eq!(
             jr_range_errors(&code),
             ["jr .t9: offset 128 is out of range"]
@@ -619,7 +619,7 @@ mod tests {
 
         // One byte less, and none of them grows: the relaxation adds no jp it does not need
         let asm = ladder(127);
-        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+        assert_eq!(asm.program(), asm.instrs()[..]);
         check_with_rgbds(&asm);
     }
 
@@ -717,7 +717,7 @@ mod tests {
             asm.label("Second").label(".loop").dec(R8::C);
             asm.jr_cond(Condition::NZ, ".loop").ret();
         });
-        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+        assert_eq!(asm.program(), asm.instrs()[..]);
         check_with_rgbds(&asm);
 
         // A label defined twice cannot be measured (and rgbasm rejects it)
@@ -728,25 +728,26 @@ mod tests {
     }
 
     #[test]
-    fn test_the_chunks_are_relaxed_as_one_program() {
-        // A jump from the main loop to a label in the functions: the chunks are one
-        // program, in their order, and each one keeps its own instructions
+    fn test_the_groups_are_relaxed_as_one_program() {
+        // A jump from one group of lines to a label in another: the blank lines between
+        // groups change nothing in the code, and each group keeps its own instructions
         let build = || {
             let mut asm = Asm::new();
-            asm.chunk(Chunk::Header)
-                .section(Section::rom0("Code").at(0x0000));
-            asm.chunk(Chunk::MainLoop).label("Main").jr("Done");
-            asm.chunk(Chunk::Functions);
+            asm.section(Section::rom0("Code").at(0x0000))
+                .blank_line()
+                .label("Main")
+                .jr("Done")
+                .blank_line();
             nops(&mut asm, 200);
-            asm.label("Done").jr("Main");
-            asm.chunk(Chunk::Init).label("Init").jr("Main");
+            asm.label("Done").jr("Main").blank_line();
+            asm.label("Init").jr("Main");
             asm
         };
         let text = build().to_asm();
         assert_eq!(text, build().to_asm(), "the same program, the same text");
         assert!(text.contains("    jp Done\n\n    nop\n"), "{}", text);
-        assert!(text.contains("    jp Main\n\n"), "{}", text);
-        assert!(text.contains("Init:\n    jr Main\n\n    Main:"), "{}", text);
+        assert!(text.contains("    jp Main\n\n    Init:"), "{}", text);
+        assert!(text.ends_with("Init:\n    jp Main\n\n"), "{}", text);
         check_with_rgbds(&build());
     }
 
@@ -1007,7 +1008,7 @@ mod tests {
                 nops(asm, 128);
                 asm.label(".far").ret();
             });
-            assert_eq!(asm.program(), asm.get_main_instrs()[..], "{}", target);
+            assert_eq!(asm.program(), asm.instrs()[..], "{}", target);
         }
         // An `@` target over a size only RGBDS knows, or into another section
         let asm = one_section(|asm| {
@@ -1015,7 +1016,7 @@ mod tests {
             nops(asm, 128);
             asm.label(".far").ret();
         });
-        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+        assert_eq!(asm.program(), asm.instrs()[..]);
         let asm = one_section(|asm| {
             asm.jr(".far")
                 .jr("@+2")
@@ -1024,7 +1025,7 @@ mod tests {
             nops(asm, 128);
             asm.label(".far").ret();
         });
-        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+        assert_eq!(asm.program(), asm.instrs()[..]);
     }
 
     #[test]
@@ -1082,7 +1083,7 @@ mod tests {
                 nops(asm, 128);
                 asm.label(".far").ret();
             });
-            assert_eq!(asm.program(), asm.get_main_instrs()[..], "{}", name);
+            assert_eq!(asm.program(), asm.instrs()[..], "{}", name);
             if let Some(result) = rgbds_result(&asm) {
                 let error = result.expect_err(name);
                 assert!(
@@ -1106,7 +1107,7 @@ mod tests {
             asm.label(".far").ret();
         });
         assert_eq!(jump_to(&asm.program(), ".far"), "jp");
-        assert!(!uses_here_elsewhere(&asm.get_main_instrs()));
+        assert!(!uses_here_elsewhere(asm.instrs()));
         if let Some(result) = rgbds_result(&asm) {
             result.expect("it assembles");
         }
@@ -1150,7 +1151,7 @@ mod tests {
             nops(asm, 128);
             asm.label(".far").ret();
         });
-        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+        assert_eq!(asm.program(), asm.instrs()[..]);
         // The test helper reads the same numbers
         let asm = one_section(|asm| {
             asm.jr("@+$04").nop().nop().ret();

@@ -15,11 +15,6 @@ fn catch<R>(f: impl FnOnce() -> R) -> Result<R, String> {
     })
 }
 
-/// The message of the panic of `f`, or `None` if it returns
-fn panic_of<R>(f: impl FnOnce() -> R) -> Option<String> {
-    catch(f).err()
-}
-
 /// One line of content for a section of `memory`: code in ROM, a reservation in RAM
 fn content(memory: MemoryType) -> &'static str {
     if memory.is_rom() { "nop" } else { "ds 1" }
@@ -400,14 +395,23 @@ fn text_of(sections: &[(Section, Vec<Instr>)]) -> String {
     text
 }
 
-/// An `Asm` of `sections`, each with its instructions; `Err` with the panic message if
-/// it does not print
+/// The text of an `Asm` that `write` writes, or the message `Asm` panics with: a RAM
+/// section or a section name is checked when the instruction is emitted
+fn build(write: impl FnOnce(&mut Asm)) -> Result<String, String> {
+    catch(|| {
+        let mut asm = Asm::new();
+        write(&mut asm);
+        asm.to_asm()
+    })
+}
+
+/// [`build`] an `Asm` of `sections`, each with its instructions
 fn print(sections: &[(Section, Vec<Instr>)]) -> Result<String, String> {
-    let mut asm = Asm::new();
-    for (section, instrs) in sections {
-        asm.section(section.clone()).emit_all(instrs.clone());
-    }
-    catch(|| asm.to_asm())
+    build(|asm| {
+        for (section, instrs) in sections {
+            asm.section(section.clone()).emit_all(instrs.clone());
+        }
+    })
 }
 
 #[test]
@@ -536,12 +540,13 @@ fn test_a_section_name_is_used_once() {
 fn test_a_raw_line_or_include_may_change_the_section() {
     // A raw line that opens a section: what follows is not checked against the RAM
     // section before it (RGBDS accepts this program)
-    let mut asm = Asm::new();
-    asm.section(Section::wram0("Vars"))
-        .raw("wA: db")
-        .raw("SECTION \"Code\", ROM0")
-        .nop();
-    let text = asm.to_asm();
+    let text = build(|asm| {
+        asm.section(Section::wram0("Vars"))
+            .raw("wA: db")
+            .raw("SECTION \"Code\", ROM0")
+            .nop();
+    })
+    .expect("no check after the raw SECTION");
     assert_ne!(rgbds_accepts(&text), Some(false), "{}", text);
 
     // The same after an INCLUDE, a macro, or any other raw code
@@ -550,15 +555,17 @@ fn test_a_raw_line_or_include_may_change_the_section() {
         "my_macro",
         "LOAD \"Ram\", WRAM0",
     ] {
-        let mut asm = Asm::new();
-        asm.section(Section::wram0("Vars")).raw(line).nop();
-        assert_eq!(panic_of(|| asm.to_asm()), None, "{}", line);
+        let built = build(|asm| {
+            asm.section(Section::wram0("Vars")).raw(line).nop();
+        });
+        assert!(built.is_ok(), "{}: {:?}", line, built);
     }
-    let mut asm = Asm::new();
-    asm.section(Section::wram0("Vars"))
-        .include("hardware.inc")
-        .nop();
-    assert_eq!(panic_of(|| asm.to_asm()), None);
+    let built = build(|asm| {
+        asm.section(Section::wram0("Vars"))
+            .include("hardware.inc")
+            .nop();
+    });
+    assert!(built.is_ok(), "{:?}", built);
 
     // Raw labels and reservations keep the section: a `nop` after them is rejected
     for line in [
@@ -568,12 +575,13 @@ fn test_a_raw_line_or_include_may_change_the_section() {
         "wC:\n    ds 4 ; four",
         "",
     ] {
-        let mut asm = Asm::new();
-        asm.section(Section::wram0("Vars"))
-            .label("Vars")
-            .raw(line)
-            .nop();
-        let error = panic_of(|| asm.to_asm()).unwrap_or_else(|| panic!("{:?} accepted", line));
+        let error = build(|asm| {
+            asm.section(Section::wram0("Vars"))
+                .label("Vars")
+                .raw(line)
+                .nop();
+        })
+        .expect_err(line);
         assert!(
             error.contains("a RAM section holds no code or data"),
             "{}",
@@ -582,25 +590,28 @@ fn test_a_raw_line_or_include_may_change_the_section() {
     }
 
     // A comment written with a line break prints code: it is read as a raw line
-    let mut asm = Asm::new();
-    asm.section(Section::wram0("Vars"))
-        .comment("note\nSECTION \"Code\", ROM0")
-        .nop();
-    let text = asm.to_asm();
+    let text = build(|asm| {
+        asm.section(Section::wram0("Vars"))
+            .comment("note\nSECTION \"Code\", ROM0")
+            .nop();
+    })
+    .expect("no check after the SECTION in the comment");
     assert_ne!(rgbds_accepts(&text), Some(false), "{}", text);
-    let mut asm = Asm::new();
-    asm.section(Section::wram0("Vars"))
-        .comment("note\nwA: ds 1")
-        .nop();
-    assert!(panic_of(|| asm.to_asm()).is_some());
+    let built = build(|asm| {
+        asm.section(Section::wram0("Vars"))
+            .comment("note\nwA: ds 1")
+            .nop();
+    });
+    assert!(built.is_err());
 
     // A typed section after an unknown one is checked again
-    let mut asm = Asm::new();
-    asm.raw("SECTION \"Code\", ROM0")
-        .nop()
-        .section(Section::hram("Fast"))
-        .nop();
-    let error = panic_of(|| asm.to_asm()).expect("a nop in HRAM");
+    let error = build(|asm| {
+        asm.raw("SECTION \"Code\", ROM0")
+            .nop()
+            .section(Section::hram("Fast"))
+            .nop();
+    })
+    .expect_err("a nop in HRAM");
     assert!(
         error.contains("`nop` in the HRAM section \"Fast\""),
         "{}",

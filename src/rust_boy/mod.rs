@@ -6,6 +6,7 @@
 mod animations;
 mod functions;
 mod inputs;
+mod layout;
 mod memory;
 mod rustboy;
 mod sprites;
@@ -15,6 +16,7 @@ mod variables;
 pub use animations::AnimationType;
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
+pub use layout::{Chunk, Layout};
 pub use memory::MemoryRegion;
 pub use rustboy::RustBoy;
 pub use sprites::{ANIM_DISABLED, CompositeSpriteId, SpriteId, SpriteManager, SpriteSize};

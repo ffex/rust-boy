@@ -6,41 +6,27 @@ use super::instr::{
     AluOperand, Condition, Dst, IncDec, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
 };
 use super::labels::LabelAllocator;
-use super::section::Section;
-use std::collections::HashMap;
+use super::section::{Section, SectionTracker};
 use std::fmt::Display;
 
-/// A whole program, in [`Chunk`]s, printed by [`Asm::to_asm`]
+/// A whole program: its instructions in order, printed by [`Asm::to_asm`]
 ///
 /// It owns the program's [`LabelAllocator`] ([`Asm::labels`]): every label generated code
 /// makes up comes from it, so they are unique in the program. [`Asm::to_asm`] turns each
 /// `jr` that does not reach its target into a `jp` (see [`Asm::program`]).
+///
+/// The code goes where it is emitted: the program is printed in that order, in groups of
+/// lines separated by a blank line ([`Asm::blank_line`]). Each instruction is checked when
+/// it is emitted, against its operands ([`Instr::check`]) and against the section it lands
+/// in: code or data in a RAM section, or a section name used twice, panics (see
+/// [`Section`](super::Section)). How a game is laid out (header, start-up code, main loop,
+/// functions, data, ...) is the engine's business (`rust_boy::Layout`), not this type's.
 pub struct Asm {
-    pub(crate) chunks: HashMap<Chunk, Vec<Instr>>,
-    current_chunk: Chunk,
+    instrs: Vec<Instr>,
+    /// Where each group of lines ends (indices into `instrs`), in order
+    group_ends: Vec<usize>,
+    sections: SectionTracker,
     labels: LabelAllocator,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Chunk {
-    /// INCLUDE statements and header section
-    Header,
-    /// DEF constant definitions
-    Constants,
-    /// Initialization code (before main loop)
-    Init,
-    /// Main game loop
-    MainLoop,
-    /// Legacy: combines Init + MainLoop (for backwards compatibility)
-    Main,
-    /// Function definitions
-    Functions,
-    /// Tile data
-    Tiles,
-    /// Tilemap data
-    Tilemap,
-    /// Variable/data sections (WRAM)
-    Data,
 }
 
 impl Default for Asm {
@@ -59,8 +45,9 @@ impl Asm {
     /// sequence; [`LabelAllocator::fork`] goes on with it without sharing it)
     pub fn with_labels(labels: LabelAllocator) -> Self {
         Asm {
-            chunks: HashMap::new(),
-            current_chunk: Chunk::Main,
+            instrs: Vec::new(),
+            group_ends: Vec::new(),
+            sections: SectionTracker::default(),
             labels,
         }
     }
@@ -80,11 +67,12 @@ impl Asm {
         &self.labels
     }
 
-    /// Emit `code` (an `If`, a `Block`, ...) to the current chunk, its labels taken from
-    /// the program's allocator ([`Asm::labels`])
+    /// Emit `code` (an `If`, a `Block`, ...) at the end of the program, its labels taken
+    /// from the program's allocator ([`Asm::labels`])
     ///
     /// # Panics
-    /// Panics if [`Instr::check`] rejects an operand of one of its instructions.
+    /// Panics if one of its instructions is invalid, or does not belong in its section
+    /// (see [`Asm::emit`]).
     ///
     /// # Example
     /// ```
@@ -103,49 +91,75 @@ impl Asm {
         self.emit_all(instrs)
     }
 
-    /// Set the current chunk for subsequent emit calls
-    pub fn chunk(&mut self, chunk: Chunk) -> &mut Self {
-        self.current_chunk = chunk;
-        self
-    }
-
-    /// Emit a single instruction to the current chunk
+    /// Emit a single instruction at the end of the program
     ///
     /// # Panics
-    /// Panics if [`Instr::check`] rejects one of its operands.
+    /// Panics if [`Instr::check`] rejects one of its operands, or if it does not belong in
+    /// the section it lands in: code or data in a RAM section, a section name used twice
+    /// (see [`Section`](super::Section)).
+    ///
+    /// ```should_panic
+    /// use rust_boy::gb_asm::{Asm, Section};
+    ///
+    /// // A RAM section only reserves space
+    /// Asm::new().section(Section::wram0("Variables")).ld_a(1);
+    /// ```
     #[track_caller]
     pub fn emit(&mut self, instr: Instr) -> &mut Self {
         if let Err(error) = instr.check() {
             panic!("invalid instruction: {}", error);
         }
-        self.chunks
-            .entry(self.current_chunk)
-            .or_default()
-            .push(instr);
+        if let Err(error) = self.sections.add(&instr) {
+            panic!("invalid program: {}", error);
+        }
+        self.instrs.push(instr);
         self
     }
 
-    /// Emit multiple instructions to the current chunk: a `Vec<Instr>`, a
+    /// Emit multiple instructions at the end of the program: a `Vec<Instr>`, a
     /// [`Block`](super::Block), ...
     ///
     /// # Panics
-    /// Panics if [`Instr::check`] rejects an operand of one of them.
+    /// Panics on the first one that [`Asm::emit`] rejects.
     #[track_caller]
     pub fn emit_all(&mut self, instrs: impl IntoIterator<Item = Instr>) -> &mut Self {
-        let instrs: Vec<Instr> = instrs.into_iter().collect();
-        if let Some(error) = instrs.iter().find_map(|instr| instr.check().err()) {
-            panic!("invalid instruction: {}", error);
+        for instr in instrs {
+            self.emit(instr);
         }
-        self.chunks
-            .entry(self.current_chunk)
-            .or_default()
-            .extend(instrs);
         self
     }
 
-    /// Get all instructions for a specific chunk
-    pub fn get_chunk(&self, chunk: Chunk) -> Option<&Vec<Instr>> {
-        self.chunks.get(&chunk)
+    /// End the current group of lines: [`Asm::to_asm`] prints a blank line after it
+    ///
+    /// The program is printed in groups, each followed by a blank line (the last one too);
+    /// a group without lines prints nothing, so two calls in a row give one blank line.
+    /// It changes nothing in the code.
+    ///
+    /// ```
+    /// use rust_boy::gb_asm::Asm;
+    ///
+    /// let mut asm = Asm::new();
+    /// asm.label("Main").ret().blank_line().blank_line();
+    /// asm.label("Other").ret();
+    /// assert_eq!(asm.to_asm(), "    Main:\n    ret\n\n    Other:\n    ret\n\n");
+    /// ```
+    pub fn blank_line(&mut self) -> &mut Self {
+        self.group_ends.push(self.instrs.len());
+        self
+    }
+
+    /// The instructions, as they were emitted (before the jump relaxation of
+    /// [`Asm::program`])
+    pub fn instrs(&self) -> &[Instr] {
+        &self.instrs
+    }
+
+    /// Where each group of lines ends, with the end of the program ([`Asm::blank_line`])
+    pub(crate) fn group_ends(&self) -> impl Iterator<Item = usize> + '_ {
+        self.group_ends
+            .iter()
+            .copied()
+            .chain(std::iter::once(self.instrs.len()))
     }
 
     instruction_builders!();

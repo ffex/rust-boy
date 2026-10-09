@@ -1,7 +1,7 @@
 // Module declarations
 pub mod asm;
 pub mod block;
-mod builders;
+pub(crate) mod builders;
 mod codegen;
 pub mod expr;
 pub mod instr;
@@ -16,7 +16,7 @@ pub mod section;
 pub(crate) mod test_cpu;
 
 // Re-export main types for convenience
-pub use asm::{Asm, Chunk};
+pub use asm::Asm;
 pub use block::{Block, Emittable, boxed};
 pub use expr::Expr;
 pub use instr::{

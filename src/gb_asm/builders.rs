@@ -1,15 +1,16 @@
 //! The instruction and directive builders of [`Asm`](super::Asm) and
-//! [`Block`](super::Block), written once.
+//! [`Block`](super::Block) (and of the engine's `rust_boy::Layout`), written once.
 //!
 //! `instruction_builders!` expands into the `impl` of each: one method per instruction
 //! (`ld`, `add`, `jp_cond`, ...) and directive (`label`, `section`, `db`, ...), each a call
 //! to the type's own `emit`, which checks the instruction ([`Instr::check`]) and adds it
-//! where that type keeps its code (the current chunk of an `Asm`, the end of a
-//! `Block`). The module that expands it imports the operand types the methods name.
+//! where that type keeps its code (the end of an `Asm` or a `Block`, the current chunk
+//! of a `Layout`). The module that expands it imports the operand types the methods name.
 //!
 //! [`Instr::check`]: super::Instr::check
 
-/// The builder methods shared by `Asm` and `Block`; see the module documentation
+/// The builder methods shared by `Asm`, `Block` and `rust_boy::Layout`; see the module
+/// documentation
 macro_rules! instruction_builders {
     () => {
         // ============================================
@@ -576,4 +577,4 @@ macro_rules! instruction_builders {
     };
 }
 
-pub(super) use instruction_builders;
+pub(crate) use instruction_builders;

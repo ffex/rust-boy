@@ -1,33 +1,12 @@
-use super::asm::{Asm, Chunk};
+use super::asm::Asm;
 use super::instr::{Condition, Instr, JumpTarget};
 use super::relax::relax_jumps;
-use super::section::SectionTracker;
 use std::fmt;
-
-/// The order in which the chunks appear in the program
-const CHUNK_ORDER: [Chunk; 9] = [
-    Chunk::Header,    // INCLUDE, SECTION Header
-    Chunk::Constants, // DEF statements
-    Chunk::Init,      // Initialization code
-    Chunk::MainLoop,  // Main game loop
-    Chunk::Main,      // Legacy (backwards compatibility)
-    Chunk::Functions, // Function definitions
-    Chunk::Tiles,     // Tile data
-    Chunk::Tilemap,   // Tilemap data
-    Chunk::Data,      // Variables (WRAM sections)
-];
 
 // Code generation implementation for Asm
 impl Asm {
-    /// Get the instructions from the Main chunk as an owned vector
-    /// Returns an empty vector if the Main chunk has no instructions
-    pub fn get_main_instrs(&self) -> Vec<Instr> {
-        self.chunks.get(&Chunk::Main).cloned().unwrap_or_default()
-    }
-
-    /// The whole program, as [`Asm::to_asm`] prints it: the chunks in their order
-    /// (`Header`, `Constants`, `Init`, `MainLoop`, `Main`, `Functions`, `Tiles`, `Tilemap`,
-    /// `Data`), with the jumps relaxed
+    /// The whole program, as [`Asm::to_asm`] prints it: the instructions in the order they
+    /// were emitted, with the jumps relaxed
     ///
     /// Each `jr` / `jr cc` that does not reach its target becomes a `jp` / `jp cc`: one
     /// whose target is more than 127 bytes ahead or 128 behind (counted from the end of
@@ -45,10 +24,6 @@ impl Asm {
     /// written, with no jump changed: rgbasm then reports a `jr` out of range. See
     /// `gb_asm::relax` for every rule.
     ///
-    /// # Panics
-    /// If an instruction does not belong in its section, in the chunk order: code or data
-    /// in a RAM section, a section name used twice (see [`Section`](super::Section)).
-    ///
     /// # Example
     /// ```
     /// use rust_boy::gb_asm::{Asm, Instr, JumpTarget};
@@ -64,60 +39,24 @@ impl Asm {
     /// assert_eq!(program[1], Instr::Jp { target: JumpTarget::Label(".far".into()) });
     /// assert_eq!(program[131], Instr::Jp { target: JumpTarget::Label("Main".into()) });
     /// ```
-    #[track_caller]
     pub fn program(&self) -> Vec<Instr> {
-        self.relaxed_chunks()
-            .into_iter()
-            .flat_map(|(_, instrs)| instrs)
-            .collect()
+        relax_jumps(self.instrs())
     }
 
-    /// The non-empty chunks in their order, with the jumps of the whole program relaxed
-    ///
-    /// Panics if an instruction does not belong in its section (see [`Asm::to_asm`]).
-    #[track_caller]
-    fn relaxed_chunks(&self) -> Vec<(Chunk, Vec<Instr>)> {
-        let chunks: Vec<(Chunk, &Vec<Instr>)> = CHUNK_ORDER
-            .iter()
-            .filter_map(|chunk| {
-                self.chunks
-                    .get(chunk)
-                    .filter(|instrs| !instrs.is_empty())
-                    .map(|instrs| (*chunk, instrs))
-            })
-            .collect();
-        let all: Vec<Instr> = chunks
-            .iter()
-            .flat_map(|(_, instrs)| instrs.iter().cloned())
-            .collect();
-        let mut sections = SectionTracker::default();
-        for instr in &all {
-            if let Err(error) = sections.add(instr) {
-                panic!("invalid program: {}", error);
-            }
-        }
-        let mut relaxed = relax_jumps(&all).into_iter();
-        chunks
-            .into_iter()
-            .map(|(chunk, instrs)| (chunk, relaxed.by_ref().take(instrs.len()).collect()))
-            .collect()
-    }
-
-    /// The program's RGBDS assembly: [`Asm::program`], a blank line between chunks
-    ///
-    /// # Panics
-    /// If an instruction does not belong in its section (see [`Asm::program`]).
-    #[track_caller]
+    /// The program's RGBDS assembly: [`Asm::program`], one instruction per line, each
+    /// group of lines followed by a blank line ([`Asm::blank_line`])
     pub fn to_asm(&self) -> String {
+        let program = self.program();
         let mut asm = String::new();
-        for (_, instructions) in self.relaxed_chunks() {
-            // Write instructions with indentation
-            for instruction in instructions {
-                asm.push_str(&format!("    {}\n", instruction));
+        let mut start = 0;
+        for end in self.group_ends() {
+            if end > start {
+                for instruction in &program[start..end] {
+                    asm.push_str(&format!("    {}\n", instruction));
+                }
+                asm.push('\n');
+                start = end;
             }
-
-            // Add blank line between chunks
-            asm.push('\n');
         }
         asm
     }

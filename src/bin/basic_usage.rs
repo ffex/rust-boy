@@ -1,4 +1,4 @@
-use rust_boy::gb_asm::{Asm, Chunk, Condition, Expr, Mem, R8, Section};
+use rust_boy::gb_asm::{Asm, Condition, Expr, Mem, R8, Section};
 
 fn program() -> Asm {
     let mut asm = Asm::new();
@@ -21,20 +21,20 @@ fn program() -> Asm {
     asm.label("MainLoop")
         .ld_bc(160)
         .call("WaitVBlank")
-        .jp("MainLoop");
+        .jp("MainLoop")
+        .blank_line();
 
-    // Functions chunk
-    asm.chunk(Chunk::Functions)
-        .label("WaitVBlank")
+    // Functions, still in the Main section
+    asm.label("WaitVBlank")
         .comment("Wait for vertical blank")
         .ld(R8::A, Mem::addr(Expr::hex(0xFF44)))
         .cp_imm(144)
         .jr_cond(Condition::NZ, "WaitVBlank")
-        .ret();
+        .ret()
+        .blank_line();
 
-    // Data chunk
-    asm.chunk(Chunk::Data)
-        .label("TileData")
+    // Data, in ROM too
+    asm.label("TileData")
         .db("$FF, $00, $7E, $FF, $85, $81, $89, $83");
 
     asm

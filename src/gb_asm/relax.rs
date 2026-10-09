@@ -8,45 +8,155 @@
 //! The rules, for each `jr` / `jr cc` of the program:
 //! - its target must be a label the program defines once with [`Instr::Label`], found by
 //!   the RGBDS scope rules (a local `.name` belongs to the last global label before it;
-//!   a `SECTION` ends the scope);
+//!   a `SECTION` ends the scope), or an offset from the jump itself (`@`, `@+n`, `@-n`, see
+//!   below);
 //! - the target must be in the same section, with only instructions of known size
 //!   ([`Instr::size`]) between them, and the offset from the end of the `jr` must be in
 //!   -128..=127.
 //!
 //! Every other `jr` becomes a `jp` with the same condition and target: a target out of
 //! range, in another section, unknown to the program (an external symbol, a label of an
-//! `INCLUDE`d file or of a raw line), defined twice, an absolute address, or a jump over a
-//! `ds $150 - @`, a `db` with a string, an `INCBIN` without a length, an `INCLUDE` or a raw
-//! line with code (their size is known only to RGBDS). A `jp` is never made a `jr`: what
-//! the code says `jp` stays `jp`.
+//! `INCLUDE`d file or of a raw line, an anonymous label `:+`), defined twice, an absolute
+//! address, or a jump over a `ds $150 - @`, a `db` with a string, an `INCBIN` without a
+//! length, an `INCLUDE` or a raw line with code (their size is known only to RGBDS). Each
+//! of these targets means the same place after the jump grows: a label moves with the code,
+//! an address does not move. A `jp` is never made a `jr`: what the code says `jp` stays
+//! `jp`.
+//!
+//! **Targets written from `@`.** `@` is the address of the jump itself, so `jr nz, @+4`
+//! means "4 bytes from the start of this jump": a jump that grows by one byte, or another
+//! jump that grows between the two, would move that target off the instruction it meant.
+//! A target `@`, `@+n` or `@-n` (`n` a number) of any jump (`jr`, `jp`, `call`) is
+//! therefore measured like a label: it is the instruction `n` bytes from the jump, and the
+//! offset is written again for the relaxed code (`jr nz, @+4` that grows over an `ld a, 1`
+//! is printed `jp nz, @+5`; it is left as written when nothing in between grows). If the
+//! instruction cannot be found (a size only RGBDS knows in between, another section, an
+//! offset inside an instruction), or a jump's target is any other expression (`Label + 2`,
+//! `@ * 2`), no jump of the program is changed: the program is printed as written, and
+//! rgbasm reports a `jr` out of range as before, loudly. Other uses of `@`, such as
+//! `ds $150 - @` (padding up to an address, which keeps its meaning) or an operand
+//! `ld hl, @ + 5`, are not adjusted: write a label for an offset that spans a `jr`.
 //!
 //! The relaxation is iterative: a `jr` that grows to a `jp` takes one more byte, which can
 //! push another `jr` over the same bytes out of range. It starts with every `jr` short and
 //! grows the ones out of reach until none is; offsets only grow when a jump grows, so this
-//! ends (at most once per `jr`) on the fewest `jp`s.
+//! ends (at most once per `jr`) on the fewest `jp`s. A `jp` takes one more cycle than a `jr`
+//! when it is taken (4 M-cycles, `jr` 3), and one more byte: code whose timing or size is
+//! fixed (an `rst` vector, a cycle-counted loop) should write its jumps so they reach.
 
 use std::collections::BTreeMap;
 
+use super::expr::parse_number;
 use super::instr::{Instr, JumpTarget};
+use super::labels::is_identifier;
 
-/// `program` with every `jr` / `jr cc` that does not provably reach its target turned into
-/// a `jp` / `jp cc` (see the [module documentation](self) for the rules)
-pub(crate) fn relax_jumps(program: &[Instr]) -> Vec<Instr> {
-    let long = long_jumps(program);
-    program
-        .iter()
-        .zip(long)
-        .map(|(instr, long)| match instr {
-            Instr::Jr { target } if long => Instr::Jp {
-                target: target.clone(),
-            },
-            Instr::JrCond { condition, target } if long => Instr::JpCond {
-                condition: condition.clone(),
-                target: target.clone(),
-            },
-            _ => instr.clone(),
-        })
-        .collect()
+/// What a jump's target is, for the relaxation
+#[derive(Debug, Clone, PartialEq)]
+enum Target {
+    /// A label name, plain (`Name`, `.local`, `Scope.local`) or anonymous (`:+`, `:--`): it
+    /// moves with the code it names
+    Name(String),
+    /// `@`, `@+n`, `@-n`: `n` bytes from the start of the jump
+    Here(i64),
+    /// An address (a number): it does not move
+    Fixed,
+    /// Any other expression
+    Expression,
+}
+
+/// The target of a jump (`jr`, `jp`, `call`, with or without a condition), if `instr` is one
+fn jump_target(instr: &Instr) -> Option<&JumpTarget> {
+    match instr {
+        Instr::Jr { target }
+        | Instr::JrCond { target, .. }
+        | Instr::Jp { target }
+        | Instr::JpCond { target, .. }
+        | Instr::Call { target }
+        | Instr::CallCond { target, .. } => Some(target),
+        _ => None,
+    }
+}
+
+/// What `target` is (see [`Target`])
+fn classify(target: &JumpTarget) -> Target {
+    let JumpTarget::Label(text) = target else {
+        return Target::Fixed;
+    };
+    let text = text.trim();
+    if let Some(rest) = text.strip_prefix('@') {
+        let rest: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
+        if rest.is_empty() {
+            return Target::Here(0);
+        }
+        let (sign, digits) = match rest.split_at(1) {
+            ("+", digits) => (1, digits),
+            ("-", digits) => (-1, digits),
+            _ => return Target::Expression,
+        };
+        return match parse_number(digits) {
+            Some((value, _)) if value >= 0 => Target::Here(sign * i64::from(value)),
+            _ => Target::Expression,
+        };
+    }
+    if parse_number(text).is_some() {
+        return Target::Fixed;
+    }
+    let is_name = match text.split_once('.') {
+        Some(("", local)) => is_identifier(local),
+        Some((scope, local)) => is_identifier(scope) && is_identifier(local),
+        None => is_identifier(text),
+    };
+    let anonymous = text.len() > 1
+        && text.starts_with(':')
+        && (text[1..].chars().all(|c| c == '+') || text[1..].chars().all(|c| c == '-'));
+    if is_name || anonymous {
+        Target::Name(text.to_string())
+    } else {
+        Target::Expression
+    }
+}
+
+/// The index of the instruction `offset` bytes from the start of the jump at `jump`, as
+/// the program is written: `None` if a size between them is unknown, a `SECTION` is in the
+/// way, or no instruction starts there
+fn here_index(
+    program: &[Instr],
+    sizes: &[Option<usize>],
+    jump: usize,
+    offset: i64,
+) -> Option<usize> {
+    let mut bytes = 0i64;
+    let index = if offset >= 0 {
+        let mut index = jump;
+        while bytes < offset {
+            bytes += i64::try_from(sizes.get(index).copied()??).ok()?;
+            index += 1;
+            if matches!(program.get(index), None | Some(Instr::Section { .. })) {
+                return None;
+            }
+        }
+        index
+    } else {
+        let mut index = jump;
+        while bytes < -offset {
+            index = index.checked_sub(1)?;
+            if matches!(program[index], Instr::Section { .. }) {
+                return None;
+            }
+            bytes += i64::try_from(sizes[index]?).ok()?;
+        }
+        index
+    };
+    (bytes == offset.abs()).then_some(index)
+}
+
+/// `@`, `@+n` or `@-n`
+fn here_text(offset: i64) -> String {
+    match offset {
+        0 => "@".to_string(),
+        n if n > 0 => format!("@+{}", n),
+        n => format!("@-{}", -n),
+    }
 }
 
 /// The full RGBDS name of a label written `name` under the global label `scope`
@@ -64,8 +174,53 @@ fn is_jr(instr: &Instr) -> bool {
     matches!(instr, Instr::Jr { .. } | Instr::JrCond { .. })
 }
 
-/// For each instruction of `program`, whether it is a `jr` that must become a `jp`
-fn long_jumps(program: &[Instr]) -> Vec<bool> {
+/// `program` with every `jr` / `jr cc` that does not provably reach its target turned into
+/// a `jp` / `jp cc`, and the `@` targets written again for the new sizes (see the
+/// [module documentation](self) for the rules)
+pub(crate) fn relax_jumps(program: &[Instr]) -> Vec<Instr> {
+    let Some((long, places, here)) = relax(program) else {
+        return program.to_vec();
+    };
+    program
+        .iter()
+        .enumerate()
+        .map(|(index, instr)| {
+            let mut instr = match instr {
+                Instr::Jr { target } if long[index] => Instr::Jp {
+                    target: target.clone(),
+                },
+                Instr::JrCond { condition, target } if long[index] => Instr::JpCond {
+                    condition: condition.clone(),
+                    target: target.clone(),
+                },
+                _ => instr.clone(),
+            };
+            // An `@` target: the offset of its instruction in the relaxed code
+            if let Some((offset, target)) = here[index] {
+                let new_offset = places[target].1 as i64 - places[index].1 as i64;
+                if new_offset != offset {
+                    let text = JumpTarget::Label(here_text(new_offset));
+                    match &mut instr {
+                        Instr::Jr { target }
+                        | Instr::JrCond { target, .. }
+                        | Instr::Jp { target }
+                        | Instr::JpCond { target, .. }
+                        | Instr::Call { target }
+                        | Instr::CallCond { target, .. } => *target = text,
+                        _ => unreachable!("only jumps have an @ target"),
+                    }
+                }
+            }
+            instr
+        })
+        .collect()
+}
+
+/// Which `jr` must become a `jp`, where each instruction is then ((block, offset), see
+/// below), and for each jump with an `@` target, (its offset as written, the index of the
+/// instruction it means); `None` if the program must be left as it is written
+#[allow(clippy::type_complexity)]
+fn relax(program: &[Instr]) -> Option<(Vec<bool>, Vec<(usize, usize)>, Vec<Option<(i64, usize)>>)> {
     // The scope of each instruction, and the index of each label by its full name (`None`
     // when it is defined twice: rgbasm rejects it, and it is no target to measure)
     let mut scopes = Vec::with_capacity(program.len());
@@ -92,23 +247,30 @@ fn long_jumps(program: &[Instr]) -> Vec<bool> {
         scopes.push(scope);
     }
 
-    // The label each `jr` jumps to, if the program defines it once
-    let targets: Vec<Option<usize>> = program
-        .iter()
-        .zip(&scopes)
-        .map(|(instr, scope)| match instr {
-            Instr::Jr {
-                target: JumpTarget::Label(name),
-            }
-            | Instr::JrCond {
-                target: JumpTarget::Label(name),
-                ..
-            } => full_name(*scope, name).and_then(|full| labels.get(&full).copied().flatten()),
-            _ => None,
-        })
-        .collect();
-
     let sizes: Vec<Option<usize>> = program.iter().map(Instr::size).collect();
+    // The `@` target of each jump, as (offset, instruction); `targets`: the instruction each
+    // `jr` jumps to, if the program defines it once
+    let mut here = vec![None; program.len()];
+    let mut targets = vec![None; program.len()];
+    for (index, instr) in program.iter().enumerate() {
+        let Some(target) = jump_target(instr) else {
+            continue;
+        };
+        match classify(target) {
+            Target::Expression => return None,
+            Target::Here(offset) => {
+                let place = here_index(program, &sizes, index, offset)?;
+                here[index] = Some((offset, place));
+                targets[index] = Some(place);
+            }
+            Target::Name(name) => {
+                targets[index] = full_name(scopes[index], &name)
+                    .and_then(|full| labels.get(&full).copied().flatten());
+            }
+            Target::Fixed => {}
+        }
+    }
+
     // A `jr` without a known target is long from the start
     let mut long: Vec<bool> = program
         .iter()
@@ -156,7 +318,7 @@ fn long_jumps(program: &[Instr]) -> Vec<bool> {
             }
         }
         if !grown {
-            return long;
+            return Some((long, places, here));
         }
     }
 }
@@ -393,7 +555,8 @@ mod tests {
     #[test]
     fn test_what_cannot_be_measured_becomes_jp() {
         let mut asm = Asm::new();
-        asm.section("Code", "ROM0[$0000]")
+        asm.raw("DEF S EQUS \"1, 2, 3, 4\"")
+            .section("Code", "ROM0[$0000]")
             .label("Main")
             // A label of another section, right after in the text
             .jr("Other")
@@ -407,16 +570,24 @@ mod tests {
             .jr(".after_string")
             .db("\"ab\"")
             .label(".after_string")
+            // Behind a symbol in data (here an EQUS of 4 values), or a comment whose text
+            // goes on to a line of code
+            .jr(".after_equs")
+            .db("S")
+            .label(".after_equs")
+            .jr(".after_comment")
+            .comment("x\n    nop")
+            .label(".after_comment")
             // An absolute address
             .emit(Instr::Jr {
                 target: JumpTarget::Addr(0x0000),
             })
-            // What can be measured keeps its jr: a raw comment, data of plain numbers and
-            // symbols, `ds` of a number, comments
+            // What can be measured keeps its jr: a raw comment, data of plain numbers,
+            // `ds` of a number, comments
             .jr(".measured")
             .raw("    ; a comment")
-            .db("1, $FF, Main")
-            .dw("Main, 2")
+            .db("1, $FF, %101")
+            .dw("$8000, 2")
             .ds("4", "0")
             .comment("note")
             .label(".measured")
@@ -427,7 +598,14 @@ mod tests {
             .label("Other")
             .ret();
         let program = asm.program();
-        for target in ["Other", "External", ".after_raw", ".after_string"] {
+        for target in [
+            "Other",
+            "External",
+            ".after_raw",
+            ".after_string",
+            ".after_equs",
+            ".after_comment",
+        ] {
             assert_eq!(jump_to(&program, target), "jp", "{}", target);
         }
         assert!(program.contains(&Instr::Jp {
@@ -446,9 +624,11 @@ mod tests {
                 .iter()
                 .take_while(|instr| !matches!(instr, Instr::Jr { .. }))
                 .map(|instr| match instr {
-                    // the raw `nop` and the string "ab" are 1 and 2 bytes
+                    // the raw `nop`, the string "ab", the EQUS and the comment's `nop`
                     Instr::Raw { line } if line.contains("nop") => 1,
                     Instr::Db { values } if values.contains('"') => 2,
+                    Instr::Db { values } if values == "S" => 4,
+                    Instr::Comment { text } if text.contains("nop") => 1,
                     other => other.size().unwrap_or_default(),
                 })
                 .sum();
@@ -507,7 +687,7 @@ mod tests {
         let cases = [
             (
                 Instr::Db {
-                    values: text("1, $FF, Main"),
+                    values: text("1, $FF, %101"),
                 },
                 Some(3),
             ),
@@ -519,9 +699,29 @@ mod tests {
             ),
             (
                 Instr::Dw {
-                    value: text("Main, 2"),
+                    value: text("$8000, 2"),
                 },
                 Some(4),
+            ),
+            // A symbol can be an EQUS of several values; a line break starts a line of code
+            (
+                Instr::Dw {
+                    value: text("Main, 2"),
+                },
+                None,
+            ),
+            (Instr::Db { values: text("S") }, None),
+            (
+                Instr::Comment {
+                    text: text("x\n    nop"),
+                },
+                None,
+            ),
+            (
+                Instr::Label {
+                    name: text("A\n    nop\nB"),
+                },
+                None,
             ),
             (
                 Instr::Ds {
@@ -597,6 +797,177 @@ mod tests {
         ];
         for (instr, size) in cases {
             assert_eq!(instr.size(), size, "{:?}", instr);
+        }
+    }
+
+    /// Checks the one jump of `asm` whose target is written from `@`: in the relaxed
+    /// program it lands on the label `.want` (a marker, which takes no room), by its text
+    /// and, with RGBDS, in the ROM. Returns that jump as printed.
+    fn check_at_target(asm: &Asm) -> String {
+        let program = asm.program();
+        assert_eq!(jr_range_errors(&program), Vec::<String>::new());
+        let mut addresses = Vec::new();
+        let mut address = 0usize;
+        for instr in &program {
+            addresses.push(address);
+            address += instr.size().expect("a known size");
+        }
+        let want = program
+            .iter()
+            .position(|instr| {
+                *instr
+                    == Instr::Label {
+                        name: ".want".into(),
+                    }
+            })
+            .map(|index| addresses[index])
+            .expect("a .want label");
+        let (index, jump) = program
+            .iter()
+            .enumerate()
+            .find(|(_, instr)| {
+                jump_target(instr).is_some_and(|t| matches!(classify(t), Target::Here(_)))
+            })
+            .expect("a jump to @");
+        let Target::Here(offset) = classify(jump_target(jump).unwrap()) else {
+            unreachable!()
+        };
+        let start = addresses[index];
+        assert_eq!(
+            start as i64 + offset,
+            want as i64,
+            "{} at ${:04x}",
+            jump,
+            start
+        );
+        if let Some(rom) = rgbds_rom(&asm.to_asm()) {
+            let reached = if is_jr(jump) {
+                (start as isize + 2 + isize::from(rom[start + 1] as i8)) as usize
+            } else {
+                usize::from(u16::from_le_bytes([rom[start + 1], rom[start + 2]]))
+            };
+            assert_eq!(reached, want, "{} at ${:04x} in the ROM", jump, start);
+        }
+        jump.to_string()
+    }
+
+    #[test]
+    fn test_targets_from_at_keep_their_meaning() {
+        // `@` is the start of the jump: `@+4` is 4 bytes from it. Turned into a jp (one byte
+        // longer) without a new offset, it landed one byte early, inside `ld a, 1`.
+        let asm = one_section(|asm| {
+            asm.jr_cond(Condition::NZ, "@+4")
+                .ld_a(1)
+                .label(".want")
+                .ret();
+        });
+        assert_eq!(
+            check_at_target(&asm),
+            "jr nz, @+4",
+            "nothing grows: as written"
+        );
+        if let Some(rom) = rgbds_rom(&asm.to_asm()) {
+            assert_eq!(rom[..5], [0x20, 0x02, 0x3E, 0x01, 0xC9]);
+        }
+
+        // Forward over a jr that grows: the offset grows with it
+        let asm = one_section(|asm| {
+            asm.jr_cond(Condition::NZ, "@+6")
+                .jr(".far")
+                .ld_a(1)
+                .label(".want")
+                .ret();
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(check_at_target(&asm), "jr nz, @+7");
+        assert_eq!(jump_to(&asm.program(), ".far"), "jp");
+
+        // A jr to `@` that grows itself: its forward offset counts its own new byte
+        let asm = one_section(|asm| {
+            asm.jr_cond(Condition::C, "@+131");
+            nops(asm, 129);
+            asm.label(".want").ret();
+        });
+        assert_eq!(check_at_target(&asm), "jp c, @+132");
+
+        // Backward over a jr that grows, and a backward jr that grows itself (its target,
+        // before it, does not move)
+        let asm = one_section(|asm| {
+            asm.label(".want")
+                .ld_a(1)
+                .jr(".far")
+                .jr_cond(Condition::Z, "@-4");
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(check_at_target(&asm), "jr z, @-5");
+        let asm = one_section(|asm| {
+            asm.label(".want");
+            nops(asm, 130);
+            asm.jr("@-130").ret();
+        });
+        assert_eq!(check_at_target(&asm), "jp @-130");
+
+        // `jp` and `call` written from `@`, over a jr that grows; `@` alone
+        let asm = one_section(|asm| {
+            asm.call("@+5").jr(".far").label(".want").ret();
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(check_at_target(&asm), "call @+6");
+        let asm = one_section(|asm| {
+            asm.jr(".far").label(".want").jp_cond(Condition::NC, "@");
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(check_at_target(&asm), "jp nc, @");
+    }
+
+    #[test]
+    fn test_a_target_it_cannot_follow_leaves_the_program_as_written() {
+        // `@+3` is inside `ld a, 1`, `Main + 2` is an expression: a jr that grows could
+        // move them, so no jump of the program changes (rgbasm then reports the far jr)
+        for target in ["@+3", "Main + 2", "@ * 2"] {
+            let asm = one_section(|asm| {
+                asm.jr_cond(Condition::NZ, target).ld_a(1).jr(".far");
+                nops(asm, 128);
+                asm.label(".far").ret();
+            });
+            assert_eq!(asm.program(), asm.get_main_instrs()[..], "{}", target);
+        }
+        // An `@` target over a size only RGBDS knows, or into another section
+        let asm = one_section(|asm| {
+            asm.jr("@+3").raw("    nop").jr(".far");
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+        let asm = one_section(|asm| {
+            asm.jr(".far")
+                .jr("@+2")
+                .section("Other", "ROM0")
+                .label("Other");
+            nops(asm, 128);
+            asm.label(".far").ret();
+        });
+        assert_eq!(asm.program(), asm.get_main_instrs()[..]);
+    }
+
+    #[test]
+    fn test_target_kinds() {
+        let kind = |text: &str| classify(&JumpTarget::Label(text.to_string()));
+        assert_eq!(kind("@"), Target::Here(0));
+        assert_eq!(kind("@ + $10"), Target::Here(16));
+        assert_eq!(kind("@-4"), Target::Here(-4));
+        assert_eq!(kind("Main"), Target::Name("Main".into()));
+        assert_eq!(kind(".loop"), Target::Name(".loop".into()));
+        assert_eq!(kind("Main.loop"), Target::Name("Main.loop".into()));
+        assert_eq!(kind(":++"), Target::Name(":++".into()));
+        assert_eq!(kind("$0150"), Target::Fixed);
+        assert_eq!(classify(&JumpTarget::Addr(0x150)), Target::Fixed);
+        for expression in ["Main + 2", "@ * 2", "@+x", "LOW(Main)", ":+-"] {
+            assert_eq!(kind(expression), Target::Expression, "{}", expression);
         }
     }
 }

@@ -35,6 +35,13 @@ impl Asm {
     /// in between). It is done on the whole program, so a `jr` that grows and pushes
     /// another one out of range makes that one grow too. A `jp` stays a `jp`.
     ///
+    /// A target written from `@` (`jr nz, @+4`, also on a `jp` or a `call`) is the
+    /// instruction that many bytes from the jump: its offset is written again when a jump
+    /// in between, or the jump itself, grows. If that instruction cannot be found (an offset
+    /// inside an instruction, a size only RGBDS knows in between), or a jump's target is
+    /// another expression (`Label + 2`), the program is printed as written, with no jump
+    /// changed. See `gb_asm::relax` for every rule.
+    ///
     /// # Example
     /// ```
     /// use rust_boy::gb_asm::{Asm, Instr, JumpTarget};

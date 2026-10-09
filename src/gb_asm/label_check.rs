@@ -332,6 +332,22 @@ pub(crate) fn jr_range_errors(code: &[Instr]) -> Vec<String> {
             errors.push(format!("{}: the target is an address", instr));
             continue;
         };
+        // `@`, `@+n`, `@-n`: n bytes from the start of the jr
+        if let Some(rest) = name.trim().strip_prefix('@') {
+            let rest: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
+            let from_start = match rest.split_at(rest.len().min(1)) {
+                ("", _) => Some(0),
+                ("+", n) => n.parse::<isize>().ok(),
+                ("-", n) => n.parse::<isize>().ok().map(|n| -n),
+                _ => None,
+            };
+            match from_start {
+                Some(n) if (-128..=127).contains(&(n - 2)) => {}
+                Some(n) => errors.push(format!("{}: offset {} is out of range", instr, n - 2)),
+                None => errors.push(format!("{}: target not found", instr)),
+            }
+            continue;
+        }
         let target = match full_name(scopes[index], name).and_then(|full| labels.get(&full)) {
             Some(places) if places.len() == 1 => places[0],
             Some(_) => {

@@ -308,12 +308,23 @@ impl Instr {
     /// Every SM83 instruction has a size (checked against rgbasm, family by family, in
     /// `gb_asm::isa_tests`): `cp a, b` 1 byte, `cp a, n8` 2, `jr` 2, `jp` and `call` 3, ...
     /// Labels, comments, `DEF` and `SECTION` take no room. The directives have a size when
-    /// it is written as plain numbers: `ds 4`, `db 1, 2, $FF` (3), `dw A, B` (4), `INCBIN`
-    /// with a length, a raw line with no code (empty or a comment). The others are `None`:
-    /// `ds $150 - @`, a `db` with a string (its bytes depend on the charmap), `INCLUDE`,
-    /// `INCBIN` without a length, a raw line with code. The jump relaxation of
-    /// [`Asm::to_asm`](super::Asm::to_asm) never keeps a `jr` over one of them.
+    /// it is written as plain numbers: `ds 4`, `db 1, 2, $FF` (3), `dw 1, $8000` (4),
+    /// `INCBIN` with a length, a raw line with no code (empty or a comment). The others are
+    /// `None`:
+    /// - `ds $150 - @`, `INCLUDE`, `INCBIN` without a length, a raw line with code;
+    /// - a `db` / `dw` with a string (its bytes depend on the charmap), an expression or a
+    ///   symbol: a symbol can be an `EQUS` that expands to several values (`dw Label` is a
+    ///   label's address, 2 bytes, but `db S` with `DEF S EQUS "1, 2, 3"` is 3);
+    /// - anything whose text has a line break (a comment or a label written with `\n`
+    ///   prints the next line as code).
+    ///
+    /// The jump relaxation of [`Asm::to_asm`](super::Asm::to_asm) never keeps a `jr` over
+    /// one of them. An instruction's operand is taken as written: a symbol is a value (an
+    /// `EQUS` that expands to a register, `cp a, S` with `DEF S EQUS "b"`, is not seen).
     pub fn size(&self) -> Option<usize> {
+        if self.check().is_ok() && self.to_string().contains('\n') {
+            return None;
+        }
         let size = match self {
             Instr::Label { .. }
             | Instr::Comment { .. }
@@ -435,19 +446,13 @@ fn plain_number(text: &str) -> Option<usize> {
     usize::try_from(value).ok()
 }
 
-/// How many values a `db` / `dw` line lists, if each is a plain number or symbol
-/// (`1, $FF, Name`); `None` with a string, a character, an expression or no value
+/// How many values a `db` / `dw` line lists, if each is a plain number (`1, $FF, %101`);
+/// `None` with a symbol (it can be an `EQUS` of several values), a string, a character, an
+/// expression or no value
 fn data_items(values: &str) -> Option<usize> {
     let code = code_lines(values).join(" ");
     let items: Vec<&str> = code.split(',').map(str::trim).collect();
-    let simple = |item: &&str| {
-        plain_number(item).is_some()
-            || super::labels::is_identifier(item)
-            || item
-                .strip_prefix('.')
-                .is_some_and(super::labels::is_identifier)
-    };
-    if items.iter().all(simple) {
+    if items.iter().all(|item| plain_number(item).is_some()) {
         Some(items.len())
     } else {
         None

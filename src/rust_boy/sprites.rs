@@ -337,7 +337,7 @@ impl SpriteManager {
             .allocate(hw::OAM_ENTRY_SIZE.into())
             .unwrap_or_else(|| {
                 panic!(
-                    "sprite \"{}\" does not fit in OAM, which holds {} sprites (B17)",
+                    "sprite \"{}\" does not fit in OAM, which holds {} sprites",
                     name,
                     hw::OAM_COUNT
                 )

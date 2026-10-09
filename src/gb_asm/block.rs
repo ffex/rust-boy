@@ -14,6 +14,7 @@ use super::instr::{
     AluOperand, Condition, Dst, IncDec, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
 };
 use super::labels::LabelAllocator;
+use super::section::Section;
 use std::fmt::Display;
 
 /// A sequence of instructions, built with the same methods as [`Asm`](super::Asm)

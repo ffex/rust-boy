@@ -15,7 +15,7 @@
 use super::label_check::{instr_size, rgbds_rom};
 use super::{
     AluOperand, Asm, Block, Condition, Dst, Expr, Instr, JumpTarget, Mem, Operand, R8, R16,
-    R16Stack,
+    R16Stack, Section,
 };
 
 /// An instruction, the text it prints and the bytes of its encoding
@@ -489,7 +489,7 @@ fn test_every_instruction_form() {
     // The calls in the sweep go to `Target`, at $0000
     let mut asm = Asm::new();
     asm.include_hardware()
-        .section("Isa", "ROM0[$0000]")
+        .section(Section::rom0("Isa").at(0x0000))
         .label("Target")
         .emit_all(cases.iter().map(|case| case.instr.clone()));
     let Some(rom) = rgbds_rom(&asm.to_asm()) else {

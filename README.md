@@ -68,19 +68,19 @@ fn main() {
 The same building blocks the engine uses, one instruction at a time:
 
 ```rust
-use rust_boy::gb_asm::{Asm, Chunk, Condition};
+use rust_boy::gb_asm::{Asm, Chunk, Condition, Section};
 
 fn main() {
     let mut asm = Asm::new();
 
     // Cartridge header at $100-$14F: rgbfix fills in the logo and checksums
     asm.include_hardware()
-        .section("Header", "ROM0[$100]")
+        .section(Section::rom0("Header").at(0x0100))
         .raw("nop")
         .raw("jp EntryPoint")
-        .ds("$150 - @", "0");
+        .ds_fill("$150 - @", "0");
 
-    asm.section("Main", "ROM0")
+    asm.section(Section::rom0("Main"))
         .label("EntryPoint")
         .label("MainLoop")
         .call("WaitVBlank")
@@ -142,7 +142,7 @@ is printed as written, so rgbasm reports a `jr` out of range as it always did. A
 more than a `jr`, so code whose size or timing is fixed should write jumps that reach.
 
 ```rust
-use rust_boy::gb_asm::{Asm, Block};
+use rust_boy::gb_asm::{Asm, Block, Section};
 use rust_boy::gb_std::flow::IfA;
 
 let mut body = Block::new();
@@ -150,7 +150,7 @@ for _ in 0..200 {
     body.nop();
 }
 let mut asm = Asm::new();
-asm.section("Code", "ROM0").label("Main").ld_a(1);
+asm.section(Section::rom0("Code")).label("Main").ld_a(1);
 asm.emit_code(IfA::eq(1, body)); // its labels come from asm.labels()
 asm.jr("Main"); // more than 200 bytes back
 let text = asm.to_asm();

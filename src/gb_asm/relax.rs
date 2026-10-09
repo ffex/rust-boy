@@ -139,17 +139,16 @@ fn uses_here(code: &str) -> bool {
 /// Whether `instr` is the padding `ds N - @` (up to the address N): it keeps its meaning
 /// when the code before it grows
 fn is_padding(instr: &Instr) -> bool {
-    let Instr::Ds {
-        num_bytes,
-        starter_point,
-    } = instr
-    else {
+    let Instr::Ds { count, fill } = instr else {
         return false;
     };
-    let padding = num_bytes
+    let padding = count
         .split_once('-')
         .is_some_and(|(end, here)| here.trim() == "@" && parse_number(end.trim()).is_some());
-    padding && !code_lines(starter_point).iter().any(|code| uses_here(code))
+    padding
+        && !fill
+            .iter()
+            .any(|fill| code_lines(fill).iter().any(|code| uses_here(code)))
 }
 
 /// Whether `program` uses `@` anywhere but in a jump target (which [`classify`] reads) or a
@@ -392,13 +391,13 @@ fn relax(program: &[Instr]) -> Option<(Vec<bool>, Vec<(usize, usize)>, Vec<Optio
 mod tests {
     use super::*;
     use crate::gb_asm::label_check::{jr_range_errors, rgbds_rom};
-    use crate::gb_asm::{Asm, Chunk, Condition, R8};
+    use crate::gb_asm::{Asm, Chunk, Condition, R8, Section};
 
     /// A program in one ROM0 section at $0000, starting with the global label `Main`,
     /// then the code `build` writes
     fn one_section(build: impl FnOnce(&mut Asm)) -> Asm {
         let mut asm = Asm::new();
-        asm.section("Code", "ROM0[$0000]").label("Main");
+        asm.section(Section::rom0("Code").at(0x0000)).label("Main");
         build(&mut asm);
         asm
     }
@@ -621,7 +620,7 @@ mod tests {
     fn test_what_cannot_be_measured_becomes_jp() {
         let mut asm = Asm::new();
         asm.raw("DEF S EQUS \"1, 2, 3, 4\"")
-            .section("Code", "ROM0[$0000]")
+            .section(Section::rom0("Code").at(0x0000))
             .label("Main")
             // A label of another section, right after in the text
             .jr("Other")
@@ -653,13 +652,13 @@ mod tests {
             .raw("    ; a comment")
             .db("1, $FF, %101")
             .dw("$8000, 2")
-            .ds("4", "0")
+            .ds_fill("4", "0")
             .comment("note")
             .label(".measured")
             // A jp stays a jp, however close
             .jp(".measured")
             .ret()
-            .section("Other", "ROM0[$0100]")
+            .section(Section::rom0("Other").at(0x0100))
             .label("Other")
             .ret();
         let program = asm.program();
@@ -727,7 +726,8 @@ mod tests {
         // program, in their order, and each one keeps its own instructions
         let build = || {
             let mut asm = Asm::new();
-            asm.chunk(Chunk::Header).section("Code", "ROM0[$0000]");
+            asm.chunk(Chunk::Header)
+                .section(Section::rom0("Code").at(0x0000));
             asm.chunk(Chunk::MainLoop).label("Main").jr("Done");
             asm.chunk(Chunk::Functions);
             nops(&mut asm, 200);
@@ -790,8 +790,15 @@ mod tests {
             ),
             (
                 Instr::Ds {
-                    num_bytes: text("4"),
-                    starter_point: text("0"),
+                    count: text("4"),
+                    fill: Some(text("0")),
+                },
+                Some(4),
+            ),
+            (
+                Instr::Ds {
+                    count: text("4"),
+                    fill: None,
                 },
                 Some(4),
             ),
@@ -810,13 +817,7 @@ mod tests {
                 Some(0),
             ),
             (Instr::Raw { line: text("") }, Some(0)),
-            (
-                Instr::Section {
-                    name: text("Code"),
-                    mem_type: text("ROM0"),
-                },
-                Some(0),
-            ),
+            (Instr::Section(Section::rom0("Code")), Some(0)),
             (Instr::Comment { text: text("note") }, Some(0)),
             // Only RGBDS knows these
             (
@@ -834,8 +835,8 @@ mod tests {
             (Instr::Db { values: text("") }, None),
             (
                 Instr::Ds {
-                    num_bytes: text("$150 - @"),
-                    starter_point: text("0"),
+                    count: text("$150 - @"),
+                    fill: Some(text("0")),
                 },
                 None,
             ),
@@ -1011,7 +1012,7 @@ mod tests {
         let asm = one_section(|asm| {
             asm.jr(".far")
                 .jr("@+2")
-                .section("Other", "ROM0")
+                .section(Section::rom0("Other"))
                 .label("Other");
             nops(asm, 128);
             asm.label(".far").ret();
@@ -1089,7 +1090,7 @@ mod tests {
         // The padding `ds N - @`, `@` in a comment or a string, and a name with `@` in it
         // keep the relaxation
         let asm = one_section(|asm| {
-            asm.ds("$10 - @", "0")
+            asm.ds_fill("$10 - @", "0")
                 .comment("@param a: nothing")
                 .db("\"a@b\"")
                 .label("a@b")

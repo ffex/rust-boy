@@ -1,4 +1,4 @@
-use rust_boy::gb_asm::{Asm, Condition, Expr, Mem, R8, R16};
+use rust_boy::gb_asm::{Asm, Condition, Expr, Mem, R8, R16, Section};
 
 fn main() {
     let mut asm = Asm::new();
@@ -13,9 +13,9 @@ fn main() {
     asm.def("SCORE_ONES", 0x9871);
 
     // Header section
-    asm.section("Header", "ROM0[$100]");
+    asm.section(Section::rom0("Header").at(0x0100));
     asm.jp("EntryPoint");
-    asm.ds("$150 - @", "0");
+    asm.ds_fill("$150 - @", "0");
 
     // Entry point
     asm.label("EntryPoint");
@@ -413,18 +413,18 @@ fn main() {
     add_sprites(&mut asm);
 
     // WRAM sections
-    asm.section("Counter", "WRAM0");
+    asm.section(Section::wram0("Counter"));
     asm.raw("wFrameCounter: db");
 
-    asm.section("Input Variables", "WRAM0");
+    asm.section(Section::wram0("Input Variables"));
     asm.raw("wCurKeys: db");
     asm.raw("wNewKeys: db");
 
-    asm.section("Ball Data", "WRAM0");
+    asm.section(Section::wram0("Ball Data"));
     asm.raw("wBallMomentumX: db");
     asm.raw("wBallMomentumY: db");
 
-    asm.section("Score", "WRAM0");
+    asm.section(Section::wram0("Score"));
     asm.raw("wScore: db");
 
     // Output the generated assembly

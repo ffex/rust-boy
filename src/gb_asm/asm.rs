@@ -6,6 +6,7 @@ use super::instr::{
     AluOperand, Condition, Dst, IncDec, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
 };
 use super::labels::LabelAllocator;
+use super::section::Section;
 use std::collections::HashMap;
 use std::fmt::Display;
 

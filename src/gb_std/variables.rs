@@ -1,4 +1,4 @@
-use crate::gb_asm::{Block, Instr};
+use crate::gb_asm::{Block, Instr, Section};
 
 pub fn def_const(name: &str, value: u8) -> Vec<Instr> {
     //TODO probabibly useful
@@ -13,18 +13,18 @@ pub fn def_var(name: &str, vartype: &str) -> Vec<Instr> {
     asm.into_instrs()
 }
 
+/// A RAM section of variables, each a label and a `db` / `dw` (which reserves 1 / 2 bytes)
 pub struct VariableSection {
-    pub name: String,
-    pub memory: String,
+    pub section: Section,
     /// Variables as (name, type directive), in declaration order
     pub data: Vec<(String, String)>,
 }
 
 impl VariableSection {
-    pub fn new(name: &str, memory: &str) -> Self {
+    /// No variables yet, in `section` (`Section::wram0("Variables")`, ...)
+    pub fn new(section: Section) -> Self {
         VariableSection {
-            name: name.to_string(),
-            memory: memory.to_string(),
+            section,
             data: Vec::new(),
         }
     }
@@ -39,7 +39,7 @@ impl VariableSection {
 
     pub fn generate(&self) -> Vec<Instr> {
         let mut asm = Block::new();
-        asm.section(&self.name, &self.memory);
+        asm.section(self.section.clone());
 
         for (name, vartype) in &self.data {
             asm.raw(&format!("{}: {}", name, vartype));
@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn test_section_keeps_declaration_order() {
-        let mut section = VariableSection::new("Vars", "WRAM0");
+        let mut section = VariableSection::new(Section::wram0("Vars"));
         // Eight names in neither alphabetical nor any hash order (1 chance in 40320)
         for name in ["wG", "wA", "wE", "wH", "wB", "wF", "wC", "wD"] {
             section.add_data(name, "db");

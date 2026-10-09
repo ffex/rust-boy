@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::gb_asm::{Block, Expr, Instr, R8};
+use crate::gb_asm::{Block, Expr, Instr, R8, Section};
 
 use super::memory::{MemoryAllocator, MemoryRegion};
 
@@ -306,7 +306,7 @@ impl VariableManager {
         let mut asm = Block::new();
 
         for (section_name, var_ids) in &self.sections {
-            asm.section(section_name, "WRAM0");
+            asm.section(Section::wram0(section_name));
 
             for id in var_ids {
                 if let Some(var) = self.variables.get(id) {

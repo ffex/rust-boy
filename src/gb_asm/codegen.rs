@@ -1,6 +1,7 @@
 use super::asm::{Asm, Chunk};
 use super::instr::{Condition, Instr, JumpTarget};
 use super::relax::relax_jumps;
+use super::section::SectionTracker;
 use std::fmt;
 
 /// The order in which the chunks appear in the program
@@ -44,6 +45,10 @@ impl Asm {
     /// written, with no jump changed: rgbasm then reports a `jr` out of range. See
     /// `gb_asm::relax` for every rule.
     ///
+    /// # Panics
+    /// If an instruction does not belong in its section, in the chunk order: code or data
+    /// in a RAM section, a section name used twice (see [`Section`](super::Section)).
+    ///
     /// # Example
     /// ```
     /// use rust_boy::gb_asm::{Asm, Instr, JumpTarget};
@@ -59,6 +64,7 @@ impl Asm {
     /// assert_eq!(program[1], Instr::Jp { target: JumpTarget::Label(".far".into()) });
     /// assert_eq!(program[131], Instr::Jp { target: JumpTarget::Label("Main".into()) });
     /// ```
+    #[track_caller]
     pub fn program(&self) -> Vec<Instr> {
         self.relaxed_chunks()
             .into_iter()
@@ -67,6 +73,9 @@ impl Asm {
     }
 
     /// The non-empty chunks in their order, with the jumps of the whole program relaxed
+    ///
+    /// Panics if an instruction does not belong in its section (see [`Asm::to_asm`]).
+    #[track_caller]
     fn relaxed_chunks(&self) -> Vec<(Chunk, Vec<Instr>)> {
         let chunks: Vec<(Chunk, &Vec<Instr>)> = CHUNK_ORDER
             .iter()
@@ -81,6 +90,12 @@ impl Asm {
             .iter()
             .flat_map(|(_, instrs)| instrs.iter().cloned())
             .collect();
+        let mut sections = SectionTracker::default();
+        for instr in &all {
+            if let Err(error) = sections.add(instr) {
+                panic!("invalid program: {}", error);
+            }
+        }
         let mut relaxed = relax_jumps(&all).into_iter();
         chunks
             .into_iter()
@@ -89,6 +104,10 @@ impl Asm {
     }
 
     /// The program's RGBDS assembly: [`Asm::program`], a blank line between chunks
+    ///
+    /// # Panics
+    /// If an instruction does not belong in its section (see [`Asm::program`]).
+    #[track_caller]
     pub fn to_asm(&self) -> String {
         let mut asm = String::new();
         for (_, instructions) in self.relaxed_chunks() {
@@ -214,10 +233,11 @@ impl fmt::Display for Instr {
             Instr::Rst { vector } => write!(f, "rst ${:02x}", vector),
 
             // Assembler directives
+            Instr::Ds { count, fill: None } => write!(f, "ds {}", count),
             Instr::Ds {
-                num_bytes,
-                starter_point,
-            } => write!(f, "ds {}, {}", num_bytes, starter_point),
+                count,
+                fill: Some(fill),
+            } => write!(f, "ds {}, {}", count, fill),
             Instr::Include { file } => write!(f, "INCLUDE \"{}\"", file),
             Instr::Incbin {
                 file,
@@ -230,7 +250,7 @@ impl fmt::Display for Instr {
                 (None, None) => write!(f, "INCBIN \"{}\"", file),
             },
             Instr::Def { label, value } => write!(f, "DEF {} EQU {}", label, value),
-            Instr::Section { name, mem_type } => write!(f, "SECTION \"{}\", {}", name, mem_type),
+            Instr::Section(section) => write!(f, "{}", section),
             Instr::Label { name } => write!(f, "{}:", name),
             Instr::Comment { text } => write!(f, "; {}", text),
             Instr::Db { values } => write!(f, "db {}", values),

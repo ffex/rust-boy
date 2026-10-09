@@ -1050,8 +1050,17 @@ impl SpriteManager {
     /// The code grows with every animation, so each jump over a part whose size depends
     /// on the number of sprites or animations is a `jp`: a `jr` reaches only 127 bytes
     /// ahead (B9). The only `jr` left skips one `call` and one `jp`, 6 bytes.
-    pub(crate) fn generate_animation_calls(&self, delay_value: u8) -> Vec<Instr> {
+    ///
+    /// Its labels are local and come from `labels`: `.anim_end_N` after the whole
+    /// dispatcher (it was the global label `AnimEnd`), `.anim_{sprite}_end_N` after a
+    /// sprite's part and `.skip_{sprite}_{animation}_N` after an animation's call.
+    pub(crate) fn generate_animation_calls(
+        &self,
+        labels: &LabelAllocator,
+        delay_value: u8,
+    ) -> Vec<Instr> {
         let mut asm = Block::new();
+        let anim_end = labels.local("anim_end");
 
         // Increment frame counter
         asm.ld_a_addr_def("wFrameCounter");
@@ -1060,7 +1069,7 @@ impl SpriteManager {
 
         // Compare with delay value
         asm.cp_imm(delay_value);
-        asm.jp_cond(Condition::C, "AnimEnd"); // if counter < delay, skip animations
+        asm.jp_cond(Condition::C, &anim_end); // if counter < delay, skip animations
 
         // Reset frame counter
         asm.ld_a(0);
@@ -1073,7 +1082,7 @@ impl SpriteManager {
             }
 
             let current_var = format!("wAnim_{}_Current", sprite.name);
-            let sprite_end_label = format!(".animEnd_{}", sprite.name);
+            let sprite_end_label = labels.local(&format!("anim_{}_end", sprite.name));
 
             // Load current animation index
             asm.ld_a_addr_def(&current_var);
@@ -1085,7 +1094,7 @@ impl SpriteManager {
             // For each animation, check if it's the current one
             for animation in &sprite.animations {
                 let func_name = animation_label(&sprite.name, &animation.name);
-                let skip_label = format!(".skip_{}_{}", sprite.name, animation.name);
+                let skip_label = labels.local(&format!("skip_{}_{}", sprite.name, animation.name));
 
                 // Check if this animation index is selected (the skip is 6 bytes)
                 asm.cp_imm(animation.index);
@@ -1101,7 +1110,7 @@ impl SpriteManager {
             asm.label(&sprite_end_label);
         }
 
-        asm.label("AnimEnd");
+        asm.label(&anim_end);
 
         asm.into_instrs()
     }
@@ -1594,7 +1603,7 @@ mod tests {
     /// The animation code as the main loop runs it each frame: the dispatcher, a `ret`
     /// that ends the frame on the test CPU, then every animation function
     fn animation_program(sm: &SpriteManager, delay: u8) -> Vec<Instr> {
-        let mut code = sm.generate_animation_calls(delay);
+        let mut code = sm.generate_animation_calls(&LabelAllocator::new(), delay);
         code.push(Instr::Ret);
         for (_, body) in sm.generate_animation_functions() {
             code.extend(body);
@@ -1963,7 +1972,7 @@ mod tests {
                 .add_animation(delta, &format!("Pose{}", i), 0, 3, AnimationType::Loop);
         }
 
-        let dispatch = gb.sprites.generate_animation_calls(8);
+        let dispatch = gb.sprites.generate_animation_calls(gb.labels(), 8);
         assert_eq!(jr_range_errors(&dispatch), Vec::<String>::new());
         for (name, body) in gb.sprites.generate_animation_functions() {
             assert_eq!(jr_range_errors(&body), Vec::<String>::new(), "{}", name);

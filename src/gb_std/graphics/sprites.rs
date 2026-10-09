@@ -7,15 +7,20 @@ pub(crate) fn oam_address(index: u8, byte: u8) -> Expr {
     Expr::sym(hw::OAMRAM) + hw::oam_offset(index, byte)
 }
 
-/// Clear the OAM loop: write `a` to `b` bytes from `[hl]` on, under the global label
-/// `ClearOam`. Set the registers with [`initialize_objects_screen`] first, which clears
-/// the whole OAM (every sprite at Y 0, so hidden).
-pub fn clear_objects_screen() -> Vec<Instr> {
+/// Clear the OAM loop: write `a` to `b` bytes from `[hl]` on. Set the registers with
+/// [`initialize_objects_screen`] first, which clears the whole OAM (every sprite at Y 0,
+/// so hidden).
+///
+/// Its loop label is local and comes from `labels` (`.clear_oam_N`), so it can be
+/// emitted more than once and inside an `If`; like any code with local labels it must come
+/// after a global label (it was the global label `ClearOam`).
+pub fn clear_objects_screen(labels: &LabelAllocator) -> Vec<Instr> {
+    let clear = labels.local("clear_oam");
     let mut asm = Block::new();
-    asm.label("ClearOam")
+    asm.label(&clear)
         .ld(Mem::Hli, R8::A)
         .dec(R8::B)
-        .jp_cond(Condition::NZ, "ClearOam");
+        .jp_cond(Condition::NZ, &clear);
     asm.into_instrs()
 }
 
@@ -51,8 +56,9 @@ pub(crate) enum MoveDir {
 /// not at all. `coord` must then be the one that reaches the limit first (the smallest
 /// when decreasing, the largest when increasing).
 ///
-/// Uses A and the flags, and two local labels from `labels`, `.{stem}_N_store` and
-/// `.{stem}_N_end` (B7): the move can be emitted any number of times, and inside an `If`.
+/// Uses A and the flags, and two local labels with one number from `labels`,
+/// `.{stem}_store_N` and `.{stem}_end_N` (B7): the move can be emitted any number of
+/// times, and inside an `If`.
 pub(crate) fn move_coord_limit(
     labels: &LabelAllocator,
     stem: &str,
@@ -62,9 +68,9 @@ pub(crate) fn move_coord_limit(
     distance: u8,
     limit: u8,
 ) -> Vec<Instr> {
-    let label = labels.local(stem);
-    let store = format!("{}_store", label);
-    let end = format!("{}_end", label);
+    let store_stem = format!("{}_store", stem);
+    let end_stem = format!("{}_end", stem);
+    let [store, end] = labels.locals([store_stem.as_str(), end_stem.as_str()]);
     let mut asm = Block::new();
 
     // Work on the offset from the limit, A = coord - limit, so the limit is at 0 and
@@ -255,7 +261,8 @@ impl Sprite {
     /// X, screen x + 8): a step that would go past the limit stops exactly on it, and a
     /// sprite already past the limit does not move
     ///
-    /// Its two local labels come from `labels` (`.sprite0_left_limit_3_store`, `…_end`).
+    /// Its two local labels come from `labels` (`.sprite0_left_limit_store_3`,
+    /// `.sprite0_left_limit_end_3`).
     pub fn move_left_limit(
         &mut self,
         labels: &LabelAllocator,
@@ -514,13 +521,12 @@ pub(crate) mod tests {
         // could not find its own .end_if_N / .else_N
         let labels = LabelAllocator::new();
         let mut sprite = Sprite::new(0, 0, 0, 0, 0);
-        let mut if_counter = 0;
         let mut code = Vec::new();
         for _ in 0..2 {
             let then_move = sprite.move_up_limit(&labels, 1, 16);
             let else_move = sprite.move_left(1);
             let mut if_stmt = If::lt(sprite.get_y(), sprite.get_x(), then_move).or_else(else_move);
-            code.extend(if_stmt.emit(&mut if_counter));
+            code.extend(if_stmt.emit(&labels));
         }
         assert_code_labels_ok(&code);
     }

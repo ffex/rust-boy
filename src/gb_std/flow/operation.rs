@@ -1,4 +1,4 @@
-use crate::gb_asm::{Block, Instr};
+use crate::gb_asm::{Block, Instr, LabelAllocator};
 
 use super::emittable::Emittable;
 
@@ -6,7 +6,7 @@ use super::emittable::Emittable;
 pub struct Op(pub Vec<Instr>);
 
 impl Emittable for Op {
-    fn emit(&mut self, _counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, _labels: &LabelAllocator) -> Vec<Instr> {
         std::mem::take(&mut self.0)
     }
 }

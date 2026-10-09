@@ -96,7 +96,7 @@ pub fn update_keys() -> Vec<Instr> {
 }
 /// Run `pressed_func` while `button` is held (its bit is set in `wCurKeys`)
 ///
-/// The labels are local and numbered by `labels` (`.check_left_3`, `.check_left_3_end`),
+/// The labels are local, with one number from `labels` (`.check_left_3`, `.check_left_end_3`),
 /// so the same check can be emitted any number of times, and inside an `If` body. Like
 /// any code with local labels, it must come after a global label, and `pressed_func`
 /// must not define a global label (it would start a new label scope). Uses A and the flags.
@@ -107,8 +107,8 @@ pub fn check_key(
     button: PadButton,
     pressed_func: Vec<Instr>,
 ) -> Vec<Instr> {
-    let start = labels.local(button.label());
-    let end = format!("{}_end", start);
+    let end_stem = format!("{}_end", button.label());
+    let [start, end] = labels.locals([button.label(), end_stem.as_str()]);
     let mut asm = Block::new();
     asm.label(&start);
     asm.ld_a_addr_def("wCurKeys");
@@ -178,7 +178,7 @@ mod tests {
         let body = check_key(&labels, PadButton::Left, mark("wLeft"));
         let code = If::ne(load_keys(), load_keys(), body)
             .or_else(check_key(&labels, PadButton::Left, mark("wElse")))
-            .emit(&mut 0);
+            .emit(&labels);
         assert_code_labels_ok(&code);
 
         // The keys always equal themselves: the else branch runs, and checks Left

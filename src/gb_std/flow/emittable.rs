@@ -1,4 +1,4 @@
-use crate::gb_asm::{Instr, JumpTarget};
+use crate::gb_asm::{Instr, JumpTarget, LabelAllocator};
 
 // `Emittable` and `boxed` live in the asm layer (`gb_asm::block`), with `Block`; they are
 // re-exported here, where the control-flow structures that implement them are
@@ -41,7 +41,7 @@ impl Call {
 }
 
 impl Emittable for Call {
-    fn emit(&mut self, _counter: &mut usize) -> Vec<Instr> {
+    fn emit(&mut self, _labels: &LabelAllocator) -> Vec<Instr> {
         let mut instrs = std::mem::take(&mut self.args);
         instrs.push(Instr::Call {
             target: JumpTarget::Label(self.func_name.clone()),

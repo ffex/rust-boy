@@ -3,18 +3,28 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Hands out unique local labels for code that can be generated more than once
+/// Hands out the generated labels of a program: unique local labels, numbered
 ///
-/// A snippet such as a key check or a limited move can appear several times in one
-/// program, and inside an `If` body, so the labels it jumps to:
+/// Every label that generated code makes up comes from one allocator per program: the
+/// labels of `If` (`.end_if_N`, `.else_N`, `.then_N`), of the snippets (key checks,
+/// limited moves, the OAM clear loop) and of the animation dispatcher. The program's
+/// [`Asm`](super::Asm) owns it ([`Asm::labels`](super::Asm::labels)), and
+/// [`Emittable::emit`](super::Emittable::emit) takes it. The labels:
 /// - are **local** (`.name`): a global label starts a new RGBDS label scope, and an
 ///   enclosing `If` would then not find its own `.end_if_N`;
-/// - are **numbered** by an allocator: two copies of a snippet never define the same
-///   label.
+/// - are **unique by construction**: each call takes the next number `N` of the
+///   sequence, and every label it returns is `.{stem}_N`, with distinct stems made of
+///   identifier characters. The number is the text after the last `_`, so two labels
+///   are equal only if they have the same stem and the same number, which no two calls
+///   share.
 ///
 /// Clones share one counter, so all the generators that hold a clone of a program's
 /// allocator draw from the same sequence. The numbers only depend on the order of the
 /// calls, so the same program always gets the same labels.
+///
+/// A routine (a global label emitted once, such as `Memcopy` or an animation function)
+/// keeps its own fixed local labels (`.copy`): they live in the scope of its global
+/// label, which is unique.
 ///
 /// # Example
 /// ```
@@ -24,6 +34,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// let shared = labels.clone();
 /// assert_eq!(labels.local("check_left"), ".check_left_0");
 /// assert_eq!(shared.local("check_left"), ".check_left_1");
+/// let [end, other] = labels.locals(["end_if", "else"]);
+/// assert_eq!((end.as_str(), other.as_str()), (".end_if_2", ".else_2"));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct LabelAllocator {
@@ -43,11 +55,52 @@ impl LabelAllocator {
 
     /// A local label `.{stem}_{n}` that no other call returns
     ///
-    /// A snippet that needs several labels takes one and adds a suffix for the others
-    /// (`.check_left_3`, `.check_left_3_end`). `stem` must be made of letters, digits
-    /// and `_`.
+    /// # Panics
+    /// If `stem` is empty or has a character other than letters, digits, `_`, `#`, `$`
+    /// and `@` (the characters of an RGBDS identifier).
+    #[track_caller]
     pub fn local(&self, stem: &str) -> String {
-        format!(".{}_{}", stem, self.next_id())
+        let [label] = self.locals([stem]);
+        label
+    }
+
+    /// Several local labels with one number: `.{stem}_{n}` for each stem, for a
+    /// snippet that needs more than one (`.check_left_3`, `.check_left_end_3`)
+    ///
+    /// # Panics
+    /// If a stem is not made of identifier characters (see [`LabelAllocator::local`]), or
+    /// two stems are the same.
+    #[track_caller]
+    pub fn locals<const N: usize>(&self, stems: [&str; N]) -> [String; N] {
+        for (i, stem) in stems.iter().enumerate() {
+            if stem.is_empty()
+                || !stem
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '#' | '$' | '@'))
+            {
+                panic!(
+                    "invalid label stem {:?}: use letters, digits, `_`, `#`, `$` or `@`",
+                    stem
+                );
+            }
+            if stems[..i].contains(stem) {
+                panic!("label stem {:?} given twice for one label number", stem);
+            }
+        }
+        let n = self.next_id();
+        stems.map(|stem| format!(".{}_{}", stem, n))
+    }
+
+    /// A new allocator that goes on with this sequence from where it is, without sharing
+    /// it: the numbers it hands out do not advance this one
+    ///
+    /// For code generated again on each `build()` (the start-up code, the animation
+    /// dispatcher): it takes the numbers after every label handed out so far, and two
+    /// builds of the same program give the same labels.
+    pub fn fork(&self) -> Self {
+        Self {
+            next: Arc::new(AtomicUsize::new(self.next.load(Ordering::Relaxed))),
+        }
     }
 }
 
@@ -432,6 +485,28 @@ mod tests {
         assert_eq!(labels.next_id(), 2);
         // A separate allocator has its own sequence
         assert_eq!(LabelAllocator::new().local("move"), ".move_0");
+        // Several labels share one number
+        assert_eq!(
+            labels.locals(["end_if", "else", "then"]),
+            [".end_if_3", ".else_3", ".then_3"]
+        );
+        // A fork goes on from the same number, without moving the original
+        let fork = labels.fork();
+        assert_eq!(fork.local("anim_end"), ".anim_end_4");
+        assert_eq!(fork.local("anim_end"), ".anim_end_5");
+        assert_eq!(labels.local("move"), ".move_4");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid label stem \"check left\"")]
+    fn test_a_label_stem_must_be_made_of_identifier_characters() {
+        LabelAllocator::new().local("check left");
+    }
+
+    #[test]
+    #[should_panic(expected = "label stem \"end\" given twice")]
+    fn test_the_stems_of_one_number_are_distinct() {
+        LabelAllocator::new().locals(["end", "end"]);
     }
 
     #[test]

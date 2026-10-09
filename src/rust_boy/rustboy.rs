@@ -65,7 +65,9 @@ fn opens_section(code: &[Instr]) -> bool {
 /// println!("{}", gb.build());
 /// ```
 pub struct RustBoy {
-    /// Internal assembly generator (hidden from user)
+    /// The code written with [`RustBoy::raw`], in chunks; it owns the program's label
+    /// allocator ([`RustBoy::labels`]), shared with the sprite manager, so every
+    /// generated label comes from one sequence
     asm: Asm,
 
     /// Tile manager with automatic VRAM allocation
@@ -79,13 +81,6 @@ pub struct RustBoy {
 
     /// Function registry for auto-including builtin functions
     functions: FunctionRegistry,
-
-    /// Counter for generating unique if-statement labels
-    if_counter: usize,
-
-    /// Numbers every other generated label (key checks, sprite moves, `unique_label`);
-    /// shared with the sprite manager, so they never clash (B7)
-    labels: LabelAllocator,
 
     /// Custom constants defined by the user
     constants: Vec<(String, String)>,
@@ -106,15 +101,13 @@ pub struct RustBoy {
 impl RustBoy {
     /// Create a new RustBoy instance
     pub fn new() -> Self {
-        let labels = LabelAllocator::new();
+        let asm = Asm::new();
         Self {
-            asm: Asm::new(),
+            sprites: SpriteManager::new(asm.labels().clone()),
+            asm,
             tiles: TileManager::new(),
             vars: VariableManager::new(),
-            sprites: SpriteManager::new(labels.clone()),
             functions: FunctionRegistry::new(),
-            if_counter: 0,
-            labels,
             constants: Vec::new(),
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
@@ -179,17 +172,10 @@ impl RustBoy {
         self
     }
 
-    /// Get the next if-statement label counter (auto-increments)
-    pub fn next_if_counter(&mut self) -> usize {
-        let c = self.if_counter;
-        self.if_counter += 1;
-        c
-    }
-
-    /// Get the next general-purpose label counter (auto-increments); the sequence is
-    /// shared with the labels of the generated key checks and sprite moves
+    /// Get the next number of the program's label sequence ([`RustBoy::labels`]), which
+    /// every generated label uses: `If`s, key checks, sprite moves
     pub fn next_label_counter(&mut self) -> usize {
-        self.labels.next_id()
+        self.labels().next_id()
     }
 
     /// Generate a unique label with prefix
@@ -197,12 +183,14 @@ impl RustBoy {
         format!("{}_{}", prefix, self.next_label_counter())
     }
 
-    /// The allocator that numbers this program's generated local labels (key checks,
-    /// sprite moves)
+    /// The allocator of this program's generated labels: the `If`s, the key checks, the
+    /// sprite moves, the start-up code and the animation dispatcher all take their labels
+    /// from it, so every label is unique
     ///
     /// Pass it to the `gb_std` snippets you mix into a `RustBoy` program
-    /// (`check_key`, `Sprite::move_*_limit`): a separate allocator starts again at 0
-    /// and would repeat labels that `RustBoy` already emitted.
+    /// (`check_key`, `Sprite::move_*_limit`), and to [`Emittable::emit`] if you emit code
+    /// yourself: a separate allocator starts again at 0 and would repeat labels that
+    /// `RustBoy` already emitted. In a [`RustBoy::raw`] closure it is `asm.labels()`.
     ///
     /// # Example
     /// ```
@@ -213,7 +201,7 @@ impl RustBoy {
     /// gb.add_to_main_loop(check_key(gb.labels(), PadButton::A, Vec::new()));
     /// ```
     pub fn labels(&self) -> &LabelAllocator {
-        &self.labels
+        self.asm.labels()
     }
 
     /// Add initialization code (runs once at startup)
@@ -228,7 +216,7 @@ impl RustBoy {
     /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
     /// off, `rLY` stays 0 and the wait never ends.
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(&mut self.if_counter);
+        let instrs = code.emit(self.asm.labels());
         self.init_code.extend(instrs);
         self
     }
@@ -428,7 +416,7 @@ impl RustBoy {
         check_function_name(name);
         let mut asm = Block::new();
         asm.label(name);
-        asm.emit_all(body.emit(&mut self.if_counter));
+        asm.emit_all(body.emit(self.asm.labels()));
         asm.ret();
         self.functions
             .register_user_function(name, asm.into_instrs());
@@ -501,8 +489,11 @@ impl RustBoy {
 
     /// The program [`build`](Self::build) prints, as instructions in chunks
     pub(crate) fn build_asm(&mut self) -> Asm {
-        // Start fresh assembly
-        let mut asm = Asm::new();
+        // Start fresh assembly. The code generated here takes its labels after every
+        // label handed out so far, from a fork of the program's allocator, so a second
+        // build gives the same labels (B14)
+        let mut asm = Asm::with_labels(self.labels().fork());
+        let labels = asm.labels().clone();
 
         // === HEADER CHUNK ===
         asm.chunk(Chunk::Header);
@@ -537,7 +528,7 @@ impl RustBoy {
         // Clear the whole OAM, with or without sprites: objects are always turned on
         // below, and OAM holds garbage at power-on (B28)
         startup.emit_all(initialize_objects_screen());
-        startup.emit_all(clear_objects_screen());
+        startup.emit_all(clear_objects_screen(&labels));
         if !self.sprites.is_empty() {
             startup.emit_all(self.sprites.generate_init_code());
         }
@@ -579,7 +570,10 @@ impl RustBoy {
 
         // Generate animation calls at start of main loop
         if self.sprites.has_animations() {
-            asm.emit_all(self.sprites.generate_animation_calls(self.animation_delay));
+            asm.emit_all(
+                self.sprites
+                    .generate_animation_calls(&labels, self.animation_delay),
+            );
         }
 
         // Emit main loop code, then the raw main loop code
@@ -696,7 +690,7 @@ impl RustBoy {
     /// gb.add_to_main_loop(If::eq(left, right, body));
     /// ```
     pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(&mut self.if_counter);
+        let instrs = code.emit(self.asm.labels());
         self.main_loop_code.extend(instrs);
         self
     }
@@ -732,7 +726,7 @@ impl RustBoy {
 
         // Add the input handling code
         self.main_loop_code
-            .extend(inputs.generate_code(&self.labels));
+            .extend(inputs.generate_code(self.asm.labels()));
 
         self
     }
@@ -917,15 +911,6 @@ mod tests {
         let gb = RustBoy::new();
         assert!(gb.tiles.is_empty());
         assert!(gb.vars.is_empty());
-    }
-
-    #[test]
-    fn test_if_counter() {
-        let mut gb = RustBoy::new();
-
-        assert_eq!(gb.next_if_counter(), 0);
-        assert_eq!(gb.next_if_counter(), 1);
-        assert_eq!(gb.next_if_counter(), 2);
     }
 
     #[test]
@@ -1272,7 +1257,9 @@ mod tests {
         assert!(out.contains("PlayerMore:"), "the tiles are copied: {}", out);
 
         // The animation plays the four frames: tiles 2 (its own), then 3, 4, 5 (the others)
-        let mut code = gb.sprites.generate_animation_calls(1);
+        let mut code = gb
+            .sprites
+            .generate_animation_calls(&LabelAllocator::new(), 1);
         code.push(Instr::Ret);
         for (_, body) in gb.sprites.generate_animation_functions() {
             code.extend(body);

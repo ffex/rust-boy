@@ -390,6 +390,7 @@ impl SpriteManager {
         };
         self.add(name, tiles, x, y, flags)
     }
+
     /// Get sprite data (used by the tests)
     #[cfg(test)]
     pub(crate) fn get(&self, id: SpriteId) -> Option<&SpriteData> {
@@ -734,6 +735,7 @@ impl SpriteManager {
             .flat_map(|sprite_id| self.disable_animation(*sprite_id))
             .collect()
     }
+
     /// Move a composite sprite left by `distance` pixels, as one block: no sprite of the
     /// composite goes left of `limit` (an OAM X, screen x + 8)
     ///
@@ -976,6 +978,7 @@ impl SpriteManager {
         asm.ld_a_addr_def(&Axis::X.oam_address(self.sprite(id)));
         asm.get_main_instrs()
     }
+
     /// Check if any sprites have been added
     pub fn is_empty(&self) -> bool {
         self.sprites.is_empty()

@@ -122,7 +122,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the reasoning.
 
 - [ ] `hw` module: pure data (registers, flags, OAM layout, VRAM map) emitted as `hardware.inc` symbol
-      names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine`
+      names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine` (started: `src/hw.rs` since
+      [B22](CONTEXT.md#b22) holds the VRAM, WRAM and OAM layout the new code uses; the older strings are left)
 - [ ] Move `Emittable` into the asm layer; add a `Block` instruction buffer (stop using `Asm` + `get_main_instrs()` as scratch)
 - [ ] Typed operands: remove string-register helpers (`inc_label("de")`, `ld_hli_label("a")`, …); add an
       `Expr` operand for constants/expressions; reject invalid destinations
@@ -140,7 +141,8 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       since by scanning the generated code for function names in `build()`; `GetTileByPixel` documents its registers since [B23](CONTEXT.md#b23))
 - [ ] One source of truth for builtins: `rust_boy` reuses `gb_std` (done for the routines since [B23](CONTEXT.md#b23):
       only `Delay` is `rust_boy`'s own); remove the duplicate `gb_std::graphics::sprites::SpriteManager`
-- [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s
+- [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s (the sprite manager panics since
+      [B20](CONTEXT.md#b20) instead of returning empty `Vec`s; a `Result` API is left)
 - [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
       as `RustBoy::set_sprite_size`
 - [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since

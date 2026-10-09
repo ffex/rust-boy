@@ -132,10 +132,11 @@ Open them in any Game Boy emulator.
   `swap`, `daa`, `jp`, `jr`, `ret` (also with the `z`/`nz`/`c`/`nc` conditions), `call`, plus the directives
   `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines.
   Not yet: `push`/`pop`, `halt`, `di`/`ei`, `reti`, `sbc`, `bit`/`set`/`res`, rotates and most shifts, `cpl`, …
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and a tilemap, WRAM variables
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM variables
   (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and builtin routines that are included only when
-  used. The output is deterministic: things appear in the order you created them.
+  used. Memory is checked: too many tiles, sprites (40) or variables panic with a clear message, as do unknown
+  sprite ids and animation names. The output is deterministic: things appear in the order you created them.
 - **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
   there is no sound yet, and everything lives in one ROM bank. The full list, with fixes planned, is in
   [CONTEXT.md](CONTEXT.md).
@@ -147,6 +148,7 @@ src/
 ├── gb_asm/        # Instr/Operand types, the Asm builder, unique labels, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
+├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)
 ├── bin/           # the example programs
 └── lib.rs
 include/hardware.inc          # hardware definitions for RGBDS (v4.x)

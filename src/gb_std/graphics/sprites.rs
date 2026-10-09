@@ -1,4 +1,5 @@
 use crate::gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register};
+use crate::hw;
 
 /// Clear the OAM loop: write `a` to `b` bytes from `[hl]` on, under the global label
 /// `ClearOam`. Set the registers with [`initialize_objects_screen`] first, which clears
@@ -101,6 +102,48 @@ pub(crate) fn move_coord_limit(
     }
 
     asm.label(&end);
+    asm.get_main_instrs()
+}
+
+/// The code of `get_pivot` for the sprite of OAM entry `oam_index` (both the `gb_std`
+/// [`Sprite`] and the `rust_boy` sprite manager use it): `b` = its screen x minus
+/// `x_offset`, `c` = its screen y minus `y_offset`, in pixels on the background map, as
+/// `GetTileByPixel` takes them. So a positive offset goes left / up: `(0, 1)` is the
+/// pixel above the sprite's top-left one, `(-1, 0)` the one to its right.
+///
+/// Like the map, which is 256 pixels wide and high, the result wraps around: from
+/// screen x 3, an `x_offset` of 5 gives 254 (B22: an offset that made `8 + x_offset` or
+/// `16 + y_offset` leave 0 to 255 was turned into `sub 0`). Changes `a`, `b`, `c` and
+/// the flags.
+///
+/// # Panics
+/// If an offset is out of -255 to 255: on a 256-pixel map, 256 is the same as 0, so
+/// such an offset is a mistake.
+pub(crate) fn pivot(oam_index: u8, x_offset: i16, y_offset: i16) -> Vec<Instr> {
+    // `sub n` with n = OAM offset + pixel offset, modulo 256
+    let sub = |screen_offset: u8, offset: i16| -> u8 {
+        if !(-255..=255).contains(&offset) {
+            panic!(
+                "get_pivot: the offset {} is out of range (-255 to 255): the background \
+                 map is 256 pixels wide and high",
+                offset
+            );
+        }
+        (i16::from(screen_offset) + offset).rem_euclid(256) as u8
+    };
+    let mut asm = Asm::new();
+    asm.ld_a_addr_def(&hw::oam_address(oam_index, hw::OAMA_Y))
+        .sub(
+            Operand::Reg(Register::A),
+            Operand::Imm(sub(hw::OAM_Y_OFFSET, y_offset)),
+        )
+        .ld(Operand::Reg(Register::C), Operand::Reg(Register::A))
+        .ld_a_addr_def(&hw::oam_address(oam_index, hw::OAMA_X))
+        .sub(
+            Operand::Reg(Register::A),
+            Operand::Imm(sub(hw::OAM_X_OFFSET, x_offset)),
+        )
+        .ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
     asm.get_main_instrs()
 }
 
@@ -302,22 +345,14 @@ impl Sprite {
         asm.get_main_instrs()
     }
 
+    /// The sprite's pixel offset by (`x_offset`, `y_offset`) into `b` (x) and `c` (y),
+    /// for `GetTileByPixel`: positive offsets go left / up, the result wraps around the
+    /// 256-pixel map; see [`pivot`]
+    ///
+    /// # Panics
+    /// If an offset is out of -255 to 255.
     pub fn get_pivot(&self, x_offset: i16, y_offset: i16) -> Vec<Instr> {
-        let mut asm = Asm::new();
-        asm.ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4))
-            .sub(
-                Operand::Reg(Register::A),
-                Operand::Imm(u8::try_from(16i16 + y_offset).unwrap_or(0)),
-            )
-            .ld(Operand::Reg(Register::C), Operand::Reg(Register::A))
-            .ld_a_addr_def(&format!("_OAMRAM+{}", self.id * 4 + 1))
-            .sub(
-                Operand::Reg(Register::A),
-                Operand::Imm(u8::try_from(8i16 + x_offset).unwrap_or(0)),
-            )
-            .ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
-
-        asm.get_main_instrs()
+        pivot(self.id, x_offset, y_offset)
     }
 
     /// Get sprite Y position into register A (for use with If statements)
@@ -351,6 +386,54 @@ pub(crate) mod tests {
             MoveDir::Increase if pos > limit => pos,
             MoveDir::Increase => pos.saturating_add(distance).min(limit),
         }
+    }
+
+    /// Check a `get_pivot` code generator, `pivot(x_offset, y_offset)`, for a sprite
+    /// whose OAM Y is at `oam_y` and OAM X at `oam_x`: `b` = screen x - `x_offset` and
+    /// `c` = screen y - `y_offset` (OAM X - 8, OAM Y - 16), modulo 256 like the 256-pixel
+    /// background map, for every offset from -255 to 255 (B22)
+    pub(crate) fn check_pivot(pivot: impl Fn(i16, i16) -> Vec<Instr>, oam_y: &str, oam_x: &str) {
+        for offset in -255i16..=255 {
+            for (x_offset, y_offset) in [(offset, 0), (0, offset), (offset, -offset)] {
+                let code = pivot(x_offset, y_offset);
+                for pos in [0u8, 1, 8, 16, 17, 100, 167, 255] {
+                    let mut cpu = TestCpu::default();
+                    cpu.mem.insert(oam_y.to_string(), pos);
+                    cpu.mem.insert(oam_x.to_string(), pos.wrapping_add(50));
+                    cpu.run(&code);
+                    let want_x = pos
+                        .wrapping_add(50)
+                        .wrapping_sub(8)
+                        .wrapping_sub(x_offset as u8);
+                    let want_y = pos.wrapping_sub(16).wrapping_sub(y_offset as u8);
+                    assert_eq!(
+                        (cpu.b, cpu.c),
+                        (want_x, want_y),
+                        "get_pivot({}, {}) at OAM X {}, Y {}",
+                        x_offset,
+                        y_offset,
+                        pos.wrapping_add(50),
+                        pos
+                    );
+                    assert!(cpu.trace.is_empty(), "no writes");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_pivot_handles_every_offset() {
+        // B22: an offset that made 16 + y_offset or 8 + x_offset leave 0..=255 (-17,
+        // -9, 248, ...) was clamped to `sub 0`, so the pivot was off by that much
+        let sprite = Sprite::new(3, 0, 0, 0, 0);
+        check_pivot(|x, y| sprite.get_pivot(x, y), "_OAMRAM+12", "_OAMRAM+13");
+    }
+
+    #[test]
+    #[should_panic(expected = "get_pivot: the offset 256 is out of range")]
+    fn test_get_pivot_rejects_an_offset_past_the_map() {
+        // The map is 256 pixels wide: offset 256 is offset 0, surely a mistake
+        Sprite::new(0, 0, 0, 0, 0).get_pivot(256, 0);
     }
 
     /// Distances and limits the limited moves are tested with (every start position is)

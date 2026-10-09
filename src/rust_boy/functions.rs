@@ -544,7 +544,11 @@ mod tests {
 
         let used = registry.generate_used(&[&main.get_main_instrs()], []);
         let out = text(&used.code);
-        let defined: Vec<&str> = out.lines().filter(|l| l.ends_with(':')).collect();
+        // The global labels (Memcopy has a local `.copy:` too)
+        let defined: Vec<&str> = out
+            .lines()
+            .filter(|l| l.ends_with(':') && !l.starts_with('.'))
+            .collect();
         assert_eq!(defined, ["Memcopy:", "Second:", "First:"]);
         assert!(used.variables.is_empty());
 

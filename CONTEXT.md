@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 147 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 186 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -53,7 +53,8 @@ rgbfix -v -p 0xFF main.gb
 | Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
 | Start-up code | ✅ `gb.init()` code runs after the variables (animation variables included) and palettes are set, so what it sets survives (was overwritten, fixed — [B11](#b11)); the OAM is always cleared and `rOBP1` is set (fixed — [B28](#b28)); unit tests run the start-up code on `gb_asm::test_cpu` |
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
-| Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); empty raw tile data is not copied (fixed — [B27](#b27)) |
+| Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
+| API safety | ✅ unknown sprite / composite ids, animation names and indices panic with a clear message (they gave no code, fixed — [B20](#b20)); VRAM tiles, WRAM0 variables and OAM entries are allocated through `MemoryAllocator` and panic when full, sprite positions and animation frames are checked (fixed — [B17](#b17)); a sprite's tile index comes from its VRAM address (fixed — [B18](#b18)); `Var::set`/`get` handle 16-bit variables (fixed — [B16](#b16)); `get_pivot` wraps around the map (fixed — [B22](#b22)); a tilemap can go to `$9C00` (fixed — [B19](#b19)) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -66,6 +67,7 @@ rgbfix -v -p 0xFF main.gb
 | **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~930 | `Instr`/`Operand`/`Register` enums, fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`, `Emittable`), a simple `SpriteManager`, `TileRef` |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
+| **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`), `oam_address`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
 
 ### Key concepts
@@ -88,7 +90,7 @@ rgbfix -v -p 0xFF main.gb
 - **Scratch-`Asm` idiom**: most `gb_std`/`rust_boy` helpers create a fresh `Asm`, emit into its default
   `Chunk::Main` and return `asm.get_main_instrs()`.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:414-569`, `build` prints what `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:496-680`, `build` prints what `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -101,7 +103,9 @@ rgbfix -v -p 0xFF main.gb
    set, the palettes after LCD on, `rOBP1` was never set and the OAM was cleared only when sprites existed.)
 4. **MainLoop**: `Main:` → `call WaitNotVBlank` → `call WaitVBlank` → animation dispatcher → user main-loop
    code (incl. `UpdateKeys` + key checks) → `jp Main`.
-5. **Main (legacy)**: whatever was written through `RustBoy::raw()` (unreachable unless labelled, [B15](#b15)).
+5. **Main (legacy)**: whatever was written through `RustBoy::raw()` to its default chunk (reached only through a
+   label). Since [B15](#b15) the raw code written to the other chunks goes at the end of the same chunk (`Init`
+   before LCD on, `MainLoop` before `jp Main`, see `RustBoy::raw`).
 6. **Functions** (since [B24](#b24)/[B26](#b26), worked out once all the code is known, before the variables): the
    builtins, then the user functions, that the code and the animation functions refer to, directly or through
    other functions, plus the ones forced with `use_function` / `keep_function`; then the `Anim_*` functions. The
@@ -127,7 +131,7 @@ The problems are where each layer reaches across the line:
    `AdcA` vs `Adc`).
 3. **Hardware facts are hardcoded in every layer.** `_OAMRAM+{id*4+1}` strings in both sprite managers,
    `$9800` in three places, VRAM bases in `tiles.rs`, LCDC flags written as strings in each layer
-   (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) exist but are unused.
+   (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) existed but were unused (used since [B17](#b17)); a first `hw` module (`src/hw.rs`, pure data) exists since [B22](#b22).
 4. **L3 re-implements L2 instead of using it.** `src/rust_boy/functions.rs:152-311` (at `4601a5c`) duplicated Memcopy,
    WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel from `gb_std`, and they had already
    diverged ([B23](#b23)). *Since B23* `rust_boy` emits the `gb_std` routines (only `Delay` is its own), and its
@@ -337,7 +341,7 @@ writes in init are likewise overwritten by `:313-320`. *Fix:* emit variable init
 **Status: fixed** on `refactor-p1-init-order`. The start-up code now runs: LCD off → VRAM copies → OAM clear and
 initial sprites → default palettes → every variable set to its initial value (the animation variables
 `wFrameCounter`, `wAnim_{sprite}_Current` and `wAnim_{sprite}_Dir` are created first, so they are included) →
-**user `init()` code** → LCD on (`src/rust_boy/rustboy.rs:434-476`, put together at `:560-563`). So `gb.init(lives.set(3))`,
+**user `init()` code** (then the `raw()` code written to `Chunk::Init`, [B15](#b15)) → LCD on (`src/rust_boy/rustboy.rs:522-569`, put together at `:665-668`). So `gb.init(lives.set(3))`,
 `gb.init(gb.sprites.enable_animation(coin, 0))`, a `PingPong` direction or a palette set in `init()` survive.
 One difference from the fix above: **`rLCDC` stays after the user code**, because turning the LCD on ends
 the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
@@ -353,8 +357,8 @@ pair loaded with an address, and every register, pair and flag after a stub):
 
 #### B12
 **OAM is accessed directly, without shadow OAM + DMA.** Sprite moves, `get_x/get_y/get_pivot` and the
-animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:445-612`,
-`src/rust_boy/animations.rs:86-201`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:479-495`). OAM is only accessible in
+animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/rust_boy/sprites.rs:769-1010`,
+`src/rust_boy/animations.rs:86-203`, the `Loop`, `Once` and `PingPong` bodies since [B10](#b10); loop at `src/rust_boy/rustboy.rs:574-588`). OAM is only accessible in
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
@@ -387,11 +391,40 @@ but `build()` copies only its `Chunk::Main` (`:434-438`); anything written after
 inside the closure is lost (and later `raw()` calls too, since the chunk persists). The `Main` chunk is printed
 right after `jp Main`, so raw code is unreachable unless it starts with a label that is called — the doc
 example (`ld a, 0x42; ret`) is dead code. *Fix:* merge all chunks; document placement.
+**Status: fixed** on `refactor-p1-api-safety`. Each `raw()` call starts in `Chunk::Main` again, and `build()` keeps every
+chunk the raw code wrote, each one right after the code it generates for that chunk (`RustBoy::raw_chunk`): `Header`,
+`Constants`, `Tiles`, `Tilemap` after theirs; `Init` at start-up after the `init()` code and before the LCD is turned on
+(so it runs, like `init()` code); `MainLoop` in the main loop after the `add_to_main_loop` code and before `jp Main` (it
+runs every frame); `Main` where it was, after `jp Main` (reached only through a label); `Functions` after the generated
+functions; `Data` after the variable sections (so inside the last `WRAM0` one, unless the raw code opens a `SECTION`;
+in a program without variables, raw `Data` code that does not start with a `SECTION` gets `SECTION "Raw Data", WRAM0`,
+where it used to land in the ROM0 section of the code: `test_raw_data_always_lands_in_wram`). The raw `Functions` and `Data` code is scanned like the rest, so a
+builtin a raw routine calls is emitted (with its variables) and a name it defines is the program's ([B26](#b26)). The
+`raw()` doc example is now a compiled doctest: a labelled routine called from the main loop, and `MainLoop` code. No
+example changes (no example writes to another chunk). Tests: `test_raw_keeps_every_chunk` (each chunk, a second
+`raw()` call, a builtin called from a raw function; linked with RGBDS) and `test_raw_init_and_main_loop_code_runs`
+(the start-up code on `gb_asm::test_cpu`: the raw `Init` code runs after the `init()` code and before LCD on; the raw
+`MainLoop` code is before `jp Main`); both failed before (the code was dropped).
 
 #### B16
 **`Var::set`/`Var::get` ignore 16-bit variables.** `set(value: i8)` (`src/rust_boy/variables.rs:31`) writes
 only the low byte; `get` (`:43`) loads one byte; `var_type` (`:26`) is never read. (Setting a `u8` > 127
 works via `200u8 as i8`, but the API is awkward.) *Fix:* typed setters per `VarType`, 16-bit load/store.
+**Status: fixed** on `refactor-p1-api-safety`. `Var::set(value: impl Into<i32>)` takes any integer (`set(-1)`,
+`set(200u8)`, `set(1000)`) and panics, naming the variable, if the value is out of the range of its type
+(`VarType::range`: `U8` 0 to 255, `I8` -128 to 127, `U16` 0 to 65535, `I16` -32768 to 32767). An 8-bit variable gets the
+same code as before (`ld a, -1` / `ld [name], a`); a 16-bit one both bytes, little-endian as `dw` stores them (`name`,
+then `name+1`). `Var::get` loads an 8-bit variable into `a` as before, a 16-bit one into `hl` (`a` holds the high byte;
+the `If` comparisons, which test `a`, are for 8-bit variables). `set` and the start-up initialisation share one function,
+so an `I16` initial value is written as two plain bytes (`ld a, 255`, was `ld a, -1`: the same byte). `Var::var_type()`
+reads the type, and `Var` is exported. `create_in_section` panics on an initial value out of its type's range (it was
+cut to a byte or a word). Breaking: `set` took an `i8`, so a call with an `i8` *variable* still compiles (`impl
+Into<i32>`), but `u8var.set(200u8 as i8)` (the old workaround, -56) now panics: write `set(200)`. Tests run the code
+on `gb_asm::test_cpu`, which now reads an 8-bit operand written as a number (`ld a, -1`), -128 to 255 like rgbasm, and
+panics outside: `test_set_writes_both_bytes_of_a_16_bit_variable`, `test_get_loads_a_16_bit_variable_into_hl` (both
+failed before: the high byte was not written, `hl` not loaded), `test_set_panics_on_a_value_out_of_the_type_range`,
+`test_set_takes_any_value_of_the_variable_type`, `test_set_and_get_an_8_bit_variable`,
+`test_initial_values_of_every_type`, `test_an_initial_value_must_fit_the_type`. No example changes.
 
 #### B17
 **No bounds or overflow checks.**
@@ -406,22 +439,98 @@ works via `200u8 as i8`, but the API is awkward.) *Fix:* typed setters per `VarT
 - `MemoryAllocator` (`src/rust_boy/memory.rs:36`) exists, with overflow checks, but nothing uses it.
 
 *Fix:* use the allocator, `u16` counters + `checked_add`, clear errors.
+**Status: fixed** on `refactor-p1-api-safety`. The managers allocate through `MemoryAllocator` (`src/rust_boy/memory.rs`,
+with the regions from the new `hw` module), whose `allocate_or_panic` panics with "no room for {what}: N bytes needed,
+but {region} (…) has M bytes left":
+- `TileManager`: sprite tiles in `MemoryRegion::SpriteTiles` ($8000-$8FFF, 256 tiles), background tiles in
+  `MemoryRegion::BackgroundTiles` ($9000-$97FF, 128 tiles, before the tilemaps). Sizes are counted in `usize`
+  (`TileSource::size_bytes` panics past 65535 bytes instead of wrapping); the sprite tile index comes from the VRAM
+  address ([B18](#b18)), so the `u8` counter that overflowed at 256 tiles is gone (two FOSDEM characters, 2 × 128 tiles,
+  now fit exactly, tested).
+- `VariableManager`: `MemoryRegion::Wram0` ($C000-$CFFF): every variable section is a `WRAM0` section, so all of them
+  share its 4 KiB (rgblink rejected a bigger section; the counter could also wrap).
+- `SpriteManager`: `MemoryRegion::Oam`, 40 entries; a 41st sprite panics (it was written past `$FE9F`). `x` above 247
+  or `y` above 239 panics (OAM X = x + 8 and OAM Y = y + 16 are bytes); `add_sprite_16x16` checks its right half,
+  x + 8, first (x at most 239). `oam_index * 4` cannot overflow any more (at most 159).
+- Animations: `add_animation_with_step` panics when `start_frame` > `end_frame`, `frame_step` is 0, or a frame is not
+  among the sprite's own tiles (it showed the next sprite's tiles, and past tile 255 the `u8` frame arithmetic overflowed).
+  A sprite whose frames come from several blobs (several `.2bpp` files; on `refactor` the frames simply ran on into tiles
+  added after it with `tiles.add_sprite`) gets the other tiles with **`RustBoy::add_sprite_tiles(sprite, name, source)`**:
+  they go right after the sprite's tiles and count as its own; it panics if other sprite tiles were added in between (the
+  frames would not be contiguous), and the frame check's message points to it. Tests
+  `test_a_sprite_with_tiles_from_two_sources` (plays the four frames on `gb_asm::test_cpu`, links) and
+  `test_add_sprite_tiles_must_follow_the_sprite`.
+  The `Loop` code compares the current tile with the first and the last frame themselves (like `Once` and `PingPong`):
+  `cp first` / `jr c, .reset` / `cp last` / `jr c, .next` / `.reset: ld a, first - step` / `.next: inc a` (or
+  `add a, step`) / store. The reset loads the tile *before* the first frame (modulo 256: 255 for frame 0) and falls into
+  the step, so the code has exactly the same size as before (17 bytes in 8x8, 18 in 8x16) and nothing else in the ROM
+  moves. Before, `cp last + step` was `cp 256` for a last frame on tile 255 (8x8) or 254 (8x16): a panic when generated
+  in debug, `cp 0` in release (the animation froze on its first frame). For every tile and frame range it does what the old code did
+  (checked exhaustively), except with a step of 2 when the sprite shows the odd tile just before the first frame (255
+  when the first frame is tile 0): the old code went to the tile after the first frame, an odd one, the new code goes
+  to the first frame.
+- `MemoryRegion` has three new variants (`SpriteTiles`, `BackgroundTiles`, `Wram0`) and `size()`: breaking for code that
+  matches on it exhaustively.
+
+`fosdem` and `coin-anim` change only in their `Loop` functions (and `Memcopy`, [B27](#b27)); their ROMs were run in an
+emulator (PyBoy) before and after for 1500 frames with the same inputs (A, B and every direction): the OAM and the
+screen are identical on every frame, and every frame of every animation is shown. Tests: `test_sprite_tiles_must_fit_in_their_vram_block`,
+`test_background_tiles_must_fit_before_the_tilemap`, `test_at_most_40_sprites`, `test_sprite_position_must_fit_in_oam`,
+`test_variables_must_fit_in_wram0`, `test_animation_frames_must_be_the_sprite_tiles`,
+`test_loop_animation_ending_on_the_last_sprite_tile` (runs the animation on `gb_asm::test_cpu` in 8x8 and 8x16; it
+overflowed before), `test_allocation_stops_at_the_end_of_the_region`, `test_regions`; all the new ones failed before.
+Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (its size is only known when
+assembled).
 
 #### B18
 **Two tile counters can desync.** `SpriteManager.next_tile_index` (`src/rust_boy/sprites.rs:82`) and
 `TileManager.next_sprite_addr` (`src/rust_boy/tiles.rs:94`) are kept in sync only by `RustBoy::add_sprite`.
 Calling the public `gb.tiles.add_sprite` or `gb.sprites.add` directly (the `RustBoy` doc example does) → wrong
 tile indices. *Fix:* single source of truth.
+**Status: fixed** on `refactor-p1-api-safety`: the tile manager is the one source. `RustBoy::add_sprite` adds the tiles,
+then takes the sprite's tile index from their VRAM address (`TileManager::sprite_tile_index`: `($8000 + 16 n) → n`) and
+gives it to the sprite manager, which no longer counts tiles (`next_tile_index` is gone). So tiles added alone with
+`gb.tiles.add_sprite` (still public: tiles a program swaps in itself) just move the next sprite further, index and VRAM
+copy together. **Breaking:** `SpriteManager::add` is `pub(crate)` now (it takes the tiles); `RustBoy::add_sprite` is
+the way to add a sprite, as every example and the README already do. In 8x16 mode a sprite that would start on an odd tile
+(after an odd number of tiles added alone) panics, as an odd tile count already did ([B4](#b4)). Tests:
+`test_sprite_tiles_have_one_source` (failed before: tile index 1, VRAM `$8040`; it also runs the start-up code to check
+the OAM tile byte) and `test_8x16_sprite_after_an_odd_number_of_tiles_panics`. No example changes.
 
 #### B19
 **Every tilemap goes to `$9800`.** `add_tilemap` hardcodes `vram_address: 0x9800`
 (`src/rust_boy/tiles.rs:160`); with two tilemaps, the last one created wins (it was random before B13). No `$9C00`.
+**Status: fixed** on `refactor-p1-api-safety`. `TilemapArea::{Map9800, Map9C00}` (exported, addresses from `hw`) names
+the two maps; `TileManager::add_tilemap_at(name, area, rows)` puts a tilemap at either, and `add_tilemap` is
+`add_tilemap_at(.., Map9800)` as before. A second tilemap on the same map panics, naming both (each is copied to the
+start of its map, so one would replace the other), and so does a tilemap of more than 32 rows (it ran into the next map,
+or out of VRAM from `$9C00`). **`RustBoy::set_background_tilemap(area)`** chooses the map the background shows: `build()`
+adds `| LCDCF_BG9C00` to the LCD-on value for `Map9C00` (for `Map9800`, the default, the LCDC line is unchanged: the flag
+is 0). Not done: the window layer, which could show the other map (Phase 3), and `GetTileByPixel`, which still reads the
+`$9800` map (documented on `set_background_tilemap`). No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
+and `test_a_tilemap_has_at_most_32_rows` (both failed before: no panic), `test_a_tilemap_at_9c00` (the start-up code with
+the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCDC value; linked with RGBDS).
 
 #### B20
 **Silent failures.** Unknown `SpriteId`/`CompositeSpriteId` → empty `Vec` (move/get/enable methods in
 `src/rust_boy/sprites.rs`); `enable_animation_by_name` / `set_initial_animation_by_name` (`:197, :171`) do
 nothing on a typo; `add_animation_with_step` returns 0 for an unknown id. *Fix:* `Result` or panic with a
 clear message.
+**Status: fixed** on `refactor-p1-api-safety` with panics (like the other API checks; a `Result` API is the Phase 2
+`build(&self) -> Result` item). In `SpriteManager` (`src/rust_boy/sprites.rs`), every method that takes a `SpriteId` or a
+`CompositeSpriteId` (moves, `move_*_var`, `get_x`/`get_y`/`get_pivot`, the animation methods) looks it up with
+`sprite()` / `composite()`, which panic with "unknown sprite id N" / "unknown composite sprite id N". The animation methods
+also panic, naming the sprite and listing what it has, on: an unknown name (`enable_animation_by_name`,
+`set_initial_animation_by_name`); an index the sprite does not have (`enable_animation`, `set_initial_animation`, which
+still takes `ANIM_DISABLED`; so `set_initial_animation(id, 0)` must now come after `add_animation`, where it could come
+before it on `refactor`); `enable_animation(.., ANIM_DISABLED)` (use `disable_animation`); `enable_animation` /
+`disable_animation` on a sprite without animations, whose `wAnim_{sprite}_Current` does not exist (it was an undefined
+symbol at link time, see [Checked and refuted](#checked-and-refuted)); and a 256th animation on one sprite (indices are
+`u8` and 255 is `ANIM_DISABLED`: the 256th got index 255, which disables the sprite). The one exception is `get_composite_sprites`, a query, which keeps returning an `Option` (`None` for an unknown id). `TileId` and `VarId` are only used by queries that return an `Option`
+(`get_address`, `get_label`, `get_type`), so nothing generates code from an unknown one. No example changes. Tests:
+`test_an_unknown_sprite_id_panics` (15 methods), `test_an_unknown_composite_id_panics` (8),
+`test_an_unknown_animation_name_panics`, `test_an_unknown_animation_index_panics`, `test_at_most_255_animations_per_sprite`;
+all failed before (no panic).
 
 #### B21
 **`basic_usage` and the README Basic Example lack header padding.** `SECTION "Header", ROM0[$100]` with only
@@ -434,6 +543,15 @@ header. (`RustBoy` itself is correct: `src/gb_std/utility.rs:5-7`.)
 **`get_pivot` silently clamps.** `u8::try_from(16 + y_offset).unwrap_or(0)` (`src/rust_boy/sprites.rs:570, 576`;
 `src/gb_std/graphics/sprites.rs:208, 214`) turns out-of-range offsets into `sub 0`. *Fix:* wrapping arithmetic
 or an error.
+**Status: fixed** on `refactor-p1-api-safety`, with both: the two copies are now one, `gb_std::graphics::sprites::pivot`,
+which `Sprite::get_pivot` (`gb_std`) and `SpriteManager::get_pivot` (`rust_boy`) call. It computes `sub (16 + y_offset)`
+and `sub (8 + x_offset)` modulo 256, so `b` = screen x − `x_offset` and `c` = screen y − `y_offset` wrap around like the
+256-pixel background map (positive offsets go left / up, as before: `(0, 1)` is above, `(-1, 0)` is right; see
+[B30](#b30)). An offset out of -255..=255 panics (on a 256-pixel map 256 is 0, so it is a mistake). The examples' offsets
+(±1) give the same code. It takes the OAM addresses from the new `hw` module (`src/hw.rs`, pure data, the start of the
+Phase 2 one: `hw::oam_address`, `OAMA_Y`, `OAM_X_OFFSET`, …). Tests: `test_get_pivot_handles_every_offset` (in both layers,
+every offset from -255 to 255 on the test CPU; it failed before, from `get_pivot(-255, 0)`) and
+`test_get_pivot_rejects_an_offset_past_the_map`.
 
 #### B23
 **Duplicated routines have diverged.** (Lines at `4601a5c`.) `rust_boy`'s `GetTileByPixel` appends `ld a, [hl]`
@@ -442,7 +560,7 @@ label, two contracts. Memcopy, WaitVBlank, WaitNotVBlank and UpdateKeys are also
 (`src/rust_boy/functions.rs:152-266` vs `src/gb_std/graphics/utility.rs`, `src/gb_std/inputs.rs`), and
 `src/bin/unbricked.rs` has a third copy. *Fix:* one routine registry.
 **Status: fixed** on `refactor-p1-builtins`. There is one `GetTileByPixel`, in `gb_std`
-(`src/gb_std/graphics/utility.rs:129`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
+(`src/gb_std/graphics/utility.rs:134`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
 the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them);
 out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it changes `bc` and the flags and keeps
 `de` (documented on the function). `BuiltinFunction::generate` (`src/rust_boy/functions.rs:60`) returns the
@@ -450,11 +568,13 @@ out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it change
 identical), and `TileManager` copies with `gb_std`'s `cp_in_memory`; only `Delay` is `rust_boy`'s own. `gb_std`'s
 Memcopy passes its registers typed instead of as strings (same text). Every caller follows the contract:
 `unbricked_std` drops its four `ld a, [hl]` after `call GetTileByPixel` (its only change: −4 bytes, +1 in the
-routine; the same game in an emulator, 3000 frames compared, see the PR). **Pending, the maintainer's choice:**
-`src/bin/unbricked.rs` still has its own copies of the routines, and its `GetTileByPixel` (`:345`) keeps the old
-contract (`hl` only, no `a`; its callers load `[hl]` themselves). It is the tutorial written instruction by
-instruction with `gb_asm` alone (README), a program of its own and not a layer, and it never links with the
-library's routines; switching it to `gb_std`'s routine would make it a `gb_std` example. Tests run the routine on `gb_asm::test_cpu`
+routine; the same game in an emulator, 3000 frames compared, see the PR). **Decided by the maintainer (no longer pending):**
+`src/bin/unbricked.rs` keeps its own copies of the routines (GetTileByPixel, Memcopy, UpdateKeys), and its
+`GetTileByPixel` (`:345`) keeps the old contract (`hl` only, no `a`; its callers load `[hl]` themselves). It is the
+tutorial written instruction by instruction with `gb_asm` alone (README), a program of its own and not a layer, and
+it never links with the library's routines; switching it to `gb_std`'s routine would make it a `gb_std` example. It
+is the one stated exception to "every routine exists once" (CLAUDE.md, Architecture rules); its `Memcopy` is still
+the do-while loop, which its four callers use with non-empty data (its own tiles and tilemap). Tests run the routine on `gb_asm::test_cpu`
 for 81 pixel positions (`test_get_tile_by_pixel_returns_the_address_and_the_tile`), the `gb_std` callers'
 `get_pivot` → `GetTileByPixel` → tile test, and the `unbricked_rustboy` brick handler, which tests `a`
 (`IfConst`, `IfA`) and blanks the brick through `hl` (`TileRef`); `test_builtins_are_the_gb_std_routines`
@@ -472,7 +592,7 @@ the main loop, `raw()` code or the animation functions, then from those function
 order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
 nothing. To emit one that only code `build()` does not
 see calls (asm appended to its output, an `INCLUDE`d file), **`RustBoy::keep_function(name)`**
-(`src/rust_boy/rustboy.rs:242`; it takes a builtin name too, and panics on an unknown name, like `call`);
+(`src/rust_boy/rustboy.rs:324`; it takes a builtin name too, and panics on an unknown name, like `call`);
 `use_function(BuiltinFunction)` still forces a builtin. `used_user_functions` is gone. A function is found by
 its label, so `define_function(name, body)` panics if `body` does not define the label `name` (a body labelled
 otherwise used to be emitted anyway and could be called by its own label); another global label in a body (a
@@ -523,7 +643,7 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:512-550`): the global
+Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:621-655`): the global
 symbols of every other chunk and of the animation functions are looked up (`symbols`,
 `src/rust_boy/functions.rs:399`, reads the text of each instruction line by line as RGBDS does, with
 `gb_asm::labels::code_lines`: `;` and `/* … */` comments (also over several lines) and the contents of strings
@@ -538,11 +658,11 @@ the code `build()` generates is not taken for a builtin (for a user function it 
 before, each of these also emitted the builtin `Delay:`, which rgbasm rejected as defined twice. Names defined
 where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path depends on the assembler's
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
-**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:277`): a function of that name is never emitted,
+**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:359`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
 (`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
-and the Data chunk are emitted (`:552-566`), so `UpdateKeys` called without `add_inputs` links too. The scan is
+and the Data chunk are emitted (`:657-677`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
 global label of a body → its function, kept up to date as functions are defined) find a function, also for
 `call` and `keep_function`; each name is handled once (a 100-function, 5000-line program builds in about 6 ms in
@@ -568,17 +688,23 @@ Reachable through `cp_in_memory` (`src/gb_std/graphics/utility.rs:45`) or `gener
 (`src/rust_boy/tiles.rs:252`) with an empty tile set / empty `.2bpp`. *Fix:* skip empty blobs at generation
 time, or test `BC` before the first copy.
 **Status: fixed** on `refactor-p1-builtins` at generation time: `TileManager::generate_memcopy_calls`
-(`src/rust_boy/tiles.rs:284`) skips an empty blob of raw data (`from_raw` with no tiles, a tilemap with no rows).
+(`src/rust_boy/tiles.rs:407`) skips an empty blob of raw data (`from_raw` with no tiles, a tilemap with no rows).
 Its labels are still emitted, with nothing between them, so code that names them still links; with no copy left,
 `Memcopy` is not emitted at all (B26). A file blob (`INCBIN`) is always copied whole, as before: its size is only
 known once assembled, so `TileSource::from_file(path, 0)` now panics (a user error) instead of being taken for an
-empty blob, and so does adding a `TileSource::File(path, 0)` built directly (`add_sprite`, `add_background`). `Memcopy` itself is unchanged, so no ROM changes. Not covered: `gb_std`'s `cp_in_memory` only knows
-labels and cannot see an empty blob (its doc and `memcopy`'s now say the length must be at least 1), and an empty
-`.2bpp` file, or one shorter than the tile count given to `from_file`, is not checked ([B17](#b17)); testing `BC`
-in `Memcopy` would cover these, at 3 bytes and a few cycles per call. Tests: `test_empty_blobs_are_not_copied` runs
+empty blob, and so does adding a `TileSource::File(path, 0)` built directly (`add_sprite`, `add_background`). `Memcopy` itself is unchanged, so no ROM changes. Left open then (fixed since, below): `gb_std`'s `cp_in_memory` only knows labels and cannot see an empty blob, and an empty
+`.2bpp` file was not checked; testing `BC` in `Memcopy` covers these, at 3 bytes and a few cycles per call. Tests: `test_empty_blobs_are_not_copied` runs
 the start-up code with the real `Memcopy` on `gb_asm::test_cpu` (blob lengths from `TestCpu::consts16`): before, the
 first empty blob made it copy past its data; `test_a_tile_file_needs_tiles`,
 `test_a_tile_file_built_directly_needs_tiles`.
+**Then fixed in the routine too** on `refactor-p1-api-safety` (decided by the maintainer): `Memcopy`
+(`src/gb_std/graphics/utility.rs`, `memcopy`) starts with `ld a, b` / `or c` / `ret z`, so a length of 0 copies
+nothing, whoever calls it: `gb_std`'s `cp_in_memory` on an empty blob, an empty `.2bpp` file. The copy loop
+jumps back to a local `.copy` after the test. It costs 3 bytes once (in every example that copies tiles) and 4
+M-cycles per call. `RustBoy` still skips its empty raw blobs (no code for nothing). Still not checked: a `.2bpp` file
+shorter than the tile count given to `from_file` (its size is only known when assembled). Test
+`test_memcopy_with_length_0_copies_nothing` runs the routine on `gb_asm::test_cpu` with `bc` = 0 (before: it copied
+past the data) and with `bc` = 1 to 4.
 
 #### B28
 **OBP1 never initialised; OAM not cleared without sprites.** (Lines at `4601a5c`.) Only `rBGP` and `rOBP0` are written
@@ -595,7 +721,7 @@ before LCD on. Tests: `test_oam_is_cleared_without_sprites`, `test_oam_is_cleare
 #### B29
 **Documentation errors in code and README.**
 - `src/gb_std/inputs.rs:54` says `wCurKeys` "0 = pressed"; after the `xor` it is 1 = pressed.
-- `RustBoy::call` doc example `gb.add_to_main_loop(gb.call("X"))` (`src/rust_boy/rustboy.rs:202, 206` at `4601a5c`; the corrected example is at `:257, 262`) does
+- `RustBoy::call` doc example `gb.add_to_main_loop(gb.call("X"))` (`src/rust_boy/rustboy.rs:202, 206` at `4601a5c`; the corrected example is at `:448-454`) does
   not compile (E0499, two `&mut` borrows); hidden by ```` ```ignore ````.
 - README: "Type-safe … compile-time guarantees" (`:12`) is an overclaim; "Complete support for … instruction
   set" (`:19`) — `push/pop/halt/di/ei/reti/sbc/bit/set/res/rl/rr/sla/sra/cpl/nop/scf/ccf/rst` are missing;
@@ -641,7 +767,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | `Asm::ds` always emits a fill byte, so RAM can't be reserved | True, but a missing feature, not a bug (Phase 2: sections / `ds n` without fill). |
 | Everything in one `ROM0[$100]` section fails above 16 KB | Tile data is copied to VRAM anyway; ROM banking is a feature (Phase 3: MBC). |
 | `If` comparisons are unsigned while `i8` vars exist | Native `cp` semantics, documented in `flow_if.rs:8-15`; only a doc note ([B29](#b29)). |
-| `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20). |
+| `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20) (it panics since). |
 | 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
 | `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |
@@ -654,7 +780,7 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** no shadow OAM/DMA, no scrolling, no window layer, no palette API/fades, no
-  metasprites beyond 16×16, no text/numbers, no `$9C00` map.
+  metasprites beyond 16×16, no text/numbers (a `$9C00` map exists since [B19](#b19), without a window layer).
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** polling instead of VBlank interrupt + `halt`; no interrupts/timers, scenes, RNG, collision,
   16-bit math, loops/switch.

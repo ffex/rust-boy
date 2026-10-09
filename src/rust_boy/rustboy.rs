@@ -1,19 +1,48 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
+use crate::gb_asm::labels::code_lines;
 use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator, is_identifier};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
+use crate::hw;
 
 use super::functions::{BuiltinFunction, FunctionRegistry, defines};
 use super::inputs::InputManager;
-use super::sprites::{SpriteManager, SpriteSize, check_name};
-use super::tiles::TileManager;
+use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
+use super::tiles::{TileManager, TilemapArea};
 use super::variables::VariableManager;
 
 /// The palette `build()` writes to `rBGP`, `rOBP0` and `rOBP1` at start-up: colour i
 /// shows shade i (0 lightest, 3 darkest), so both object palettes look like the
 /// background one until the program changes them
 const DEFAULT_PALETTE: u8 = 0b11100100;
+
+/// The `WRAM0` section `build()` opens for the `raw()` code of `Chunk::Data` when no
+/// variable section comes before it and it opens none itself
+const RAW_DATA_SECTION: &str = "Raw Data";
+
+/// Whether `code` starts with a `SECTION` (before any other code; comments are skipped)
+fn opens_section(code: &[Instr]) -> bool {
+    for instr in code {
+        match instr {
+            Instr::Comment { .. } => continue,
+            Instr::Section { .. } => return true,
+            Instr::Raw { line } => {
+                let lines = code_lines(line);
+                match lines.iter().map(|l| l.trim()).find(|l| !l.is_empty()) {
+                    Some(first) => {
+                        // The keyword, not a label that starts with it (`SectionTable:`)
+                        let word = first.split_whitespace().next().unwrap_or("");
+                        return word.eq_ignore_ascii_case("SECTION");
+                    }
+                    None => continue, // a comment only
+                }
+            }
+            _ => return false,
+        }
+    }
+    false
+}
 
 /// High-level Game Boy development API
 ///
@@ -67,6 +96,9 @@ pub struct RustBoy {
 
     /// Animation delay value in frames (higher = slower animations)
     animation_delay: u8,
+
+    /// The tilemap the background shows (LCDC bit 3)
+    background_tilemap: TilemapArea,
 }
 
 impl RustBoy {
@@ -85,6 +117,7 @@ impl RustBoy {
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
             animation_delay: 8, // Default: update animation every 8 frames
+            background_tilemap: TilemapArea::default(),
         }
     }
 
@@ -112,6 +145,22 @@ impl RustBoy {
     /// The size of every sprite (see [`RustBoy::set_sprite_size`])
     pub fn sprite_size(&self) -> SpriteSize {
         self.sprites.size()
+    }
+
+    /// Set the tilemap the background shows: [`TilemapArea::Map9800`] (the default, as
+    /// on the hardware) or [`TilemapArea::Map9C00`]; `build()` writes it to LCDC
+    /// (`LCDCF_BG9C00`) when it turns the LCD on (B19)
+    ///
+    /// Put a tilemap there with `tiles.add_tilemap_at`. `GetTileByPixel` (and so
+    /// `get_pivot` + `GetTileByPixel` collisions) reads the `$9800` map only.
+    pub fn set_background_tilemap(&mut self, area: TilemapArea) -> &mut Self {
+        self.background_tilemap = area;
+        self
+    }
+
+    /// The tilemap the background shows (see [`RustBoy::set_background_tilemap`])
+    pub fn background_tilemap(&self) -> TilemapArea {
+        self.background_tilemap
     }
 
     /// Define a constant value
@@ -184,21 +233,54 @@ impl RustBoy {
 
     /// Escape hatch: execute raw assembly operations
     ///
-    /// This allows advanced users to mix high-level and low-level code.
+    /// This allows advanced users to mix high-level and low-level code. The closure
+    /// writes to `Chunk::Main` unless it switches with `asm.chunk(..)`; every call starts
+    /// in `Chunk::Main` again. `build()` keeps every chunk (B15), each one after the code
+    /// it generates for that chunk:
+    /// - `Main` (the default): after the main loop's `jp Main`, so it runs only if it is
+    ///   called or jumped to: start it with a label.
+    /// - `Init`: at start-up, after the [`RustBoy::init`] code, before the LCD is turned on.
+    /// - `MainLoop`: in the main loop, every frame, after the [`RustBoy::add_to_main_loop`]
+    ///   code, before `jp Main`.
+    /// - `Functions`: after the generated functions (label your routines; a routine that
+    ///   calls a builtin gets it emitted, like any code).
+    /// - `Header`, `Constants`, `Tiles`, `Tilemap`: after the generated ones (`Header` is
+    ///   inside the header section, after its padding).
+    /// - `Data`: after the variable sections, so inside the last of them (a `WRAM0`
+    ///   section) unless the raw code opens its own `SECTION`. In a program without
+    ///   variables, raw `Data` code that does not start with a `SECTION` gets a `WRAM0`
+    ///   section of its own, `SECTION "Raw Data", WRAM0` (it would land in ROM).
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// use rust_boy::gb_asm::Chunk;
+    /// use rust_boy::gb_std::flow::Call;
+    /// use rust_boy::rust_boy::RustBoy;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// gb.add_to_main_loop(Call::new("LoadAnswer"));
     /// gb.raw(|asm| {
-    ///     asm.ld_a(0x42);
-    ///     asm.ret();
+    ///     // A routine: labelled, and called from the main loop
+    ///     asm.label("LoadAnswer").ld_a(0x42).ret();
+    ///     // Code that runs every frame, after the main loop code
+    ///     asm.chunk(Chunk::MainLoop).ld_addr_def_a("rSCX");
     /// });
+    /// let out = gb.build();
+    /// assert!(out.contains("LoadAnswer:") && out.contains("ld [rSCX], a"));
     /// ```
     pub fn raw<F>(&mut self, f: F) -> &mut Self
     where
         F: FnOnce(&mut Asm),
     {
+        self.asm.chunk(Chunk::Main);
         f(&mut self.asm);
+        self.asm.chunk(Chunk::Main);
         self
+    }
+
+    /// What the `raw()` code wrote to `chunk`
+    fn raw_chunk(&self, chunk: Chunk) -> Vec<Instr> {
+        self.asm.get_chunk(chunk).cloned().unwrap_or_default()
     }
 
     /// Emit a builtin function even if no code calls it
@@ -424,12 +506,15 @@ impl RustBoy {
         asm.chunk(Chunk::Header);
         asm.include_hardware();
         asm.emit_all(crate::gb_std::utility::header_section());
+        // Each chunk the `raw()` code wrote goes after the code generated for it (B15)
+        asm.emit_all(self.raw_chunk(Chunk::Header));
 
         // === CONSTANTS CHUNK ===
         asm.chunk(Chunk::Constants);
         for (name, value) in &self.constants {
             asm.def(name, value);
         }
+        asm.emit_all(self.raw_chunk(Chunk::Constants));
 
         // === INIT CHUNK ===
         // In two parts, before and after the variable initialisation, which is emitted
@@ -466,12 +551,19 @@ impl RustBoy {
         // still off, so it can write VRAM.
         let mut finish = Asm::new();
         finish.emit_all(self.init_code.clone());
+        finish.emit_all(self.raw_chunk(Chunk::Init));
 
-        // Turn on screen, with the sprite size chosen by set_sprite_size
-        finish.ld_a_label(&format!(
+        // Turn on screen, with the sprite size chosen by set_sprite_size, and the
+        // background map chosen by set_background_tilemap (`LCDCF_BG9800` is 0, so it is
+        // left out, as before B19)
+        let mut lcdc = format!(
             "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
             self.sprites.size().lcdc_flag()
-        ));
+        );
+        if self.background_tilemap != TilemapArea::Map9800 {
+            lcdc = format!("{} | {}", lcdc, self.background_tilemap.lcdc_bg_flag());
+        }
+        finish.ld_a_label(&lcdc);
         finish.ld_addr_def_a("rLCDC");
         let startup = startup.get_main_instrs();
         let finish = finish.get_main_instrs();
@@ -488,8 +580,9 @@ impl RustBoy {
             asm.emit_all(self.sprites.generate_animation_calls(self.animation_delay));
         }
 
-        // Emit main loop code
+        // Emit main loop code, then the raw main loop code
         asm.emit_all(self.main_loop_code.clone());
+        asm.emit_all(self.raw_chunk(Chunk::MainLoop));
 
         // Jump back to main loop
         asm.jp("Main");
@@ -497,17 +590,23 @@ impl RustBoy {
         // === TILES CHUNK ===
         asm.chunk(Chunk::Tiles);
         asm.emit_all(self.tiles.generate_tile_data());
+        asm.emit_all(self.raw_chunk(Chunk::Tiles));
 
         // === TILEMAP CHUNK ===
         asm.chunk(Chunk::Tilemap);
         asm.emit_all(self.tiles.generate_tilemap_data());
+        asm.emit_all(self.raw_chunk(Chunk::Tilemap));
 
         // Include any raw assembly that was added (legacy Main chunk)
-        let existing = self.asm.get_chunk(Chunk::Main).cloned().unwrap_or_default();
+        let existing = self.raw_chunk(Chunk::Main);
         if !existing.is_empty() {
             asm.chunk(Chunk::Main);
             asm.emit_all(existing);
         }
+        // The raw functions and data are emitted at the end of their chunks, but their
+        // code is part of the program now
+        let raw_functions = self.raw_chunk(Chunk::Functions);
+        let raw_data = self.raw_chunk(Chunk::Data);
 
         // Add animation variables if animations are used
         if self.sprites.has_animations() {
@@ -537,7 +636,12 @@ impl RustBoy {
         .filter_map(|chunk| asm.get_chunk(*chunk))
         .map(Vec::as_slice)
         .collect();
-        code.extend([startup.as_slice(), finish.as_slice()]);
+        code.extend([
+            startup.as_slice(),
+            finish.as_slice(),
+            raw_functions.as_slice(),
+            raw_data.as_slice(),
+        ]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
         let functions = self.functions.generate_used(&code, self.vars.names());
         asm.chunk(Chunk::Functions);
@@ -548,6 +652,7 @@ impl RustBoy {
             self.functions.register_generated(&name);
             asm.emit_all(body);
         }
+        asm.emit_all(raw_functions);
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
         // The variables of the emitted builtins (`wCurKeys`, `wNewKeys` for UpdateKeys),
@@ -564,6 +669,12 @@ impl RustBoy {
 
         asm.chunk(Chunk::Data);
         asm.emit_all(self.vars.generate_sections());
+        if !raw_data.is_empty() && self.vars.is_empty() && !opens_section(&raw_data) {
+            // No variable section before it: the raw data would land in the ROM0 section
+            // of the code, so it gets a WRAM0 section of its own
+            asm.section(RAW_DATA_SECTION, "WRAM0");
+        }
+        asm.emit_all(raw_data);
 
         asm
     }
@@ -627,10 +738,19 @@ impl RustBoy {
     /// Add a sprite with its tile in one call
     /// Returns the sprite ID for later reference
     ///
+    /// The tiles go to VRAM after the sprite tiles already added (also those added with
+    /// `tiles.add_sprite` alone), and the sprite's tile index is where they went: the
+    /// tile manager is the one source of both (B18). This is the only way to add a
+    /// sprite: `SpriteManager::add` is no longer public.
+    ///
     /// # Panics
     /// - If `name` is not a valid RGBDS identifier, or another sprite has it: the name
     ///   becomes part of labels.
-    /// - In 8x16 mode, if `tile_source` has an odd number of tiles.
+    /// - In 8x16 mode, if `tile_source` has an odd number of tiles, or the sprite would
+    ///   start on an odd tile (after an odd number of tiles added with `tiles.add_sprite`).
+    /// - If the tiles do not fit in the 256 sprite tiles ($8000-$8FFF), OAM already holds
+    ///   40 sprites, or `x` is above 247 or `y` above 239 (OAM X = x + 8 and OAM Y =
+    ///   y + 16 are bytes).
     pub fn add_sprite(
         &mut self,
         name: &str,
@@ -639,19 +759,66 @@ impl RustBoy {
         y: u8,
         flags: u8,
     ) -> super::sprites::SpriteId {
-        // Get tile count before moving tile_source
-        let tile_count = tile_source.tile_count() as u8;
+        let count = tile_source.tile_count();
+        let id = self.tiles.add_sprite(name, tile_source);
+        let tiles = SpriteTiles {
+            id,
+            first: self.tiles.sprite_tile_index(id),
+            count: u16::try_from(count).unwrap_or(u16::MAX),
+        };
+        self.sprites.add(name, tiles, x, y, flags)
+    }
 
-        // Add the tile to the tile manager
-        let tile_id = self.tiles.add_sprite(name, tile_source);
-
-        // Add the sprite to the sprite manager with tile count for proper index allocation
-        let sprite_id = self.sprites.add(name, x, y, flags, tile_count);
-
-        // Link the tile ID to the sprite
-        self.sprites.set_tile_id(sprite_id, tile_id);
-
-        sprite_id
+    /// Give sprite `sprite` more tiles, from another source: frames spread over several
+    /// `.2bpp` files, for example
+    ///
+    /// The tiles go to VRAM right after the sprite's own tiles (their label is `name`,
+    /// copied at start-up like any tiles), and they count as the sprite's: its
+    /// animations can use them as the next frames (an animation steps through
+    /// contiguous tiles). Call it before adding the animations that use them.
+    ///
+    /// Composite (16x16) sprites are not supported: the right half's tiles always follow
+    /// the left half's, so neither half can be extended.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::rust_boy::{AnimationType, RustBoy, TileSource};
+    ///
+    /// let mut gb = RustBoy::new();
+    /// let player = gb.add_sprite("Player", TileSource::from_file("idle.2bpp", 1), 80, 72, 0);
+    /// gb.add_sprite_tiles(player, "PlayerWalk", TileSource::from_file("walk.2bpp", 3));
+    /// // Frames 0 to 3: the idle tile, then the three walk tiles
+    /// gb.sprites.add_animation(player, "Walk", 0, 3, AnimationType::Loop);
+    /// ```
+    ///
+    /// # Panics
+    /// - If there is no sprite `sprite`.
+    /// - If other sprite tiles were added after the sprite's (another sprite, or
+    ///   `tiles.add_sprite`): the new tiles would not follow the sprite's, so its frames
+    ///   would not be contiguous. Add the tiles right after the sprite.
+    /// - If the tiles do not fit in the 256 sprite tiles, or in 8x16 mode if their count
+    ///   is odd.
+    pub fn add_sprite_tiles(
+        &mut self,
+        sprite: super::sprites::SpriteId,
+        name: &str,
+        source: super::tiles::TileSource,
+    ) -> super::tiles::TileId {
+        let (after, sprite_name) = self.sprites.tile_after(sprite);
+        let next = self.tiles.next_sprite_tile();
+        if next != after {
+            panic!(
+                "add_sprite_tiles(\"{}\"): the tiles of sprite \"{}\" end before tile {}, but \
+                 other sprite tiles were added after them (the next free tile is {}), so the new \
+                 tiles would not follow the sprite's; add them right after the sprite",
+                name, sprite_name, after, next
+            );
+        }
+        let count = source.tile_count();
+        let id = self.tiles.add_sprite(name, source);
+        self.sprites
+            .extend_tiles(sprite, u16::try_from(count).unwrap_or(u16::MAX));
+        id
     }
 
     /// Add a 16x16 composite sprite made of two 8x16 sprites side by side
@@ -675,6 +842,8 @@ impl RustBoy {
     ///   half (`{name}_left`, `{name}_right`): the names become labels.
     /// - In 8x8 mode (call `set_sprite_size(SpriteSize::Size8x16)` first), or if a half has
     ///   an odd number of tiles.
+    /// - If `x` is above 239 (the right half's OAM X, x + 16, is a byte), and in the cases
+    ///   of [`RustBoy::add_sprite`] for each half.
     pub fn add_sprite_16x16(
         &mut self,
         name: &str,
@@ -693,14 +862,27 @@ impl RustBoy {
             );
         }
 
+        // The right half is 8 pixels to the right, and its OAM X, x + 16, is a byte (B17)
+        let right_x = x
+            .checked_add(8)
+            .filter(|right_x| right_x.checked_add(hw::OAM_X_OFFSET).is_some())
+            .unwrap_or_else(|| {
+                panic!(
+                    "add_sprite_16x16(\"{}\"): x = {} is too large: the right half is at x + 8, \
+                     and its OAM X, x + 16, must fit in a byte, so x is at most {}",
+                    name,
+                    x,
+                    u8::MAX - 8 - hw::OAM_X_OFFSET
+                )
+            });
+
         // Create the left sprite
         let left_name = format!("{}_left", name);
         let left_sprite = self.add_sprite(&left_name, left_tiles, x, y, flags);
 
-        // Create the right sprite (8 pixels to the right)
+        // Create the right sprite
         let right_name = format!("{}_right", name);
-        let right_sprite = self.add_sprite(&right_name, right_tiles, x + 8, y, flags);
-
+        let right_sprite = self.add_sprite(&right_name, right_tiles, right_x, y, flags);
         // Group them as a composite sprite
         self.sprites
             .create_composite(name, vec![left_sprite, right_sprite])
@@ -1005,6 +1187,274 @@ mod tests {
     }
 
     #[test]
+    fn test_sprite_tiles_have_one_source() {
+        // B18: the sprite manager counted tile indices on its own and the tile manager
+        // VRAM addresses on its own: tiles added with `gb.tiles.add_sprite` moved the
+        // VRAM copy of the next sprite but not its OAM tile index, so it showed other tiles
+        let mut gb = RustBoy::new();
+        let paddle = gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
+        gb.tiles.add_sprite("Extra", tiles(3)); // tiles 1 to 3, for no sprite
+        let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
+        assert_eq!(tile_of(&gb, paddle), (0, 0x8000));
+        assert_eq!(tile_of(&gb, ball), (4, 0x8040));
+
+        // The start-up code writes that tile index to Ball's OAM entry (entry 1)
+        let cpu = run_startup(&mut gb);
+        assert_mem(&cpu, &oam(4 + 2), 4);
+        assert_links(&gb.build());
+    }
+
+    // ==================== Memory limits (B17) ====================
+
+    use crate::rust_boy::panic_message;
+
+    #[test]
+    fn test_sprite_tiles_must_fit_in_their_vram_block() {
+        // B17: sprite tiles past $8FFF ran into the background tiles; the tile count was
+        // cut to a u8 (257 tiles counted as 1) and the u8 tile index wrapped at 256
+        let mut gb = RustBoy::new();
+        let a = gb.add_sprite("A", tiles(128), 0, 0, 0);
+        let b = gb.add_sprite("B", tiles(128), 0, 0, 0);
+        assert_eq!(tile_of(&gb, a), (0, 0x8000));
+        assert_eq!(tile_of(&gb, b), (128, 0x8800));
+        let message = panic_message(|| gb.add_sprite("C", tiles(1), 0, 0, 0));
+        assert!(
+            message.contains("no room for sprite tiles \"C\" (1 tiles)")
+                && message.contains("0 bytes left"),
+            "{}",
+            message
+        );
+
+        let mut gb = RustBoy::new();
+        let message = panic_message(|| gb.add_sprite("Big", tiles(257), 0, 0, 0));
+        assert!(
+            message.contains("sprite tiles \"Big\" (257 tiles)"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_a_sprite_with_tiles_from_two_sources() {
+        // Frames spread over two blobs (e.g. two .2bpp files): without add_sprite_tiles
+        // the frames past the first blob are not the sprite's, and the animation panics
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Other", tiles(2), 0, 0, 0);
+        let player = gb.add_sprite("Player", tiles(1), 80, 72, 0);
+        let message = panic_message(|| {
+            let mut gb = RustBoy::new();
+            let player = gb.add_sprite("Player", tiles(1), 80, 72, 0);
+            gb.tiles.add_sprite("PlayerMore", tiles(3));
+            gb.sprites
+                .add_animation(player, "Walk", 0, 3, AnimationType::Loop);
+        });
+        assert!(
+            message.contains("use RustBoy::add_sprite_tiles"),
+            "{}",
+            message
+        );
+
+        let more = gb.add_sprite_tiles(player, "PlayerMore", tiles(3));
+        assert_eq!(tile_of(&gb, player), (2, 0x8020));
+        assert_eq!(
+            gb.tiles.get_address(more),
+            Some(0x8030),
+            "right after the sprite's"
+        );
+        let walk = gb
+            .sprites
+            .add_animation(player, "Walk", 0, 3, AnimationType::Loop);
+        gb.sprites.set_initial_animation(player, walk);
+        let out = gb.build();
+        assert_links(&out);
+        assert!(out.contains("PlayerMore:"), "the tiles are copied: {}", out);
+
+        // The animation plays the four frames: tiles 2 (its own), then 3, 4, 5 (the others)
+        let mut code = gb.sprites.generate_animation_calls(1);
+        code.push(Instr::Ret);
+        for (_, body) in gb.sprites.generate_animation_functions() {
+            code.extend(body);
+        }
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert(oam(4 + 2), 2);
+        cpu.mem.insert("wFrameCounter".to_string(), 0);
+        for (name, value) in gb.sprites.get_animation_variables() {
+            cpu.mem.insert(name, value);
+        }
+        let frames: Vec<u8> = (0..6)
+            .map(|_| {
+                cpu.run(&code);
+                cpu.mem[&oam(4 + 2)]
+            })
+            .collect();
+        assert_eq!(frames, [3, 4, 5, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_add_sprite_tiles_must_follow_the_sprite() {
+        let mut gb = RustBoy::new();
+        let player = gb.add_sprite("Player", tiles(1), 80, 72, 0);
+        gb.add_sprite("Ball", tiles(1), 0, 0, 0);
+        let message = panic_message(|| gb.add_sprite_tiles(player, "PlayerMore", tiles(3)));
+        assert!(
+            message.contains("tiles of sprite \"Player\" end before tile 1")
+                && message.contains("would not follow"),
+            "{}",
+            message
+        );
+        // In 8x16 mode a frame is two tiles
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let player = gb.add_sprite("Player", tiles(2), 80, 72, 0);
+        let message = panic_message(|| gb.add_sprite_tiles(player, "PlayerMore", tiles(3)));
+        assert!(
+            message.contains("the tile count must be even"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_background_tiles_must_fit_before_the_tilemap() {
+        // B17: background tiles past $97FF overwrote the tilemap at $9800
+        let mut gb = RustBoy::new();
+        gb.tiles.add_background("Tiles", tiles(100));
+        let more = gb.tiles.add_background("More", tiles(28));
+        assert_eq!(gb.tiles.get_address(more), Some(0x9640));
+        let message = panic_message(|| gb.tiles.add_background("Extra", tiles(1)));
+        assert!(
+            message.contains("no room for background tiles \"Extra\" (1 tiles)"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_at_most_40_sprites() {
+        // B17: a 41st sprite was written past the OAM ($FEA0 on)
+        let mut gb = RustBoy::new();
+        for i in 0..40 {
+            gb.add_sprite(&format!("S{}", i), tiles(1), 0, 0, 0);
+        }
+        let message = panic_message(|| gb.add_sprite("S40", tiles(1), 0, 0, 0));
+        assert!(
+            message.contains("sprite \"S40\" does not fit in OAM, which holds 40 sprites"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_sprite_position_must_fit_in_oam() {
+        // B17: y + 16 and x + 8 overflowed a u8 when the start-up code was generated
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Low", tiles(1), 247, 239, 0);
+        let message = panic_message(|| gb.add_sprite("Lower", tiles(1), 0, 240, 0));
+        assert!(
+            message.contains("y = 240") && message.contains("at most 239"),
+            "{}",
+            message
+        );
+        let message = panic_message(|| gb.add_sprite("Right", tiles(1), 248, 0, 0));
+        assert!(
+            message.contains("x = 248") && message.contains("at most 247"),
+            "{}",
+            message
+        );
+        // The right half of a 16x16 sprite is 8 pixels further
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let message =
+            panic_message(|| gb.add_sprite_16x16("Player", tiles(2), tiles(2), 245, 0, 0));
+        assert!(
+            message.contains("add_sprite_16x16(\"Player\")") && message.contains("at most 239"),
+            "{}",
+            message
+        );
+    }
+
+    // ==================== Tilemaps (B19) ====================
+
+    #[test]
+    fn test_a_second_tilemap_on_one_map_panics() {
+        // B19: every tilemap went to $9800, so the second one silently replaced the first
+        let mut gb = RustBoy::new();
+        gb.tiles.add_tilemap("Level", &[[1u8; 32]; 18]);
+        let message = panic_message(|| gb.tiles.add_tilemap("Window", &[[2u8; 32]; 18]));
+        assert!(
+            message.contains("tilemap \"Window\"")
+                && message.contains("$9800")
+                && message.contains("\"Level\""),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "tilemap \"Tall\" has 33 rows, but a map has 32")]
+    fn test_a_tilemap_has_at_most_32_rows() {
+        // B19: a 33rd row ran into the next map ($9C00), or out of VRAM from $9C00
+        RustBoy::new().tiles.add_tilemap("Tall", &[[0u8; 32]; 33]);
+    }
+
+    #[test]
+    fn test_a_tilemap_at_9c00() {
+        let mut gb = RustBoy::new();
+        gb.tiles
+            .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
+        let level = gb.tiles.add_tilemap("Level", &[[1u8; 32]; 2]);
+        let hud = gb
+            .tiles
+            .add_tilemap_at("Hud", TilemapArea::Map9C00, &[[2u8; 32]; 2]);
+        assert_eq!(gb.tiles.get_address(level), Some(0x9800));
+        assert_eq!(gb.tiles.get_address(hud), Some(0x9C00));
+        // By default the background shows $9800: LCDC as before
+        let out = gb.build();
+        assert_links(&out);
+        assert_eq!(
+            lcdc_on(&out),
+            "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8"
+        );
+
+        // Memcopy runs for real: each map lands at its own address
+        let (code, mut cpu) = startup(&mut gb);
+        for (blob, size) in [("BgTiles", 16), ("Level", 64), ("Hud", 64)] {
+            cpu.consts16.insert(format!("{0}End - {0}", blob), size);
+        }
+        for i in 0..64 {
+            cpu.mem.insert(format!("BgTiles+{}", i % 16), 0);
+            cpu.mem.insert(format!("Level+{}", i), 1);
+            cpu.mem.insert(format!("Hud+{}", i), 2);
+        }
+        cpu.run(&code);
+        for i in 0..64 {
+            assert_eq!(cpu.mem[&format!("${:04X}", 0x9800 + i)], 1);
+            assert_eq!(cpu.mem[&format!("${:04X}", 0x9C00 + i)], 2);
+        }
+
+        // The background can show the $9C00 map instead
+        gb.set_background_tilemap(TilemapArea::Map9C00);
+        assert_eq!(gb.background_tilemap(), TilemapArea::Map9C00);
+        let out = gb.build();
+        assert_links(&out);
+        assert_eq!(
+            lcdc_on(&out),
+            "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8 | LCDCF_BG9C00"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "\"Player\" would start on tile 1, an odd one")]
+    fn test_8x16_sprite_after_an_odd_number_of_tiles_panics() {
+        // In 8x16 mode the hardware ignores bit 0 of the tile index: tiles added with
+        // `gb.tiles.add_sprite` must keep the next sprite on an even tile
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        gb.tiles.add_sprite("Extra", tiles(1));
+        gb.add_sprite("Player", tiles(2), 80, 72, 0);
+    }
+
+    #[test]
     fn test_8x16_animation_frame_is_two_tiles() {
         let mut gb = RustBoy::new();
         gb.set_sprite_size(SpriteSize::Size8x16);
@@ -1018,8 +1468,9 @@ mod tests {
         let walk = function(&out, "Anim_Walker_Walk");
         assert!(walk.contains("add a, 2"), "{}", walk);
         assert!(walk.contains("cp 4"), "{}", walk);
-        assert!(walk.contains("cp 10"), "{}", walk);
-        assert!(walk.contains("ld a, 4"), "{}", walk);
+        assert!(walk.contains("cp 8"), "{}", walk);
+        // The reset loads the tile before the first frame, then steps onto it
+        assert!(walk.contains("ld a, 2"), "{}", walk);
     }
 
     #[test]
@@ -1032,7 +1483,9 @@ mod tests {
         let out = gb.build();
         let spin = function(&out, "Anim_Coin_Spin");
         assert!(spin.contains("inc a"), "{}", spin);
-        assert!(spin.contains("cp 7"), "{}", spin);
+        assert!(spin.contains("cp 6"), "{}", spin);
+        // Frame 0 is tile 0: the reset loads 255, and `inc a` wraps it to 0
+        assert!(spin.contains("ld a, 255"), "{}", spin);
     }
 
     #[test]
@@ -1444,6 +1897,172 @@ mod tests {
                 "LCD on",
             ]
         );
+    }
+
+    // ==================== raw() (B15) ====================
+
+    /// The text of chunk `chunk` of `gb`'s program
+    fn chunk_text(gb: &mut RustBoy, chunk: Chunk) -> String {
+        gb.build_asm()
+            .get_chunk(chunk)
+            .map(|code| code.iter().map(|instr| format!("{}\n", instr)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_raw_keeps_every_chunk() {
+        // B15: build() copied only the Main chunk of raw(): code written after
+        // `asm.chunk(..)` in the closure, and in every later raw() call, was dropped
+        let mut gb = RustBoy::new();
+        gb.add_to_main_loop(Call::new("RawFunc"));
+        gb.raw(|asm| {
+            asm.label("RawMain").ret();
+            asm.chunk(Chunk::Constants).def("RAW_CONST", 5);
+            asm.chunk(Chunk::Functions)
+                .label("RawFunc")
+                .ld_a_label("RAW_CONST")
+                .call("UpdateKeys")
+                .ret();
+            asm.chunk(Chunk::Data).section("RawData", "WRAM0");
+            asm.raw("wRawData: db");
+            asm.chunk(Chunk::Tiles).label("RawTiles");
+            asm.chunk(Chunk::Tilemap).label("RawMap");
+        });
+        // A later call starts in the Main chunk again
+        gb.raw(|asm| {
+            asm.label("Second").ret();
+        });
+
+        for (chunk, label) in [
+            (Chunk::Main, "RawMain:"),
+            (Chunk::Main, "Second:"),
+            (Chunk::Constants, "DEF RAW_CONST EQU 5"),
+            (Chunk::Functions, "RawFunc:"),
+            (Chunk::Data, "wRawData: db"),
+            (Chunk::Tiles, "RawTiles:"),
+            (Chunk::Tilemap, "RawMap:"),
+        ] {
+            let text = chunk_text(&mut gb, chunk);
+            assert!(
+                text.contains(label),
+                "{} not in {:?}:\n{}",
+                label,
+                chunk,
+                text
+            );
+        }
+        // UpdateKeys, which only the raw function calls, is emitted, with its variables
+        let out = gb.build();
+        assert!(
+            out.contains("UpdateKeys:") && out.contains("wCurKeys: db"),
+            "{}",
+            out
+        );
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_raw_data_always_lands_in_wram() {
+        // Raw Data code without a SECTION, in a program without variables, used to land
+        // in the ROM0 section of the code (`wLonely: db` at $018F)
+        let data_text = |gb: &mut RustBoy| chunk_text(gb, Chunk::Data);
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).comment("my data");
+            asm.raw("wLonely: db");
+        });
+        let data = data_text(&mut gb);
+        assert!(
+            data.starts_with("SECTION \"Raw Data\", WRAM0\n"),
+            "a WRAM0 section first:\n{}",
+            data
+        );
+        assert_links(&gb.build());
+
+        // Raw data that opens its own section (typed or in a raw line) gets none
+        for open in [
+            |asm: &mut Asm| {
+                asm.section("Mine", "WRAM0");
+            },
+            |asm: &mut Asm| {
+                asm.raw("  ; mine\n  section \"Mine\", HRAM");
+            },
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(|asm| {
+                asm.chunk(Chunk::Data);
+                open(asm);
+                asm.raw("hByte: db");
+            });
+            let data = data_text(&mut gb);
+            assert!(!data.contains("Raw Data"), "{}", data);
+            assert_links(&gb.build());
+        }
+
+        // A label that starts with "Section" is not the keyword: the default section is
+        // still added
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).raw("SectionTable: db");
+        });
+        let data = data_text(&mut gb);
+        assert!(
+            data.starts_with("SECTION \"Raw Data\", WRAM0\n"),
+            "a WRAM0 section first:\n{}",
+            data
+        );
+        assert_links(&gb.build());
+
+        // After the variables, the raw data goes in their last section, as documented
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wScore", 0);
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).raw("wMore: db");
+        });
+        let data = data_text(&mut gb);
+        assert!(!data.contains("Raw Data"), "{}", data);
+        assert!(data.contains("wScore: db\nwMore: db"), "{}", data);
+        assert_links(&gb.build());
+    }
+
+    #[test]
+    fn test_raw_init_and_main_loop_code_runs() {
+        // B15: raw code was unreachable unless labelled and called; code written to the
+        // Init and MainLoop chunks now runs, like `init()` and `add_to_main_loop` code
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wRawInit", 0);
+        gb.vars.create_u8("wRawLoop", 0);
+        let user_init = gb.vars.create_u8("wUserInit", 0);
+        let user_loop = gb.vars.create_u8("wUserLoop", 0);
+        gb.init(user_init.set(1));
+        gb.add_to_main_loop(user_loop.set(2));
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Init).ld_a(7).ld_addr_def_a("wRawInit");
+            asm.chunk(Chunk::MainLoop).ld_a(9).ld_addr_def_a("wRawLoop");
+        });
+
+        // At start-up: after the variables and the init() code, before the LCD is on
+        let cpu = run_startup(&mut gb);
+        let at = |name: &str, value: u8| {
+            let event = Event::Write(name.to_string(), value);
+            cpu.trace
+                .iter()
+                .rposition(|e| *e == event)
+                .unwrap_or_else(|| panic!("{:?} not in {:?}", event, cpu.trace))
+        };
+        // The variables are set to 0 first, then the init() code, then the raw code
+        assert!(at("wRawInit", 0) < at("wUserInit", 1), "{:?}", cpu.trace);
+        assert!(at("wUserInit", 1) < at("wRawInit", 7), "{:?}", cpu.trace);
+        assert!(at("wRawInit", 7) < at("rLCDC", 0x83), "{:?}", cpu.trace);
+        assert_mem(&cpu, "wRawInit", 7);
+
+        // In the main loop: after the add_to_main_loop code, before `jp Main`
+        let main_loop = chunk_text(&mut gb, Chunk::MainLoop);
+        let user = main_loop.find("ld [wUserLoop], a").expect("user code");
+        let raw = main_loop.find("ld [wRawLoop], a").expect("raw code");
+        let jp = main_loop.find("jp Main").expect("jp Main");
+        assert!(user < raw && raw < jp, "{}", main_loop);
+        assert_links(&gb.build());
     }
 
     #[test]
@@ -2177,8 +2796,9 @@ mod tests {
 
     #[test]
     fn test_empty_blobs_are_not_copied() {
-        // B27: Memcopy copies at least one byte, so an empty blob made it copy 64 KiB
-        // over WRAM, the stack and the I/O registers
+        // B27: Memcopy used to copy at least one byte, so an empty blob made it copy
+        // 64 KiB over WRAM, the stack and the I/O registers; an empty blob gets no copy
+        // code at all (and Memcopy now copies nothing for a length of 0)
         let mut gb = RustBoy::new();
         gb.tiles
             .add_background("NoTiles", TileSource::from_raw(&[]));

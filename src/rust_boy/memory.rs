@@ -1,5 +1,7 @@
 //! Memory allocation for Game Boy memory regions
 
+use crate::hw;
+
 /// Memory regions on the Game Boy
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryRegion {
@@ -9,39 +11,55 @@ pub enum MemoryRegion {
     Wram,
     /// OAM for sprites ($FE00-$FE9F)
     Oam,
+    /// The sprite tiles in VRAM ($8000-$8FFF, tile indices 0 to 255)
+    SpriteTiles,
+    /// The background tiles in VRAM as `RustBoy` uses them ($9000-$97FF, indices 0 to
+    /// 127), before the tilemaps
+    BackgroundTiles,
+    /// WRAM bank 0 ($C000-$CFFF): a `WRAM0` section must fit in it
+    Wram0,
 }
 
 impl MemoryRegion {
     /// Get the start address of this memory region
     pub fn start_address(&self) -> u16 {
         match self {
-            MemoryRegion::Vram => 0x8000,
-            MemoryRegion::Wram => 0xC000,
-            MemoryRegion::Oam => 0xFE00,
+            MemoryRegion::Vram | MemoryRegion::SpriteTiles => hw::VRAM_OBJ_TILES,
+            MemoryRegion::BackgroundTiles => hw::VRAM_BG_TILES,
+            MemoryRegion::Wram | MemoryRegion::Wram0 => hw::WRAM0,
+            MemoryRegion::Oam => hw::OAM_START,
         }
     }
 
     /// Get the end address of this memory region (exclusive)
     pub fn end_address(&self) -> u16 {
         match self {
-            MemoryRegion::Vram => 0x9800, // Tile data ends here, tilemap starts
-            MemoryRegion::Wram => 0xE000,
-            MemoryRegion::Oam => 0xFEA0,
+            // Tile data ends here, tilemap starts
+            MemoryRegion::Vram | MemoryRegion::BackgroundTiles => hw::VRAM_BG_TILES_END,
+            MemoryRegion::SpriteTiles => hw::VRAM_OBJ_TILES_END,
+            MemoryRegion::Wram => hw::WRAM_END,
+            MemoryRegion::Wram0 => hw::WRAM0_END,
+            MemoryRegion::Oam => hw::OAM_END,
         }
+    }
+
+    /// The size of the region in bytes
+    pub fn size(&self) -> u16 {
+        self.end_address() - self.start_address()
     }
 }
 
 /// Allocator for tracking memory usage in a region
 ///
-/// Not used yet: the tile/variable managers will allocate through it (Task.md Phase 2).
-#[allow(dead_code)]
+/// The tile manager allocates the sprite and background tiles with it, the variable
+/// manager the WRAM0 variables, the sprite manager the OAM entries (B17). HRAM is a
+/// Phase 2 item.
 #[derive(Debug)]
 pub struct MemoryAllocator {
     region: MemoryRegion,
     next_address: u16,
 }
 
-#[allow(dead_code)]
 impl MemoryAllocator {
     /// Create a new allocator for the given region
     pub fn new(region: MemoryRegion) -> Self {
@@ -65,12 +83,38 @@ impl MemoryAllocator {
         Some(addr)
     }
 
+    /// Allocate `size` bytes for `what` (e.g. `sprite tiles "Coin" (4 tiles)`) and
+    /// return the start address
+    ///
+    /// # Panics
+    /// If they do not fit in the region: the message names `what`, the region and how
+    /// many bytes are left.
+    pub(crate) fn allocate_or_panic(&mut self, size: usize, what: &str) -> u16 {
+        u16::try_from(size)
+            .ok()
+            .and_then(|size| self.allocate(size))
+            .unwrap_or_else(|| {
+                panic!(
+                    "no room for {}: {} bytes needed, but {:?} (${:04X}-${:04X}, {} bytes) has \
+                     {} bytes left",
+                    what,
+                    size,
+                    self.region,
+                    self.region.start_address(),
+                    self.region.end_address() - 1,
+                    self.region.size(),
+                    self.bytes_remaining()
+                )
+            })
+    }
+
     /// Get the current allocation pointer
     pub fn current_address(&self) -> u16 {
         self.next_address
     }
 
     /// Get how many bytes have been allocated
+    #[allow(dead_code)] // kept for the Phase 2 allocators
     pub fn bytes_allocated(&self) -> u16 {
         self.next_address - self.region.start_address()
     }
@@ -119,5 +163,36 @@ mod tests {
     fn test_format_address() {
         assert_eq!(MemoryAllocator::format_address(0x8000), "$8000");
         assert_eq!(MemoryAllocator::format_address(0x9000), "$9000");
+    }
+
+    #[test]
+    fn test_regions() {
+        let regions = [
+            (MemoryRegion::SpriteTiles, 0x8000, 0x1000),
+            (MemoryRegion::BackgroundTiles, 0x9000, 0x800),
+            (MemoryRegion::Wram0, 0xC000, 0x1000),
+            (MemoryRegion::Oam, 0xFE00, 0xA0),
+        ];
+        for (region, start, size) in regions {
+            assert_eq!((region.start_address(), region.size()), (start, size));
+        }
+    }
+
+    #[test]
+    fn test_allocation_stops_at_the_end_of_the_region() {
+        let mut alloc = MemoryAllocator::new(MemoryRegion::Oam);
+        for i in 0..40 {
+            assert_eq!(alloc.allocate(4), Some(0xFE00 + 4 * i));
+        }
+        assert_eq!(alloc.allocate(1), None);
+        assert_eq!(alloc.bytes_remaining(), 0);
+        // A size past u16 never fits
+        let mut alloc = MemoryAllocator::new(MemoryRegion::Wram);
+        let message = crate::rust_boy::panic_message(|| alloc.allocate_or_panic(70_000, "data"));
+        assert!(
+            message.contains("no room for data: 70000 bytes needed"),
+            "{}",
+            message
+        );
     }
 }

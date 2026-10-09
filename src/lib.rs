@@ -2,6 +2,7 @@
 
 pub mod gb_asm;
 pub mod gb_std;
+pub mod hw;
 pub mod rust_boy;
 
 #[cfg(test)]

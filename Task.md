@@ -78,18 +78,31 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 
 ### P2
 - [x] `build()` not idempotent — [B14](CONTEXT.md#b14) (branch `refactor-p1-duplicate-vars`); `build(&self)` stays a Phase 2 item
-- [ ] `raw()` drops non-`Main` chunks; raw code is unreachable — [B15](CONTEXT.md#b15)
-- [ ] `Var::set`/`get` ignore 16-bit variables — [B16](CONTEXT.md#b16)
-- [ ] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)
-- [ ] Sprite and tile counters can desync — [B18](CONTEXT.md#b18)
-- [ ] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19)
-- [ ] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20)
+- [x] `raw()` drops non-`Main` chunks; raw code is unreachable — [B15](CONTEXT.md#b15) (branch `refactor-p1-api-safety`:
+      every chunk is kept, after the code generated for it; `Init` and `MainLoop` raw code runs; placement documented)
+- [x] `Var::set`/`get` ignore 16-bit variables — [B16](CONTEXT.md#b16) (branch `refactor-p1-api-safety`: `set` takes
+      any value of the variable's type and writes both bytes of a 16-bit one; `get` loads a 16-bit one into `hl`)
+- [x] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)
+      (branch `refactor-p1-api-safety`: sprite tiles, background tiles, WRAM0 variables and OAM entries are allocated
+      through `MemoryAllocator` and panic when full; sprite positions and animation frames are checked; `Loop` compares
+      with its last frame)
+- [x] Sprite and tile counters can desync — [B18](CONTEXT.md#b18) (branch `refactor-p1-api-safety`: a sprite's tile
+      index comes from where the tile manager put its tiles; `SpriteManager::add` is no longer public)
+- [x] Every tilemap at `$9800`; add `$9C00` — [B19](CONTEXT.md#b19) (branch `refactor-p1-api-safety`:
+      `tiles.add_tilemap_at(name, TilemapArea::Map9C00, rows)`, `RustBoy::set_background_tilemap`; a second tilemap on
+      one map, or more than 32 rows, panics)
+- [x] Silent failures on unknown ids / animation-name typos — [B20](CONTEXT.md#b20) (branch `refactor-p1-api-safety`:
+      every sprite / composite method that generates code or changes a sprite panics on an unknown id (the query
+      `get_composite_sprites` returns `None`), and the animation methods on an unknown animation name or index, a sprite
+      without animations, or a 256th animation)
 - [x] `basic_usage` + README header without `ds $150 - @, 0` — [B21](CONTEXT.md#b21) (branch `refactor-p0-readme`)
-- [ ] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22)
+- [x] `get_pivot` clamps out-of-range offsets to 0 — [B22](CONTEXT.md#b22) (branch `refactor-p1-api-safety`: one
+      `gb_std` routine for both layers, wrapping arithmetic like the 256-pixel map; an offset beyond ±255 panics)
 - [x] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
       (branch `refactor-p1-builtins`: one `GetTileByPixel` in the library, in `gb_std`: `hl` = tile address and
-      `a` = tile index; `rust_boy` emits the `gb_std` routines. Pending, the maintainer's choice: the raw-`gb_asm`
-      example `src/bin/unbricked.rs` keeps its own copies, and its `GetTileByPixel` keeps the old contract, `hl` only)
+      `a` = tile index; `rust_boy` emits the `gb_std` routines. Decided by the maintainer: the raw-`gb_asm`
+      tutorial `src/bin/unbricked.rs` keeps its own copies (GetTileByPixel, Memcopy, UpdateKeys), the one stated
+      exception to "every routine exists once" (CLAUDE.md); its `GetTileByPixel` keeps the old contract, `hl` only)
 - [x] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
       (branch `refactor-p1-builtins`: only used functions, transitively; `RustBoy::keep_function` forces one)
 - [x] Animation labels not namespaced by sprite; validate label names — [B25](CONTEXT.md#b25)
@@ -99,8 +112,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       (branch `refactor-p1-builtins`: `build()` emits every function the generated code refers to, once, with its
       variables; `RustBoy::external_symbol` declares a routine defined outside, e.g. in an `INCLUDE`d file)
 - [x] `Memcopy` with length 0 copies 64 KiB — [B27](CONTEXT.md#b27)
-      (branch `refactor-p1-builtins`: `RustBoy` skips empty raw blobs, `from_file(path, 0)` panics; `gb_std`'s
-      `cp_in_memory` documents a non-empty blob)
+      (branch `refactor-p1-builtins`: `RustBoy` skips empty raw blobs, `from_file(path, 0)` panics; branch
+      `refactor-p1-api-safety`, the maintainer's choice: `Memcopy` tests `bc` first, so a length of 0 copies nothing)
 - [x] `OBP1` never initialised; OAM not cleared when there are no sprites — [B28](CONTEXT.md#b28)
       (branch `refactor-p1-init-order`: `rOBP1` = `%11100100` like `rBGP`/`rOBP0`; the OAM is always cleared)
 - [x] Code-level doc errors (`inputs.rs` pressed bit, `RustBoy::call` example E0499, unsigned `If` note) — [B29](CONTEXT.md#b29) (branch `refactor-p0-readme`)
@@ -110,7 +123,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the reasoning.
 
 - [ ] `hw` module: pure data (registers, flags, OAM layout, VRAM map) emitted as `hardware.inc` symbol
-      names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine`
+      names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine` (started: `src/hw.rs` since
+      [B22](CONTEXT.md#b22) holds the VRAM, WRAM and OAM layout the new code uses; the older strings are left)
 - [ ] Move `Emittable` into the asm layer; add a `Block` instruction buffer (stop using `Asm` + `get_main_instrs()` as scratch)
 - [ ] Typed operands: remove string-register helpers (`inc_label("de")`, `ld_hli_label("a")`, …); add an
       `Expr` operand for constants/expressions; reject invalid destinations
@@ -128,10 +142,12 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       since by scanning the generated code for function names in `build()`; `GetTileByPixel` documents its registers since [B23](CONTEXT.md#b23))
 - [ ] One source of truth for builtins: `rust_boy` reuses `gb_std` (done for the routines since [B23](CONTEXT.md#b23):
       only `Delay` is `rust_boy`'s own); remove the duplicate `gb_std::graphics::sprites::SpriteManager`
-- [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s
+- [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s (the sprite manager panics since
+      [B20](CONTEXT.md#b20) instead of returning empty `Vec`s; a `Result` API is left)
 - [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
       as `RustBoy::set_sprite_size`
-- [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM
+- [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since
+      [B17](CONTEXT.md#b17); HRAM, and real addresses for the variables (rgblink places the sections), are left)
 - [ ] `If` that never clobbers user registers (or documents what it uses)
 - [ ] `prelude` module; avoid the `rust_boy::rust_boy` stutter (optional rename: `asm` / `std` / `engine`)
 - [ ] Ship all breaking API changes together in one release
@@ -142,7 +158,11 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Shadow OAM in WRAM + OAM DMA routine in HRAM (fixes [B12](CONTEXT.md#b12))
 - [ ] VRAM write queue flushed during VBlank (tilemap edits, score)
 - [ ] Background scrolling (`SCX`/`SCY`), camera helpers
-- [ ] Window layer (`WX`/`WY`, `$9C00` map)
+- [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
+- [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
+      (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))
+- [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its
+      map at start-up, and since [B19](CONTEXT.md#b19) a second tilemap on the same map panics
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
@@ -194,7 +214,8 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
       [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
       `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
-      functions and constants are not checked at all)
+      functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
+      "`Player` already defined" in rgbasm)
 
 ## Phase 4 — Documentation
 

@@ -101,7 +101,9 @@ rgbfix -v -p 0xFF main.gb
    set, the palettes after LCD on, `rOBP1` was never set and the OAM was cleared only when sprites existed.)
 4. **MainLoop**: `Main:` → `call WaitNotVBlank` → `call WaitVBlank` → animation dispatcher → user main-loop
    code (incl. `UpdateKeys` + key checks) → `jp Main`.
-5. **Main (legacy)**: whatever was written through `RustBoy::raw()` (unreachable unless labelled, [B15](#b15)).
+5. **Main (legacy)**: whatever was written through `RustBoy::raw()` to its default chunk (reached only through a
+   label). Since [B15](#b15) the raw code written to the other chunks goes at the end of the same chunk (`Init`
+   before LCD on, `MainLoop` before `jp Main`, see `RustBoy::raw`).
 6. **Functions** (since [B24](#b24)/[B26](#b26), worked out once all the code is known, before the variables): the
    builtins, then the user functions, that the code and the animation functions refer to, directly or through
    other functions, plus the ones forced with `use_function` / `keep_function`; then the `Anim_*` functions. The
@@ -387,6 +389,19 @@ but `build()` copies only its `Chunk::Main` (`:434-438`); anything written after
 inside the closure is lost (and later `raw()` calls too, since the chunk persists). The `Main` chunk is printed
 right after `jp Main`, so raw code is unreachable unless it starts with a label that is called — the doc
 example (`ld a, 0x42; ret`) is dead code. *Fix:* merge all chunks; document placement.
+**Status: fixed** on `refactor-p1-api-safety`. Each `raw()` call starts in `Chunk::Main` again, and `build()` keeps every
+chunk the raw code wrote, each one right after the code it generates for that chunk (`RustBoy::raw_chunk`): `Header`,
+`Constants`, `Tiles`, `Tilemap` after theirs; `Init` at start-up after the `init()` code and before the LCD is turned on
+(so it runs, like `init()` code); `MainLoop` in the main loop after the `add_to_main_loop` code and before `jp Main` (it
+runs every frame); `Main` where it was, after `jp Main` (reached only through a label); `Functions` after the generated
+functions; `Data` after the variable sections (so inside the last `WRAM0` one, unless the raw code opens a `SECTION`,
+which it must do when the program has no variables). The raw `Functions` and `Data` code is scanned like the rest, so a
+builtin a raw routine calls is emitted (with its variables) and a name it defines is the program's ([B26](#b26)). The
+`raw()` doc example is now a compiled doctest: a labelled routine called from the main loop, and `MainLoop` code. No
+example changes (no example writes to another chunk). Tests: `test_raw_keeps_every_chunk` (each chunk, a second
+`raw()` call, a builtin called from a raw function; linked with RGBDS) and `test_raw_init_and_main_loop_code_runs`
+(the start-up code on `gb_asm::test_cpu`: the raw `Init` code runs after the `init()` code and before LCD on; the raw
+`MainLoop` code is before `jp Main`); both failed before (the code was dropped).
 
 #### B16
 **`Var::set`/`Var::get` ignore 16-bit variables.** `set(value: i8)` (`src/rust_boy/variables.rs:31`) writes

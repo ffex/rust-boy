@@ -205,21 +205,53 @@ impl RustBoy {
 
     /// Escape hatch: execute raw assembly operations
     ///
-    /// This allows advanced users to mix high-level and low-level code.
+    /// This allows advanced users to mix high-level and low-level code. The closure
+    /// writes to `Chunk::Main` unless it switches with `asm.chunk(..)`; every call starts
+    /// in `Chunk::Main` again. `build()` keeps every chunk (B15), each one after the code
+    /// it generates for that chunk:
+    /// - `Main` (the default): after the main loop's `jp Main`, so it runs only if it is
+    ///   called or jumped to: start it with a label.
+    /// - `Init`: at start-up, after the [`RustBoy::init`] code, before the LCD is turned on.
+    /// - `MainLoop`: in the main loop, every frame, after the [`RustBoy::add_to_main_loop`]
+    ///   code, before `jp Main`.
+    /// - `Functions`: after the generated functions (label your routines; a routine that
+    ///   calls a builtin gets it emitted, like any code).
+    /// - `Header`, `Constants`, `Tiles`, `Tilemap`: after the generated ones (`Header` is
+    ///   inside the header section, after its padding).
+    /// - `Data`: after the variable sections, so inside the last of them (a `WRAM0`
+    ///   section) unless the raw code opens its own `SECTION`: do it, a program without
+    ///   variables has no such section.
     ///
     /// # Example
-    /// ```ignore
+    /// ```
+    /// use rust_boy::gb_asm::Chunk;
+    /// use rust_boy::gb_std::flow::Call;
+    /// use rust_boy::rust_boy::RustBoy;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// gb.add_to_main_loop(Call::new("LoadAnswer"));
     /// gb.raw(|asm| {
-    ///     asm.ld_a(0x42);
-    ///     asm.ret();
+    ///     // A routine: labelled, and called from the main loop
+    ///     asm.label("LoadAnswer").ld_a(0x42).ret();
+    ///     // Code that runs every frame, after the main loop code
+    ///     asm.chunk(Chunk::MainLoop).ld_addr_def_a("rSCX");
     /// });
+    /// let out = gb.build();
+    /// assert!(out.contains("LoadAnswer:") && out.contains("ld [rSCX], a"));
     /// ```
     pub fn raw<F>(&mut self, f: F) -> &mut Self
     where
         F: FnOnce(&mut Asm),
     {
+        self.asm.chunk(Chunk::Main);
         f(&mut self.asm);
+        self.asm.chunk(Chunk::Main);
         self
+    }
+
+    /// What the `raw()` code wrote to `chunk`
+    fn raw_chunk(&self, chunk: Chunk) -> Vec<Instr> {
+        self.asm.get_chunk(chunk).cloned().unwrap_or_default()
     }
 
     /// Emit a builtin function even if no code calls it
@@ -445,12 +477,15 @@ impl RustBoy {
         asm.chunk(Chunk::Header);
         asm.include_hardware();
         asm.emit_all(crate::gb_std::utility::header_section());
+        // Each chunk the `raw()` code wrote goes after the code generated for it (B15)
+        asm.emit_all(self.raw_chunk(Chunk::Header));
 
         // === CONSTANTS CHUNK ===
         asm.chunk(Chunk::Constants);
         for (name, value) in &self.constants {
             asm.def(name, value);
         }
+        asm.emit_all(self.raw_chunk(Chunk::Constants));
 
         // === INIT CHUNK ===
         // In two parts, before and after the variable initialisation, which is emitted
@@ -487,6 +522,7 @@ impl RustBoy {
         // still off, so it can write VRAM.
         let mut finish = Asm::new();
         finish.emit_all(self.init_code.clone());
+        finish.emit_all(self.raw_chunk(Chunk::Init));
 
         // Turn on screen, with the sprite size chosen by set_sprite_size, and the
         // background map chosen by set_background_tilemap (`LCDCF_BG9800` is 0, so it is
@@ -515,8 +551,9 @@ impl RustBoy {
             asm.emit_all(self.sprites.generate_animation_calls(self.animation_delay));
         }
 
-        // Emit main loop code
+        // Emit main loop code, then the raw main loop code
         asm.emit_all(self.main_loop_code.clone());
+        asm.emit_all(self.raw_chunk(Chunk::MainLoop));
 
         // Jump back to main loop
         asm.jp("Main");
@@ -524,17 +561,23 @@ impl RustBoy {
         // === TILES CHUNK ===
         asm.chunk(Chunk::Tiles);
         asm.emit_all(self.tiles.generate_tile_data());
+        asm.emit_all(self.raw_chunk(Chunk::Tiles));
 
         // === TILEMAP CHUNK ===
         asm.chunk(Chunk::Tilemap);
         asm.emit_all(self.tiles.generate_tilemap_data());
+        asm.emit_all(self.raw_chunk(Chunk::Tilemap));
 
         // Include any raw assembly that was added (legacy Main chunk)
-        let existing = self.asm.get_chunk(Chunk::Main).cloned().unwrap_or_default();
+        let existing = self.raw_chunk(Chunk::Main);
         if !existing.is_empty() {
             asm.chunk(Chunk::Main);
             asm.emit_all(existing);
         }
+        // The raw functions and data are emitted at the end of their chunks, but their
+        // code is part of the program now
+        let raw_functions = self.raw_chunk(Chunk::Functions);
+        let raw_data = self.raw_chunk(Chunk::Data);
 
         // Add animation variables if animations are used
         if self.sprites.has_animations() {
@@ -564,7 +607,12 @@ impl RustBoy {
         .filter_map(|chunk| asm.get_chunk(*chunk))
         .map(Vec::as_slice)
         .collect();
-        code.extend([startup.as_slice(), finish.as_slice()]);
+        code.extend([
+            startup.as_slice(),
+            finish.as_slice(),
+            raw_functions.as_slice(),
+            raw_data.as_slice(),
+        ]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
         let functions = self.functions.generate_used(&code, self.vars.names());
         asm.chunk(Chunk::Functions);
@@ -575,6 +623,7 @@ impl RustBoy {
             self.functions.register_generated(&name);
             asm.emit_all(body);
         }
+        asm.emit_all(raw_functions);
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
         // The variables of the emitted builtins (`wCurKeys`, `wNewKeys` for UpdateKeys),
@@ -591,6 +640,7 @@ impl RustBoy {
 
         asm.chunk(Chunk::Data);
         asm.emit_all(self.vars.generate_sections());
+        asm.emit_all(raw_data);
 
         asm
     }
@@ -1681,6 +1731,108 @@ mod tests {
                 "LCD on",
             ]
         );
+    }
+
+    // ==================== raw() (B15) ====================
+
+    /// The text of chunk `chunk` of `gb`'s program
+    fn chunk_text(gb: &mut RustBoy, chunk: Chunk) -> String {
+        gb.build_asm()
+            .get_chunk(chunk)
+            .map(|code| code.iter().map(|instr| format!("{}\n", instr)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_raw_keeps_every_chunk() {
+        // B15: build() copied only the Main chunk of raw(): code written after
+        // `asm.chunk(..)` in the closure, and in every later raw() call, was dropped
+        let mut gb = RustBoy::new();
+        gb.add_to_main_loop(Call::new("RawFunc"));
+        gb.raw(|asm| {
+            asm.label("RawMain").ret();
+            asm.chunk(Chunk::Constants).def("RAW_CONST", 5);
+            asm.chunk(Chunk::Functions)
+                .label("RawFunc")
+                .ld_a_label("RAW_CONST")
+                .call("UpdateKeys")
+                .ret();
+            asm.chunk(Chunk::Data).section("RawData", "WRAM0");
+            asm.raw("wRawData: db");
+            asm.chunk(Chunk::Tiles).label("RawTiles");
+            asm.chunk(Chunk::Tilemap).label("RawMap");
+        });
+        // A later call starts in the Main chunk again
+        gb.raw(|asm| {
+            asm.label("Second").ret();
+        });
+
+        for (chunk, label) in [
+            (Chunk::Main, "RawMain:"),
+            (Chunk::Main, "Second:"),
+            (Chunk::Constants, "DEF RAW_CONST EQU 5"),
+            (Chunk::Functions, "RawFunc:"),
+            (Chunk::Data, "wRawData: db"),
+            (Chunk::Tiles, "RawTiles:"),
+            (Chunk::Tilemap, "RawMap:"),
+        ] {
+            let text = chunk_text(&mut gb, chunk);
+            assert!(
+                text.contains(label),
+                "{} not in {:?}:\n{}",
+                label,
+                chunk,
+                text
+            );
+        }
+        // UpdateKeys, which only the raw function calls, is emitted, with its variables
+        let out = gb.build();
+        assert!(
+            out.contains("UpdateKeys:") && out.contains("wCurKeys: db"),
+            "{}",
+            out
+        );
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_raw_init_and_main_loop_code_runs() {
+        // B15: raw code was unreachable unless labelled and called; code written to the
+        // Init and MainLoop chunks now runs, like `init()` and `add_to_main_loop` code
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wRawInit", 0);
+        gb.vars.create_u8("wRawLoop", 0);
+        let user_init = gb.vars.create_u8("wUserInit", 0);
+        let user_loop = gb.vars.create_u8("wUserLoop", 0);
+        gb.init(user_init.set(1));
+        gb.add_to_main_loop(user_loop.set(2));
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Init).ld_a(7).ld_addr_def_a("wRawInit");
+            asm.chunk(Chunk::MainLoop).ld_a(9).ld_addr_def_a("wRawLoop");
+        });
+
+        // At start-up: after the variables and the init() code, before the LCD is on
+        let cpu = run_startup(&mut gb);
+        let at = |name: &str, value: u8| {
+            let event = Event::Write(name.to_string(), value);
+            cpu.trace
+                .iter()
+                .rposition(|e| *e == event)
+                .unwrap_or_else(|| panic!("{:?} not in {:?}", event, cpu.trace))
+        };
+        // The variables are set to 0 first, then the init() code, then the raw code
+        assert!(at("wRawInit", 0) < at("wUserInit", 1), "{:?}", cpu.trace);
+        assert!(at("wUserInit", 1) < at("wRawInit", 7), "{:?}", cpu.trace);
+        assert!(at("wRawInit", 7) < at("rLCDC", 0x83), "{:?}", cpu.trace);
+        assert_mem(&cpu, "wRawInit", 7);
+
+        // In the main loop: after the add_to_main_loop code, before `jp Main`
+        let main_loop = chunk_text(&mut gb, Chunk::MainLoop);
+        let user = main_loop.find("ld [wUserLoop], a").expect("user code");
+        let raw = main_loop.find("ld [wRawLoop], a").expect("raw code");
+        let jp = main_loop.find("jp Main").expect("jp Main");
+        assert!(user < raw && raw < jp, "{}", main_loop);
+        assert_links(&gb.build());
     }
 
     #[test]

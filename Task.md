@@ -78,7 +78,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 
 ### P2
 - [x] `build()` not idempotent — [B14](CONTEXT.md#b14) (branch `refactor-p1-duplicate-vars`); `build(&self)` stays a Phase 2 item
-- [ ] `raw()` drops non-`Main` chunks; raw code is unreachable — [B15](CONTEXT.md#b15)
+- [x] `raw()` drops non-`Main` chunks; raw code is unreachable — [B15](CONTEXT.md#b15) (branch `refactor-p1-api-safety`:
+      every chunk is kept, after the code generated for it; `Init` and `MainLoop` raw code runs; placement documented)
 - [x] `Var::set`/`get` ignore 16-bit variables — [B16](CONTEXT.md#b16) (branch `refactor-p1-api-safety`: `set` takes
       any value of the variable's type and writes both bytes of a 16-bit one; `get` loads a 16-bit one into `hl`)
 - [x] No bounds / overflow checks (VRAM, OAM, u8 tile counter at 256, animation freeze at tile 255) — [B17](CONTEXT.md#b17)

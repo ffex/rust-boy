@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 202 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Asm::ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 206 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -65,16 +65,17 @@ rgbfix -v -p 0xFF main.gb
 
 | Layer | Path | LOC | Role |
 |---|---|---|---|
-| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `asm.rs`, `codegen.rs`, `labels.rs`) | ~2100 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), fluent `Asm` builder, `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
-| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`, `Emittable`), a simple `SpriteManager`, `TileRef` |
+| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`) | ~2300 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), fluent `Asm` builder for whole programs and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7)) |
+| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef` |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
 | **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`, and since `refactor-p2-typed-operands` `rLCDC`, `rLY`, `rP1`, the palettes, `LCDCF_*`, `P1F_*`), `oam_offset`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
 
 ### Key concepts
 
-- **`Emittable`** (`src/gb_std/flow/emittable.rs`): `fn emit(&mut self, counter: &mut usize) -> Vec<Instr>`.
-  Implemented by `Vec<Instr>`, `Vec<Vec<Instr>>`, `Vec<Box<dyn Emittable>>`, `Call`, `Op`, `If*`.
+- **`Emittable`** (`src/gb_asm/block.rs` since `refactor-p2-typed-operands-2b`, re-exported by `gb_std::flow`;
+  it was in `src/gb_std/flow/emittable.rs`): `fn emit(&mut self, counter: &mut usize) -> Vec<Instr>`.
+  Implemented by `Block`, `Vec<Instr>`, `Vec<Vec<Instr>>`, `Vec<Box<dyn Emittable>>`, `Call`, `Op`, `If*`.
   Everything that goes into the main loop / init / user functions is an `Emittable`.
 - **`If` labels**: each `If*` takes a unique number from `RustBoy::if_counter` and emits *local*
   labels `.end_if_N`, `.else_N`, `.then_N`. RGBDS local labels are scoped to the **last global label**,
@@ -88,8 +89,11 @@ rgbfix -v -p 0xFF main.gb
   functions) and to the once-per-program `EntryPoint`, `ClearOam`, `Main`, `AnimEnd`.
 - **Chunks** (`src/gb_asm/asm.rs:10-30`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
   Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`src/gb_asm/codegen.rs:18-28`).
-- **Scratch-`Asm` idiom**: most `gb_std`/`rust_boy` helpers create a fresh `Asm`, emit into its default
-  `Chunk::Main` and return `asm.get_main_instrs()`.
+- **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and
+  snippet is built in a `Block` (a checked list of instructions with the same builder methods as `Asm`, expanded from
+  one `instruction_builders!` in `src/gb_asm/builders.rs`) and returned with `into_instrs()`. They used to create a
+  fresh `Asm`, emit into its default `Chunk::Main` and return `asm.get_main_instrs()` (the scratch-`Asm` idiom). An
+  `Asm` is now only a whole program: `RustBoy`'s `raw()` chunks and `build_asm`, and the `gb_asm` example programs.
 
 ### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:496-680`, `build` prints what `build_asm` returns)
 

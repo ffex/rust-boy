@@ -490,7 +490,7 @@ fn test_every_instruction_form() {
     asm.include_hardware()
         .section("Isa", "ROM0[$0000]")
         .label("Target")
-        .emit_all(cases.iter().map(|case| case.instr.clone()).collect());
+        .emit_all(cases.iter().map(|case| case.instr.clone()));
     let Some(rom) = rgbds_rom(&asm.to_asm()) else {
         return; // RGBDS_LINK_CHECK not set: the text and sizes only
     };

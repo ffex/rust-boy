@@ -109,7 +109,6 @@ impl MemoryAllocator {
     }
 
     /// Get the current allocation pointer
-    #[allow(dead_code)] // kept for the Phase 2 allocators
     pub fn current_address(&self) -> u16 {
         self.next_address
     }

@@ -391,6 +391,34 @@ impl SpriteManager {
         self.add(name, tiles, x, y, flags)
     }
 
+    /// The tile right after the last tile of sprite `id`, where more tiles must go to
+    /// belong to it (see `RustBoy::add_sprite_tiles`), and the sprite's name
+    pub(crate) fn tile_after(&self, id: SpriteId) -> (u16, &str) {
+        let sprite = self.sprite(id);
+        (
+            u16::from(sprite.tile_index) + sprite.tile_count,
+            sprite.name.as_str(),
+        )
+    }
+
+    /// Add `count` tiles to the end of sprite `id`'s tiles (`RustBoy::add_sprite_tiles`
+    /// has put them right after them in VRAM)
+    ///
+    /// # Panics
+    /// In 8x16 mode, if `count` is odd: frames are two tiles.
+    pub(crate) fn extend_tiles(&mut self, id: SpriteId, count: u16) {
+        let size = self.size;
+        let sprite = self.sprite_mut(id);
+        if size == SpriteSize::Size8x16 && count % 2 != 0 {
+            panic!(
+                "add_sprite_tiles(sprite \"{}\"): {} tiles, but in 8x16 mode every frame is two \
+                 tiles, so the tile count must be even",
+                sprite.name, count
+            );
+        }
+        sprite.tile_count += count;
+    }
+
     /// Get sprite data (used by the tests)
     #[cfg(test)]
     pub(crate) fn get(&self, id: SpriteId) -> Option<&SpriteData> {
@@ -523,7 +551,9 @@ impl SpriteManager {
         if last_tile >= sprite.tile_count {
             panic!(
                 "{}: frame {} would show tile {} of the sprite, but it has {} tiles (frame f \
-                 starts on tile f * {}, and is {} tile(s))",
+                 starts on tile f * {}, and is {} tile(s)); to give the sprite more tiles from \
+                 another source (another .2bpp file), use RustBoy::add_sprite_tiles before \
+                 adding the animation",
                 what, end, last_tile, sprite.tile_count, step, per_frame
             );
         }

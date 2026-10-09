@@ -300,6 +300,11 @@ impl TileManager {
         self.tiles.get(&id).map(|t| t.name.as_str())
     }
 
+    /// The tile index the next sprite tiles will get (256 when the sprite tiles are full)
+    pub(crate) fn next_sprite_tile(&self) -> u16 {
+        (self.sprite_tiles.current_address() - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE
+    }
+
     /// The tile index of the first tile of the sprite tiles `id`, from their VRAM
     /// address (`$8000 + index * 16`): the one source of sprite tile indices (B18)
     ///

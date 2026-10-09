@@ -453,6 +453,12 @@ but {region} (…) has M bytes left":
   x + 8, first (x at most 239). `oam_index * 4` cannot overflow any more (at most 159).
 - Animations: `add_animation_with_step` panics when `start_frame` > `end_frame`, `frame_step` is 0, or a frame is not
   among the sprite's own tiles (it showed the next sprite's tiles, and past tile 255 the `u8` frame arithmetic overflowed).
+  A sprite whose frames come from several blobs (several `.2bpp` files; on `refactor` the frames simply ran on into tiles
+  added after it with `tiles.add_sprite`) gets the other tiles with **`RustBoy::add_sprite_tiles(sprite, name, source)`**:
+  they go right after the sprite's tiles and count as its own; it panics if other sprite tiles were added in between (the
+  frames would not be contiguous), and the frame check's message points to it. Tests
+  `test_a_sprite_with_tiles_from_two_sources` (plays the four frames on `gb_asm::test_cpu`, links) and
+  `test_add_sprite_tiles_must_follow_the_sprite`.
   The `Loop` code compares the current tile with the first and the last frame themselves (like `Once` and `PingPong`):
   `cp first` / `jr c, .reset` / `cp last` / `jr c, .next` / `.reset: ld a, first - step` / `.next: inc a` (or
   `add a, step`) / store. The reset loads the tile *before* the first frame (modulo 256: 255 for frame 0) and falls into

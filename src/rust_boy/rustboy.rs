@@ -735,6 +735,55 @@ impl RustBoy {
         self.sprites.add(name, tiles, x, y, flags)
     }
 
+    /// Give sprite `sprite` more tiles, from another source: frames spread over several
+    /// `.2bpp` files, for example
+    ///
+    /// The tiles go to VRAM right after the sprite's own tiles (their label is `name`,
+    /// copied at start-up like any tiles), and they count as the sprite's: its
+    /// animations can use them as the next frames (an animation steps through
+    /// contiguous tiles). Call it before adding the animations that use them.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::rust_boy::{AnimationType, RustBoy, TileSource};
+    ///
+    /// let mut gb = RustBoy::new();
+    /// let player = gb.add_sprite("Player", TileSource::from_file("idle.2bpp", 1), 80, 72, 0);
+    /// gb.add_sprite_tiles(player, "PlayerWalk", TileSource::from_file("walk.2bpp", 3));
+    /// // Frames 0 to 3: the idle tile, then the three walk tiles
+    /// gb.sprites.add_animation(player, "Walk", 0, 3, AnimationType::Loop);
+    /// ```
+    ///
+    /// # Panics
+    /// - If there is no sprite `sprite`.
+    /// - If other sprite tiles were added after the sprite's (another sprite, or
+    ///   `tiles.add_sprite`): the new tiles would not follow the sprite's, so its frames
+    ///   would not be contiguous. Add the tiles right after the sprite.
+    /// - If the tiles do not fit in the 256 sprite tiles, or in 8x16 mode if their count
+    ///   is odd.
+    pub fn add_sprite_tiles(
+        &mut self,
+        sprite: super::sprites::SpriteId,
+        name: &str,
+        source: super::tiles::TileSource,
+    ) -> super::tiles::TileId {
+        let (after, sprite_name) = self.sprites.tile_after(sprite);
+        let next = self.tiles.next_sprite_tile();
+        if next != after {
+            panic!(
+                "add_sprite_tiles(\"{}\"): the tiles of sprite \"{}\" end before tile {}, but \
+                 other sprite tiles were added after them (the next free tile is {}), so the new \
+                 tiles would not follow the sprite's; add them right after the sprite",
+                name, sprite_name, after, next
+            );
+        }
+        let count = source.tile_count();
+        let id = self.tiles.add_sprite(name, source);
+        self.sprites
+            .extend_tiles(sprite, u16::try_from(count).unwrap_or(u16::MAX));
+        id
+    }
+
     /// Add a 16x16 composite sprite made of two 8x16 sprites side by side
     ///
     /// This creates two hardware sprites (left and right halves) and groups them
@@ -1143,6 +1192,86 @@ mod tests {
         let message = panic_message(|| gb.add_sprite("Big", tiles(257), 0, 0, 0));
         assert!(
             message.contains("sprite tiles \"Big\" (257 tiles)"),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_a_sprite_with_tiles_from_two_sources() {
+        // Frames spread over two blobs (e.g. two .2bpp files): without add_sprite_tiles
+        // the frames past the first blob are not the sprite's, and the animation panics
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Other", tiles(2), 0, 0, 0);
+        let player = gb.add_sprite("Player", tiles(1), 80, 72, 0);
+        let message = panic_message(|| {
+            let mut gb = RustBoy::new();
+            let player = gb.add_sprite("Player", tiles(1), 80, 72, 0);
+            gb.tiles.add_sprite("PlayerMore", tiles(3));
+            gb.sprites
+                .add_animation(player, "Walk", 0, 3, AnimationType::Loop);
+        });
+        assert!(
+            message.contains("use RustBoy::add_sprite_tiles"),
+            "{}",
+            message
+        );
+
+        let more = gb.add_sprite_tiles(player, "PlayerMore", tiles(3));
+        assert_eq!(tile_of(&gb, player), (2, 0x8020));
+        assert_eq!(
+            gb.tiles.get_address(more),
+            Some(0x8030),
+            "right after the sprite's"
+        );
+        let walk = gb
+            .sprites
+            .add_animation(player, "Walk", 0, 3, AnimationType::Loop);
+        gb.sprites.set_initial_animation(player, walk);
+        let out = gb.build();
+        assert_links(&out);
+        assert!(out.contains("PlayerMore:"), "the tiles are copied: {}", out);
+
+        // The animation plays the four frames: tiles 2 (its own), then 3, 4, 5 (the others)
+        let mut code = gb.sprites.generate_animation_calls(1);
+        code.push(Instr::Ret);
+        for (_, body) in gb.sprites.generate_animation_functions() {
+            code.extend(body);
+        }
+        let mut cpu = TestCpu::default();
+        cpu.mem.insert(oam(4 + 2), 2);
+        cpu.mem.insert("wFrameCounter".to_string(), 0);
+        for (name, value) in gb.sprites.get_animation_variables() {
+            cpu.mem.insert(name, value);
+        }
+        let frames: Vec<u8> = (0..6)
+            .map(|_| {
+                cpu.run(&code);
+                cpu.mem[&oam(4 + 2)]
+            })
+            .collect();
+        assert_eq!(frames, [3, 4, 5, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_add_sprite_tiles_must_follow_the_sprite() {
+        let mut gb = RustBoy::new();
+        let player = gb.add_sprite("Player", tiles(1), 80, 72, 0);
+        gb.add_sprite("Ball", tiles(1), 0, 0, 0);
+        let message = panic_message(|| gb.add_sprite_tiles(player, "PlayerMore", tiles(3)));
+        assert!(
+            message.contains("tiles of sprite \"Player\" end before tile 1")
+                && message.contains("would not follow"),
+            "{}",
+            message
+        );
+        // In 8x16 mode a frame is two tiles
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let player = gb.add_sprite("Player", tiles(2), 80, 72, 0);
+        let message = panic_message(|| gb.add_sprite_tiles(player, "PlayerMore", tiles(3)));
+        assert!(
+            message.contains("the tile count must be even"),
             "{}",
             message
         );

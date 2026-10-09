@@ -122,6 +122,34 @@ A value is never a destination, so `asm.ld(1, 2)` does not compile. Operands tha
 (`ld [hl], [hl]`, `ld b, [de]`), a value that does not fit (`ld a, 300`) and a register written as text
 (`asm.cp("b")`) panic with a clear message. `Expr::raw("…")` passes any other RGBDS expression through as it is.
 
+### Sections
+
+Sections are typed: a `Section` has a name and a memory type (`ROM0`, `ROMX`, `VRAM`, `SRAM`, `WRAM0`, `WRAMX`,
+`OAM`, `HRAM`), and optionally a fixed address, a bank, an alignment and the `UNION` / `FRAGMENT` modifiers. What
+RGBDS would reject panics when the section is built: a bank on a memory type without banks (`ROM0`, `WRAM0`, `OAM`,
+`HRAM`) or out of its range, an address outside the memory type, an alignment no address of it has, `UNION` in ROM.
+A RAM section (every type but `ROM0` and `ROMX`) holds no code or data, it only reserves space: labels and `ds n`
+(`asm.ds("2")`; `ds_fill(n, fill)` fills ROM). Code or data in a RAM section, or a section name used twice (except by
+`UNION`s or `FRAGMENT`s of one memory type), panics when the program is printed.
+
+```rust
+use rust_boy::gb_asm::{Asm, MemoryType, Section};
+
+let mut asm = Asm::new();
+asm.section(Section::romx("Level 2").bank(2).align(8)) // SECTION "Level 2", ROMX, BANK[2], ALIGN[8]
+    .label("Level2Map")
+    .db("1, 2, 3");
+asm.section(Section::wram0("Variables").at(0xC100)) // SECTION "Variables", WRAM0[$C100]
+    .label("wScore")
+    .ds("1");
+asm.section(Section::new("Scratch", MemoryType::Hram).union()) // SECTION UNION "Scratch", HRAM
+    .label("hTemp")
+    .ds("2");
+let text = asm.to_asm();
+assert!(text.contains("SECTION \"Variables\", WRAM0[$C100]"));
+assert!(text.contains("    ds 1\n"));
+```
+
 ### Labels and jumps
 
 Generated code never clashes with itself: every label it makes up (the `.end_if_N` of an `If`, key checks, sprite
@@ -195,7 +223,8 @@ Open them in any Game Boy emulator.
   `add sp, e`, the rotates and shifts (`rlca`… and `rlc`, `rrc`, `rl`, `rr`, `sla`, `sra`, `swap`, `srl` on a register
   or `[hl]`, `R8`), `bit`/`set`/`res`, `daa`, `cpl`, `scf`/`ccf`, `nop`, `halt`, `stop`, `di`/`ei`, `jp`, `jr`,
   `call` and `ret` (all four also with the `z`/`nz`/`c`/`nc` conditions), `jp hl`, `reti`, `rst`, plus the directives
-  `SECTION`, `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds`, labels, comments and raw lines. Operands are
+  `SECTION` (typed, see [Sections](#sections)), `INCLUDE`, `INCBIN`, `DEF … EQU`, `db`, `dw`, `ds` (with or without a
+  fill value), labels, comments and raw lines. Operands are
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
@@ -205,14 +234,15 @@ Open them in any Game Boy emulator.
   used. Memory is checked: too many tiles, sprites (40) or variables panic with a clear message, as do unknown
   sprite ids and animation names. The output is deterministic: things appear in the order you created them.
 - **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
-  there is no sound yet, and everything lives in one ROM bank. The full list, with fixes planned, is in
+  there is no sound yet, and the engine puts everything in one ROM bank (`gb_asm` programs can open `ROMX` sections, but
+  nothing switches banks yet). The full list, with fixes planned, is in
   [CONTEXT.md](CONTEXT.md).
 
 ## Project structure
 
 ```text
 src/
-├── gb_asm/        # Instr, typed operands and Expr, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
+├── gb_asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
 ├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)

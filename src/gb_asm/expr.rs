@@ -33,7 +33,7 @@
 use std::fmt;
 use std::ops;
 
-use super::labels::is_identifier;
+use super::labels::{KEYWORDS, RESERVED_WORDS, is_identifier};
 
 /// How a number is written
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,12 +117,21 @@ const REGISTER_NAMES: [&str; 17] = [
 ];
 
 /// `Ok` if `name` can be an [`Expr::Sym`]: an RGBDS identifier (`wScore`), a local label
-/// (`.loop`) or a scoped one (`Main.loop`), and not a register or condition name
+/// (`.loop`) or a scoped one (`Main.loop`), and not a register or condition name nor
+/// another RGBDS keyword (`ld`, `LOW`, `DEF`, `SECTION`, …)
 fn check_symbol(name: &str) -> Result<(), String> {
-    if REGISTER_NAMES.contains(&name.to_ascii_lowercase().as_str()) {
+    let lower = name.to_ascii_lowercase();
+    if REGISTER_NAMES.contains(&lower.as_str()) {
         return Err(format!(
             "{:?} is a register or condition, not a symbol: use the typed operand \
              (`R8::A`, `R16::HL`, `Condition::Z`, …)",
+            name
+        ));
+    }
+    if KEYWORDS.contains(&lower.as_str()) || RESERVED_WORDS.contains(&lower.as_str()) {
+        return Err(format!(
+            "{:?} is an RGBDS keyword, not a symbol (a function such as `LOW(x)` is \
+             `Expr::low(..)`, or write it with Expr::raw)",
             name
         ));
     }
@@ -332,16 +341,24 @@ fn parse_number(text: &str) -> Option<(i32, Radix)> {
 }
 
 /// A symbol name or an RGBDS number literal: `"wScore"`, `"PADF_LEFT"`, `".loop"`,
-/// `"$9800"`, `"%11100100"`, `"144"`, `"-1"`
+/// `"$9800"`, `"%11100100"`, `"144"`, `"-1"`; spaces around it are ignored
+///
+/// Every function that takes an `impl Into<Expr>` reads text this way (`IfConst`, `IfA`,
+/// `TileRef::set_tile_label`, `cp_in_memory`, the operands of `Asm` and `Block`, …), and
+/// so does `is_specific_tile` for its tile ids.
 ///
 /// # Panics
 /// On anything else, with what to write instead: a register name (`"a"`, `"hl"`: use
-/// `R8::A`, `R16::HL`), an expression (`"TilesEnd - Tiles"`: build it,
-/// `Expr::sym("TilesEnd") - "Tiles"`, or use [`Expr::raw`]), a memory operand
-/// (`"[wScore]"`: use `Mem::addr("wScore")`).
+/// `R8::A`, `R16::HL`), another RGBDS keyword (`"LOW"`, `"ld"`), an expression
+/// (`"TilesEnd - Tiles"`, `"LOW(X)"`: build it, `Expr::sym("TilesEnd") - "Tiles"`,
+/// `Expr::low(..)`, or use [`Expr::raw`]), a memory operand (`"[wScore]"`: use
+/// `Mem::addr("wScore")`), a number that does not fit in 32 bits. A character literal
+/// (`"'A'"`) and a raw identifier (`"#name"`) are not read either: write them with
+/// [`Expr::raw`].
 impl From<&str> for Expr {
     #[track_caller]
     fn from(text: &str) -> Expr {
+        let text = text.trim();
         let (negative, unsigned) = match text.strip_prefix('-') {
             Some(rest) => (true, rest),
             None => (false, text),
@@ -352,6 +369,15 @@ impl From<&str> for Expr {
                 (true, Radix::Dec) => Expr::num(value.wrapping_neg()),
                 (true, _) => -Expr::Num(value, radix),
             };
+        }
+        let starts_like_a_number = unsigned.starts_with(|c: char| c.is_ascii_digit())
+            || (unsigned.len() > 1 && unsigned.starts_with(['$', '%', '&']));
+        if starts_like_a_number {
+            panic!(
+                "{:?} is not an RGBDS number that fits in 32 bits (`$FF`, `%101`, `&17`, `255`; \
+                 an expression is built with Expr, or written with Expr::raw)",
+                text
+            );
         }
         match check_symbol(text) {
             Ok(()) => Expr::Sym(text.to_string()),
@@ -480,6 +506,10 @@ mod tests {
         for (text, expr) in cases {
             assert_eq!(Expr::from(text), expr, "{}", text);
         }
+        // Spaces around the text are ignored
+        assert_eq!(Expr::from(" BRICK "), Expr::sym("BRICK"));
+        assert_eq!(Expr::from("\t$10 "), Expr::hex(0x10));
+        assert_eq!(Expr::from(" -1"), Expr::num(-1));
         // Written back the same way
         for text in ["wScore", "$9800", "$00", "%11100100", "144", "-1", "-$10"] {
             assert_eq!(Expr::from(text).to_string(), text);
@@ -523,14 +553,34 @@ mod tests {
             "[wScore]",
             "_OAMRAM+4",
             "",
-            "1abc",
             "$",
             "a.b.c",
+            "'A'",
         ] {
             let message = panic_message(|| {
                 let _ = Expr::from(text);
             });
             assert!(message.contains("is not a symbol name"), "{}", message);
+        }
+        // A number that is not one, or does not fit in 32 bits
+        for text in ["1abc", "4294967296", "$1_0000_0000", "%2"] {
+            let message = panic_message(|| {
+                let _ = Expr::from(text);
+            });
+            assert!(message.contains("is not an RGBDS number"), "{}", message);
+        }
+        // RGBDS keywords: functions, mnemonics, directives, in any case
+        for text in ["LOW", "high", "ld", "DEF", "Section", "db", "BANK"] {
+            for message in [
+                panic_message(|| {
+                    let _ = Expr::from(text);
+                }),
+                panic_message(|| {
+                    let _ = Expr::sym(text);
+                }),
+            ] {
+                assert!(message.contains("is an RGBDS keyword"), "{}", message);
+            }
         }
         // Raw text is never checked
         assert_eq!(text(Expr::raw("BANK(Tiles)")), "BANK(Tiles)");

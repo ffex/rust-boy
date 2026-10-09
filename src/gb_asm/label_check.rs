@@ -120,89 +120,12 @@ pub(crate) fn assert_labels_ok(asm: &str) {
     );
 }
 
-/// Words of an operand that are not symbols, compared without case: registers,
-/// conditions, and every function and section keyword of the RGBDS 1.0.4 lexer
-/// (`src/asm/lexer.cpp`, the `OP_*` and section tokens)
-const KEYWORDS: &[&str] = &[
-    // Registers and conditions
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "h",
-    "l",
-    "af",
-    "bc",
-    "de",
-    "hl",
-    "sp",
-    "hli",
-    "hld",
-    "z",
-    "nz",
-    "nc",
-    // Symbols and sections
-    "def",
-    "bank",
-    "sizeof",
-    "startof",
-    "fragment",
-    "align",
-    "isconst",
-    "high",
-    "low",
-    // Fixed-point math
-    "round",
-    "ceil",
-    "floor",
-    "div",
-    "mul",
-    "fmod",
-    "pow",
-    "log",
-    "sin",
-    "cos",
-    "tan",
-    "asin",
-    "acos",
-    "atan",
-    "atan2",
-    "bitwidth",
-    "tzcount",
-    // Strings and charmaps
-    "bytelen",
-    "readfile",
-    "strbyte",
-    "strcat",
-    "strchar",
-    "strcmp",
-    "strfind",
-    "strfmt",
-    "strin",
-    "strlen",
-    "strlwr",
-    "strrfind",
-    "strrin",
-    "strrpl",
-    "strslice",
-    "strsub",
-    "strupr",
-    "charcmp",
-    "charlen",
-    "charsize",
-    "charsub",
-    "charval",
-    "incharmap",
-    "revchar",
-];
-
 /// Every global symbol that `asm` uses but neither defines (a label, `name: db`, `DEF`)
 /// nor gets from `hardware.inc`: what rgbasm or rgblink would report as undefined (the
 /// targets of `jp` / `jr` / `call`, variables, constants, `ld hl, Name`, `dw Name`, …).
 /// Comments and strings are skipped; local labels are left to [`label_errors`].
 pub(crate) fn undefined_symbols(asm: &str) -> Vec<String> {
-    use super::labels::{code_lines, split_def, split_label, symbol_words};
+    use super::labels::{KEYWORDS, code_lines, split_def, split_label, symbol_words};
 
     let hardware_code = code_lines(include_str!("../../include/hardware.inc"));
     let hardware: BTreeSet<&str> = hardware_code

@@ -1,4 +1,4 @@
-use rust_boy::gb_asm::{Asm, Chunk, Condition};
+use rust_boy::gb_asm::{Asm, Chunk, Condition, Expr, Mem, R8};
 
 fn program() -> Asm {
     let mut asm = Asm::new();
@@ -15,7 +15,7 @@ fn program() -> Asm {
         .label("EntryPoint")
         .comment("Initialize display")
         .ld_a(0x91)
-        .ldh_label("[$FF40]", "a");
+        .ldh(Mem::addr(Expr::hex(0xFF40)), R8::A);
 
     // Add a loop
     asm.label("MainLoop")
@@ -27,7 +27,7 @@ fn program() -> Asm {
     asm.chunk(Chunk::Functions)
         .label("WaitVBlank")
         .comment("Wait for vertical blank")
-        .ld_a_label("[$FF44]")
+        .ld(R8::A, Mem::addr(Expr::hex(0xFF44)))
         .cp_imm(144)
         .jr_cond(Condition::NZ, "WaitVBlank")
         .ret();

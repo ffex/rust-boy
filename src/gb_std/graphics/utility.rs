@@ -1,4 +1,5 @@
-use crate::gb_asm::{Asm, Condition, Instr, Operand, R8, R16, Register};
+use crate::gb_asm::{Asm, Condition, Expr, Instr, Mem, R8, R16};
+use crate::hw;
 
 //TODO
 // refactor code:
@@ -45,12 +46,20 @@ pub fn add_tilemap(label: &str, tilemap: &[[u8; 32]]) -> Vec<Instr> {
 
 /// Copy the data between `label` and `{label}End` to `addr` with [`memcopy`]
 ///
-/// Empty data (`{label}End` right after `label`) copies nothing.
-pub fn cp_in_memory(label: &str, addr: &str) -> Vec<Instr> {
+/// `addr` is an address: a number (`Expr::hex(0x9000)`, or `"$9000"`) or a symbol
+/// (`"_VRAM"`). Empty data (`{label}End` right after `label`) copies nothing.
+///
+/// # Panics
+/// If `label` is not a symbol name, or `addr` is text that is neither a symbol nor a
+/// number (see [`Expr`]).
+#[track_caller]
+pub fn cp_in_memory(label: &str, addr: impl Into<Expr>) -> Vec<Instr> {
+    let start = Expr::sym(label);
+    let end = Expr::sym(format!("{}End", label));
     let mut asm = Asm::new();
-    asm.ld_de_label(label)
-        .ld_hl_label(addr)
-        .ld_bc_label(&format!("{}End - {}", label, label))
+    asm.ld(R16::DE, start.clone())
+        .ld(R16::HL, addr.into())
+        .ld(R16::BC, end - start)
         .call("Memcopy");
     asm.get_main_instrs()
 }
@@ -71,16 +80,16 @@ pub fn memcopy() -> Vec<Instr> {
     asm.comment("@param hl: destination");
     asm.comment("@param bc: length (0 copies nothing)");
     asm.label("Memcopy");
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.or(Operand::Reg(Register::C));
+    asm.ld(R8::A, R8::B);
+    asm.or(R8::C);
     asm.ret_cond(Condition::Z);
     asm.label(".copy");
-    asm.ld_a_addr_reg(Register::DE);
-    asm.ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A));
-    asm.inc(Operand::Reg(Register::DE));
-    asm.dec(Operand::Reg(Register::BC));
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.or(Operand::Reg(Register::C));
+    asm.ld(R8::A, Mem::De);
+    asm.ld(Mem::Hli, R8::A);
+    asm.inc(R16::DE);
+    asm.dec(R16::BC);
+    asm.ld(R8::A, R8::B);
+    asm.or(R8::C);
     asm.jp_cond(Condition::NZ, ".copy");
     asm.ret();
     asm.get_main_instrs()
@@ -88,21 +97,20 @@ pub fn memcopy() -> Vec<Instr> {
 pub fn turn_off_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
     // Turn off LCD
-    asm.ld_a(0).ld_addr_def_a("rLCDC").get_main_instrs()
+    asm.ld_a(0).ld_addr_def_a(hw::LCDC).get_main_instrs()
 }
 
 pub fn turn_on_screen() -> Vec<Instr> {
     let mut asm = Asm::new();
     // Turn on LCD
-    asm.ld_a_label("LCDCF_ON | LCDCF_BGON | LCDCF_OBJON")
-        .ld_addr_def_a("rLCDC")
-        .get_main_instrs()
+    let on = Expr::sym(hw::LCDCF_ON) | hw::LCDCF_BGON | hw::LCDCF_OBJON;
+    asm.ld(R8::A, on).ld_addr_def_a(hw::LCDC).get_main_instrs()
 }
 
 pub fn wait_vblank() -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label("WaitVBlank");
-    asm.ld_a_addr_def("rLY");
+    asm.ld_a_addr_def(hw::LY);
     asm.cp_imm(144);
     asm.jp_cond(Condition::C, "WaitVBlank");
     asm.ret();
@@ -111,7 +119,7 @@ pub fn wait_vblank() -> Vec<Instr> {
 pub fn wait_not_vblank() -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label("WaitNotVBlank");
-    asm.ld_a_addr_def("rLY");
+    asm.ld_a_addr_def(hw::LY);
     asm.cp_imm(144);
     asm.jp_cond(Condition::NC, "WaitNotVBlank");
     asm.ret();
@@ -146,44 +154,52 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     // First, we need to divide by 8 to convert a pixel position to a tile position.
     // After this we want to multiply the Y position by 32.
     // These operations effectively cancel out so we only need to mask the Y value.
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::C));
-    asm.and(Operand::Imm(0b11111000));
-    asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
-    asm.ld(Operand::Reg(Register::H), Operand::Imm(0));
+    asm.ld(R8::A, R8::C);
+    asm.and(0b11111000);
+    asm.ld(R8::L, R8::A);
+    asm.ld(R8::H, 0);
 
     // Now we have the position * 8 in hl
     asm.add_hl(R16::HL); // position * 16
     asm.add_hl(R16::HL); // position * 32
 
     // Convert the X position to an offset.
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
+    asm.ld(R8::A, R8::B);
     asm.srl(R8::A); // a / 2
     asm.srl(R8::A); // a / 4
     asm.srl(R8::A); // a / 8
 
     // Add the two offsets together.
-    asm.add(Operand::Reg(Register::L));
-    asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
-    asm.adc(Operand::Reg(Register::H));
-    asm.sub(Operand::Reg(Register::L));
-    asm.ld(Operand::Reg(Register::H), Operand::Reg(Register::A));
+    asm.add(R8::L);
+    asm.ld(R8::L, R8::A);
+    asm.adc(R8::H);
+    asm.sub(R8::L);
+    asm.ld(R8::H, R8::A);
 
     // Add the offset to the tilemap's base address
-    asm.ld_bc_label("$9800");
+    asm.ld(R16::BC, Expr::hex(hw::SCRN0));
     asm.add_hl(R16::BC);
 
     // And read the tile there
-    asm.ld_a_addr_reg(Register::HL);
+    asm.ld(R8::A, R8::AtHl);
     asm.ret();
 
     asm.get_main_instrs()
 }
 
+/// A routine `label` that sets the Z flag when `a` is one of the tiles `tiles_ids`
+///
+/// Each tile id is a number (`"$00"`) or a constant (`"BRICK_LEFT"`), as [`Expr`] reads
+/// text.
+///
+/// # Panics
+/// If a tile id is neither a symbol nor a number.
+#[track_caller]
 pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
     let mut asm = Asm::new();
     asm.label(label);
     for (index, tile_id) in tiles_ids.iter().enumerate() {
-        asm.cp_label(tile_id); //TODO understand the tile id and how to manage it!
+        asm.cp(*tile_id); //TODO understand the tile id and how to manage it!
         if index < tiles_ids.len() - 1 {
             asm.ret_cond(Condition::Z);
         }

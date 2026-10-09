@@ -1,4 +1,4 @@
-use crate::gb_asm::{Asm, Instr, Operand, R16, Register};
+use crate::gb_asm::{Asm, Expr, Instr, Mem, R8, R16};
 
 /// A reference to a tile position in the tilemap.
 ///
@@ -47,10 +47,11 @@ impl TileRef {
         asm.get_main_instrs()
     }
 
-    /// Load the tilemap address into HL using a label.
-    pub fn load_address_label(label: &str) -> Vec<Instr> {
+    /// Load the tilemap address into HL using a label (or any address [`Expr`]).
+    #[track_caller]
+    pub fn load_address_label(label: impl Into<Expr>) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_hl_label(label);
+        asm.ld(R16::HL, label.into());
         asm.get_main_instrs()
     }
 
@@ -61,8 +62,7 @@ impl TileRef {
     /// * `tile_index` - The tile index to write (0-255)
     pub fn set_tile(tile_index: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a(tile_index)
-            .ld(Operand::AddrReg(Register::HL), Operand::Reg(Register::A));
+        asm.ld_a(tile_index).ld(R8::AtHl, R8::A);
         asm.get_main_instrs()
     }
 
@@ -70,13 +70,12 @@ impl TileRef {
     /// Assumes HL already contains the tilemap address.
     ///
     /// # Arguments
-    /// * `const_name` - The label or constant name for the tile index
-    pub fn set_tile_label(const_name: &str) -> Vec<Instr> {
+    /// * `const_name` - The constant for the tile index (a `DEF` name, a number, an
+    ///   [`Expr`])
+    #[track_caller]
+    pub fn set_tile_label(const_name: impl Into<Expr>) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld(
-            Operand::AddrReg(Register::HL),
-            Operand::Label(const_name.to_owned()),
-        );
+        asm.ld(R8::AtHl, const_name.into());
         asm.get_main_instrs()
     }
 
@@ -89,7 +88,7 @@ impl TileRef {
         let mut asm = Asm::new();
         asm.ld_hl(self.tilemap_addr)
             .ld_a(tile_index)
-            .ld(Operand::AddrReg(Register::HL), Operand::Reg(Register::A));
+            .ld(R8::AtHl, R8::A);
         asm.get_main_instrs()
     }
 
@@ -97,7 +96,7 @@ impl TileRef {
     /// Used to move right in the tilemap or to the next row after 32 tiles.
     pub fn next_tile() -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.inc(Operand::Reg(Register::HL));
+        asm.inc(R16::HL);
         asm.get_main_instrs()
     }
 
@@ -105,14 +104,14 @@ impl TileRef {
     /// Used to move left in the tilemap.
     pub fn prev_tile() -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.dec(Operand::Reg(Register::HL));
+        asm.dec(R16::HL);
         asm.get_main_instrs()
     }
 
     /// Get the current tile index at [HL] into register A.
     pub fn get_tile() -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a_addr_reg(Register::HL);
+        asm.ld(R8::A, R8::AtHl);
         asm.get_main_instrs()
     }
 
@@ -123,8 +122,7 @@ impl TileRef {
     /// * `tile_index` - The tile index to write (0-255)
     pub fn set_tile_and_next(tile_index: u8) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a(tile_index)
-            .ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A));
+        asm.ld_a(tile_index).ld(Mem::Hli, R8::A);
         asm.get_main_instrs()
     }
 

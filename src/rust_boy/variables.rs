@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::gb_asm::{Asm, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Expr, Instr, R8};
 
 use super::memory::{MemoryAllocator, MemoryRegion};
 
@@ -72,9 +72,9 @@ impl Var {
         let mut asm = Asm::new();
         asm.ld_a_addr_def(&self.name);
         if self.var_type.size() == 2 {
-            asm.ld(Operand::Reg(Register::L), Operand::Reg(Register::A));
-            asm.ld_a_addr_def(&format!("{}+1", self.name));
-            asm.ld(Operand::Reg(Register::H), Operand::Reg(Register::A));
+            asm.ld(R8::L, R8::A);
+            asm.ld_a_addr_def(Expr::sym(&self.name) + 1);
+            asm.ld(R8::H, R8::A);
         }
         asm.get_main_instrs()
     }
@@ -102,11 +102,8 @@ impl Var {
 fn store(asm: &mut Asm, name: &str, var_type: VarType, value: i32) {
     match var_type {
         VarType::U8 | VarType::I8 => {
-            if value < 0 {
-                asm.ld_a_label(&format!("{}", value));
-            } else {
-                asm.ld_a(value as u8);
-            }
+            // A negative value is written as such: `ld a, -1`
+            asm.ld(R8::A, value);
             asm.ld_addr_def_a(name);
         }
         VarType::U16 | VarType::I16 => {
@@ -114,7 +111,7 @@ fn store(asm: &mut Asm, name: &str, var_type: VarType, value: i32) {
             asm.ld_a(low);
             asm.ld_addr_def_a(name);
             asm.ld_a(high);
-            asm.ld_addr_def_a(&format!("{}+1", name));
+            asm.ld_addr_def_a(Expr::sym(name) + 1);
         }
     }
 }

@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use super::memory::{MemoryAllocator, MemoryRegion};
 use super::tiles::TileId;
 use crate::{
-    gb_asm::{Asm, Condition, Instr, LabelAllocator, Operand, Register, is_identifier},
-    gb_std::graphics::sprites::{MoveDir, move_coord_limit, pivot},
+    gb_asm::{Asm, Condition, Expr, Instr, LabelAllocator, Mem, R8, R16, is_identifier},
+    gb_std::graphics::sprites::{MoveDir, move_coord_limit, oam_address, pivot},
     hw,
     rust_boy::animations::Animation,
 };
@@ -84,8 +84,8 @@ impl SpriteSize {
     /// The `hardware.inc` LCDC flag that selects this size
     pub(crate) fn lcdc_flag(self) -> &'static str {
         match self {
-            SpriteSize::Size8x8 => "LCDCF_OBJ8",
-            SpriteSize::Size8x16 => "LCDCF_OBJ16",
+            SpriteSize::Size8x8 => hw::LCDCF_OBJ8,
+            SpriteSize::Size8x16 => hw::LCDCF_OBJ16,
         }
     }
 }
@@ -212,12 +212,12 @@ impl Axis {
     }
 
     /// The address of the sprite's coordinate in OAM: Y is byte 0 of its entry, X byte 1
-    fn oam_address(self, sprite: &SpriteData) -> String {
+    fn oam_address(self, sprite: &SpriteData) -> Expr {
         let byte = match self {
             Axis::Y => hw::OAMA_Y,
             Axis::X => hw::OAMA_X,
         };
-        hw::oam_address(sprite.oam_index, byte)
+        oam_address(sprite.oam_index, byte)
     }
 }
 
@@ -622,7 +622,7 @@ impl SpriteManager {
         sprite.check_animation_index(animation_index);
         let mut asm = Asm::new();
         asm.ld_a(animation_index);
-        asm.ld_addr_def_a(&sprite.current_var());
+        asm.ld_addr_def_a(sprite.current_var());
         asm.get_main_instrs()
     }
 
@@ -646,7 +646,7 @@ impl SpriteManager {
         sprite.check_has_animations("disable_animation");
         let mut asm = Asm::new();
         asm.ld_a(ANIM_DISABLED);
-        asm.ld_addr_def_a(&sprite.current_var());
+        asm.ld_addr_def_a(sprite.current_var());
         asm.get_main_instrs()
     }
 
@@ -846,7 +846,7 @@ impl SpriteManager {
         }) else {
             return Vec::new();
         };
-        let followers: Vec<(String, i16)> = members
+        let followers: Vec<(Expr, i16)> = members
             .iter()
             .filter(|sprite| sprite.oam_index != lead.oam_index)
             .map(|sprite| (axis.oam_address(sprite), pos(sprite) - pos(lead)))
@@ -869,12 +869,12 @@ impl SpriteManager {
 
         // Draw all sprites to OAM (sorted by oam_index to ensure correct order); the
         // OAM was cleared before (gb_std::graphics::sprites::clear_objects_screen)
-        asm.ld_hl_label("_OAMRAM");
+        asm.ld(R16::HL, hw::OAMRAM);
         let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
         sorted_sprites.sort_by_key(|s| s.oam_index);
         let write = |asm: &mut Asm, value: u8| {
             asm.ld_a(value);
-            asm.ld(Operand::AddrRegInc(Register::HL), Operand::Reg(Register::A));
+            asm.ld(Mem::Hli, R8::A);
         };
         for sprite in sorted_sprites {
             // Y position (add 16 for screen offset; `add` checked that it fits, B17)
@@ -913,10 +913,10 @@ impl SpriteManager {
         let coord = axis.oam_address(self.sprite(id));
         let mut asm = Asm::new();
         asm.ld_a_addr_def(var_name);
-        asm.ld(Operand::Reg(Register::B), Operand::Reg(Register::A));
+        asm.ld(R8::B, R8::A);
         asm.ld_a_addr_def(&coord);
-        asm.add(Operand::Reg(Register::B));
-        asm.ld_addr_def_a(&coord);
+        asm.add(R8::B);
+        asm.ld_addr_def_a(coord);
         asm.get_main_instrs()
     }
 
@@ -995,7 +995,7 @@ impl SpriteManager {
     /// If there is no sprite `id`.
     pub fn get_y(&self, id: SpriteId) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a_addr_def(&Axis::Y.oam_address(self.sprite(id)));
+        asm.ld_a_addr_def(Axis::Y.oam_address(self.sprite(id)));
         asm.get_main_instrs()
     }
 
@@ -1005,7 +1005,7 @@ impl SpriteManager {
     /// If there is no sprite `id`.
     pub fn get_x(&self, id: SpriteId) -> Vec<Instr> {
         let mut asm = Asm::new();
-        asm.ld_a_addr_def(&Axis::X.oam_address(self.sprite(id)));
+        asm.ld_a_addr_def(Axis::X.oam_address(self.sprite(id)));
         asm.get_main_instrs()
     }
 
@@ -1055,7 +1055,7 @@ impl SpriteManager {
 
         // Increment frame counter
         asm.ld_a_addr_def("wFrameCounter");
-        asm.inc(Operand::Reg(Register::A));
+        asm.inc(R8::A);
         asm.ld_addr_def_a("wFrameCounter");
 
         // Compare with delay value

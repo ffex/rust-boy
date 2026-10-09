@@ -1,10 +1,15 @@
 //! The SM83 (Game Boy CPU) instructions and the RGBDS directives, as data.
 //!
-//! Each instruction family has one shape:
-//! - the 8-bit ALU instructions work on `a` and take one source, [`Operand`]:
-//!   [`Instr::Add`], [`Instr::Adc`], [`Instr::Sub`], [`Instr::Sbc`], [`Instr::And`],
-//!   [`Instr::Xor`], [`Instr::Or`], [`Instr::Cp`] (`cp a, src`); the 16-bit additions are
-//!   [`Instr::AddHl`] (`add hl, r16`) and [`Instr::AddSp`] (`add sp, e8`);
+//! Each instruction family has one shape, with typed operands:
+//! - the loads, [`Instr::Ld`] and [`Instr::Ldh`], take a destination [`Dst`] (a register or
+//!   memory, never a value: `ld 1, 2` cannot be written) and a source [`Operand`] (a
+//!   register, memory, or a value [`Expr`]);
+//! - the 8-bit ALU instructions work on `a` and take one source, an [`AluOperand`] (an
+//!   8-bit register, `[hl]` or a value): [`Instr::Add`], [`Instr::Adc`], [`Instr::Sub`],
+//!   [`Instr::Sbc`], [`Instr::And`], [`Instr::Xor`], [`Instr::Or`], [`Instr::Cp`]
+//!   (`cp a, src`); the 16-bit additions are [`Instr::AddHl`] (`add hl, r16`) and
+//!   [`Instr::AddSp`] (`add sp, e8`);
+//! - `inc` and `dec` take an [`IncDec`]: an 8-bit register, `[hl]`, or a 16-bit register;
 //! - the rotates, shifts and `swap` take one [`R8`] (an 8-bit register or `[hl]`):
 //!   [`Instr::Rlc`], [`Instr::Rrc`], [`Instr::Rl`], [`Instr::Rr`], [`Instr::Sla`],
 //!   [`Instr::Sra`], [`Instr::Swap`], [`Instr::Srl`]; the faster forms on `a` take nothing
@@ -13,22 +18,29 @@
 //!   [`Instr::Set`], [`Instr::Res`];
 //! - `push` and `pop` take an [`R16Stack`].
 //!
-//! An operand that the type cannot rule out (a bit number above 7, an `rst` vector that is
-//! not a multiple of 8 up to `$38`, an ALU source that is a 16-bit register) is rejected by
-//! [`Instr::check`]: [`Asm::emit`](super::Asm::emit) and the RGBDS output panic on it with
-//! a clear message.
+//! What the types cannot rule out is rejected by [`Instr::check`]: a load whose two
+//! operands do not make an SM83 instruction (`ld [hl], [hl]`, `ld b, [de]`, `ld bc, de`), a
+//! constant value that does not fit its operand (`ld a, 300`), a bit number above 7, an
+//! `rst` vector that is not a multiple of 8 up to `$38`. [`Asm::emit`](super::Asm::emit)
+//! and the RGBDS output panic on it with a clear message.
 
 use std::fmt;
+
+use super::expr::Expr;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Instr {
     // Load instructions
+    /// `ld dst, src`: every form but `ld hl, sp + e` ([`Instr::LdHlSp`]); see
+    /// [`Instr::check`] for the pairs it takes
     Ld {
-        dst: Operand,
+        dst: Dst,
         src: Operand,
     },
+    /// `ldh dst, src`: `ldh [n8], a`, `ldh a, [n8]`, `ldh [c], a`, `ldh a, [c]`, the
+    /// address `$FF00` to `$FFFF` (`Mem::Addr`) or `$FF00 + c` (`Mem::C`)
     Ldh {
-        dst: Operand,
+        dst: Dst,
         src: Operand,
     },
     /// `ld hl, sp + offset`
@@ -47,41 +59,43 @@ pub enum Instr {
     // 8-bit arithmetic and logic: `op a, src`
     /// `add a, src`
     Add {
-        src: Operand,
+        src: AluOperand,
     },
     /// `adc a, src`: `a + src + carry`
     Adc {
-        src: Operand,
+        src: AluOperand,
     },
     /// `sub a, src`
     Sub {
-        src: Operand,
+        src: AluOperand,
     },
     /// `sbc a, src`: `a - src - carry`
     Sbc {
-        src: Operand,
+        src: AluOperand,
     },
     /// `and a, src`
     And {
-        src: Operand,
+        src: AluOperand,
     },
     /// `xor a, src`
     Xor {
-        src: Operand,
+        src: AluOperand,
     },
     /// `or a, src`
     Or {
-        src: Operand,
+        src: AluOperand,
     },
     /// `cp a, src`: the flags of `a - src`, `a` unchanged
     Cp {
-        src: Operand,
+        src: AluOperand,
     },
+    /// `inc r8` (Z set from the result, the carry unchanged) or `inc r16` (no flags)
     Inc {
-        operand: Operand,
+        operand: IncDec,
     },
+    /// `dec r8` (Z set from the result, the carry unchanged) or `dec r16` (no flags)
     Dec {
-        operand: Operand,
+        operand: IncDec,
     },
 
     // 16-bit arithmetic
@@ -240,15 +254,25 @@ pub enum Instr {
 }
 
 impl Instr {
-    /// `Ok` if every operand is one the instruction takes, else what is wrong
+    /// `Ok` if the operands make an SM83 instruction, else what is wrong
     ///
-    /// It checks what the operand types cannot rule out: the source of an 8-bit ALU
-    /// instruction (an 8-bit register, `[hl]`, a number or an expression; not a 16-bit
-    /// register, an address or `[hli]`), the bit number of `bit` / `set` / `res` (0 to 7),
-    /// the vector of `rst` (`$00`, `$08`, …, `$38`), and the register of `[hli]` / `[hld]`
-    /// (`hl` only). The other operands of `ld`, `ldh`, `inc` and `dec` are not checked yet.
+    /// It checks what the operand types cannot rule out:
+    /// - the loads: `ld` takes `r8, r8` (not `[hl], [hl]`), `r8, n8`, `r16, n16`, `sp, hl`,
+    ///   `a` with `[bc]`, `[de]`, `[hli]`, `[hld]` or `[n16]` (either way), and `[n16], sp`;
+    ///   `ldh` takes `a` with `[c]` or `[n16]` (either way), the address `$FF00` to `$FFFF`;
+    /// - a constant value ([`Expr::value`]) must fit its operand: -128 to 255 for 8 bits,
+    ///   -32768 to 65535 for 16 bits (a symbol is not checked: its value is known only to
+    ///   RGBDS);
+    /// - the bit number of `bit` / `set` / `res` (0 to 7) and the vector of `rst` (`$00`,
+    ///   `$08`, …, `$38`).
     pub fn check(&self) -> Result<(), String> {
         match self {
+            Instr::Ld { dst, src } => {
+                check_ld(dst, src).map_err(|why| format!("ld {}, {}: {}", dst, src, why))
+            }
+            Instr::Ldh { dst, src } => {
+                check_ldh(dst, src).map_err(|why| format!("ldh {}, {}: {}", dst, src, why))
+            }
             Instr::Add { src }
             | Instr::Adc { src }
             | Instr::Sub { src }
@@ -257,24 +281,9 @@ impl Instr {
             | Instr::Xor { src }
             | Instr::Or { src }
             | Instr::Cp { src } => match src {
-                Operand::Reg(
-                    Register::A
-                    | Register::B
-                    | Register::C
-                    | Register::D
-                    | Register::E
-                    | Register::H
-                    | Register::L,
-                )
-                | Operand::AddrReg(Register::HL)
-                | Operand::Imm(_)
-                | Operand::Label(_) => Ok(()),
-                other => Err(format!(
-                    "{} a, {}: the source of an 8-bit ALU instruction must be an 8-bit \
-                     register, [hl], or an 8-bit value",
-                    self.mnemonic(),
-                    other
-                )),
+                AluOperand::R8(_) => Ok(()),
+                AluOperand::Imm(value) => fits(value, Width::Byte)
+                    .map_err(|why| format!("{} a, {}: {}", self.mnemonic(), src, why)),
             },
             Instr::Bit { bit, .. } | Instr::Set { bit, .. } | Instr::Res { bit, .. }
                 if *bit > 7 =>
@@ -289,22 +298,6 @@ impl Instr {
                 "rst ${:02x}: the vector must be one of $00, $08, $10, $18, $20, $28, $30, $38",
                 vector
             )),
-            Instr::Ld { dst, src } | Instr::Ldh { dst, src } => {
-                for operand in [dst, src] {
-                    if let Operand::AddrRegInc(reg) | Operand::AddrRegDec(reg) = operand {
-                        if *reg != Register::HL {
-                            return Err(format!(
-                                "{} {}, {}: only hl can be incremented or decremented in a \
-                                 load ([hli], [hld])",
-                                self.mnemonic(),
-                                dst,
-                                src
-                            ));
-                        }
-                    }
-                }
-                Ok(())
-            }
             _ => Ok(()),
         }
     }
@@ -323,47 +316,83 @@ impl Instr {
             Instr::Bit { .. } => "bit",
             Instr::Set { .. } => "set",
             Instr::Res { .. } => "res",
-            Instr::Ld { .. } => "ld",
-            Instr::Ldh { .. } => "ldh",
             _ => "instruction",
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Register {
-    A,
-    B,
-    C,
-    D,
-    E,
-    H,
-    L,
-    SP,
-    PC,
-    AF,
-    BC,
-    DE,
-    HL,
+/// The size of a value operand
+#[derive(Clone, Copy)]
+enum Width {
+    /// `n8`: -128 to 255
+    Byte,
+    /// `n16`: -32768 to 65535
+    Word,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Operand {
-    Reg(Register),
-    Imm(u8),
-    Imm16(u16),
-    Addr(u16),
-    AddrDef(String),
-    AddrReg(Register),
-    /// `[hli]`: the byte at `hl`, then `hl` is incremented (`hl` only)
-    AddrRegInc(Register),
-    /// `[hld]`: the byte at `hl`, then `hl` is decremented (`hl` only)
-    AddrRegDec(Register),
-    Label(String),
+/// `Ok` unless `value` is a constant that does not fit in `width` (rgbasm would truncate it)
+fn fits(value: &Expr, width: Width) -> Result<(), String> {
+    let (min, max, bits) = match width {
+        Width::Byte => (-0x80, 0xFF, 8),
+        Width::Word => (-0x8000, 0xFFFF, 16),
+    };
+    match value.value() {
+        Some(v) if !(min..=max).contains(&v) => Err(format!(
+            "the value {} does not fit in {} bits ({} to {})",
+            v, bits, min, max
+        )),
+        _ => Ok(()),
+    }
 }
 
-/// The operand of the instructions that take an 8-bit register or the byte at `[hl]`:
-/// the rotates, shifts, `swap`, `bit`, `set` and `res`
+/// Why `ld dst, src` is not an SM83 instruction, if it is not
+fn check_ld(dst: &Dst, src: &Operand) -> Result<(), String> {
+    match (dst, src) {
+        (Dst::R8(R8::AtHl), Operand::R8(R8::AtHl)) => {
+            Err("[hl] cannot be both the destination and the source".to_string())
+        }
+        (Dst::R8(_), Operand::R8(_)) | (Dst::R16(R16::SP), Operand::R16(R16::HL)) => Ok(()),
+        (Dst::R8(_), Operand::Imm(value)) => fits(value, Width::Byte),
+        (Dst::R16(_), Operand::Imm(value)) => fits(value, Width::Word),
+        (Dst::Mem(Mem::C), _) | (_, Operand::Mem(Mem::C)) => {
+            Err("[c] is an ldh operand: use ldh".to_string())
+        }
+        (Dst::Mem(_), Operand::R8(R8::A)) | (Dst::R8(R8::A), Operand::Mem(_)) => Ok(()),
+        (Dst::Mem(Mem::Addr(_)), Operand::R16(R16::SP)) => Ok(()),
+        (Dst::Mem(_), Operand::R8(_)) | (Dst::R8(_), Operand::Mem(_)) => Err(
+            "only a moves between a register and [bc], [de], [hli], [hld] or an address \
+             ([hl] takes any 8-bit register)"
+                .to_string(),
+        ),
+        (Dst::Mem(_), Operand::Imm(_)) => {
+            Err("a value can only be stored to [hl] (ld [hl], n8)".to_string())
+        }
+        (Dst::R16(_), Operand::R16(_)) => {
+            Err("the only copy between 16-bit registers is ld sp, hl".to_string())
+        }
+        _ => Err("no SM83 ld takes these two operands".to_string()),
+    }
+}
+
+/// Why `ldh dst, src` is not an SM83 instruction, if it is not
+fn check_ldh(dst: &Dst, src: &Operand) -> Result<(), String> {
+    match (dst, src) {
+        (Dst::Mem(mem), Operand::R8(R8::A)) | (Dst::R8(R8::A), Operand::Mem(mem)) => match mem {
+            Mem::C => Ok(()),
+            Mem::Addr(address) => match address.value() {
+                Some(v) if !(0xFF00..=0xFFFF).contains(&v) => {
+                    Err(format!("the address {} is not in $FF00 to $FFFF", address))
+                }
+                _ => Ok(()),
+            },
+            _ => Err("ldh takes [c] or an address from $FF00 to $FFFF".to_string()),
+        },
+        _ => Err("ldh moves a to or from [c] or an address from $FF00 to $FFFF".to_string()),
+    }
+}
+
+/// An 8-bit register, or the byte at `[hl]`: the operand of `ld r8, …`, the ALU
+/// instructions, `inc` / `dec`, the rotates, shifts, `swap`, `bit`, `set` and `res`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum R8 {
     A,
@@ -381,39 +410,9 @@ impl R8 {
     /// Every value, in the order of the SM83 encoding: `b`, `c`, `d`, `e`, `h`, `l`,
     /// `[hl]`, `a`
     pub const ALL: [R8; 8] = [R8::B, R8::C, R8::D, R8::E, R8::H, R8::L, R8::AtHl, R8::A];
-
-    /// The `R8` written `name` (`a`, `b`, …, `[hl]`, any case); panics on anything else
-    #[track_caller]
-    pub(crate) fn from_name(name: &str) -> R8 {
-        let name = name.trim();
-        R8::ALL
-            .into_iter()
-            .find(|r8| r8.to_string().eq_ignore_ascii_case(name))
-            .unwrap_or_else(|| {
-                panic!(
-                    "{:?} is not an 8-bit register or [hl] (a, b, c, d, e, h, l, [hl])",
-                    name
-                )
-            })
-    }
 }
 
-impl From<R8> for Operand {
-    fn from(r8: R8) -> Operand {
-        match r8 {
-            R8::A => Operand::Reg(Register::A),
-            R8::B => Operand::Reg(Register::B),
-            R8::C => Operand::Reg(Register::C),
-            R8::D => Operand::Reg(Register::D),
-            R8::E => Operand::Reg(Register::E),
-            R8::H => Operand::Reg(Register::H),
-            R8::L => Operand::Reg(Register::L),
-            R8::AtHl => Operand::AddrReg(Register::HL),
-        }
-    }
-}
-
-/// A 16-bit register that `add hl, r16` adds
+/// A 16-bit register: the operand of `ld r16, n16`, `inc` / `dec` and `add hl, r16`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum R16 {
     BC,
@@ -423,26 +422,8 @@ pub enum R16 {
 }
 
 impl R16 {
-    /// The `R16` written `name` (`bc`, `de`, `hl`, `sp`, any case); panics on anything else
-    #[track_caller]
-    pub(crate) fn from_name(name: &str) -> R16 {
-        let name = name.trim();
-        [R16::BC, R16::DE, R16::HL, R16::SP]
-            .into_iter()
-            .find(|r16| r16.to_string().eq_ignore_ascii_case(name))
-            .unwrap_or_else(|| panic!("{:?} is not a 16-bit register (bc, de, hl, sp)", name))
-    }
-}
-
-impl From<R16> for Register {
-    fn from(r16: R16) -> Register {
-        match r16 {
-            R16::BC => Register::BC,
-            R16::DE => Register::DE,
-            R16::HL => Register::HL,
-            R16::SP => Register::SP,
-        }
-    }
+    /// Every value, in the order of the SM83 encoding
+    pub const ALL: [R16; 4] = [R16::BC, R16::DE, R16::HL, R16::SP];
 }
 
 /// A register pair that `push` and `pop` move
@@ -455,16 +436,159 @@ pub enum R16Stack {
     AF,
 }
 
-impl From<R16Stack> for Register {
-    fn from(pair: R16Stack) -> Register {
-        match pair {
-            R16Stack::BC => Register::BC,
-            R16Stack::DE => Register::DE,
-            R16Stack::HL => Register::HL,
-            R16Stack::AF => Register::AF,
+/// A byte of memory a load reads or writes, other than `[hl]` ([`R8::AtHl`])
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Mem {
+    /// `[bc]`
+    Bc,
+    /// `[de]`
+    De,
+    /// `[hli]`: the byte at `hl`, then `hl` is incremented
+    Hli,
+    /// `[hld]`: the byte at `hl`, then `hl` is decremented
+    Hld,
+    /// `[c]`: the byte at `$FF00 + c` (`ldh` only)
+    C,
+    /// `[address]`: a variable, a hardware register, any address (`[n16]`; for `ldh`,
+    /// `$FF00` to `$FFFF`)
+    Addr(Expr),
+}
+
+impl Mem {
+    /// `[address]`: `Mem::addr("wScore")`, `Mem::addr(Expr::sym("_OAMRAM") + 4)`,
+    /// `Mem::addr(Expr::hex(0xC000))`
+    #[track_caller]
+    pub fn addr(address: impl Into<Expr>) -> Mem {
+        Mem::Addr(address.into())
+    }
+}
+
+/// The destination of a load: a register or a byte of memory, never a value
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Dst {
+    /// `a`, `b`, …, `l`, `[hl]`
+    R8(R8),
+    /// `bc`, `de`, `hl`, `sp`
+    R16(R16),
+    /// `[bc]`, `[de]`, `[hli]`, `[hld]`, `[c]`, `[address]`
+    Mem(Mem),
+}
+
+/// The source of a load: a register, a byte of memory, or a value
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Operand {
+    /// `a`, `b`, …, `l`, `[hl]`
+    R8(R8),
+    /// `bc`, `de`, `hl`, `sp`
+    R16(R16),
+    /// A value: `n8` or `n16` (a number, a symbol, an expression)
+    Imm(Expr),
+    /// `[bc]`, `[de]`, `[hli]`, `[hld]`, `[c]`, `[address]`
+    Mem(Mem),
+}
+
+/// The source of an 8-bit ALU instruction (`add a, src`, …, `cp a, src`): an 8-bit
+/// register, `[hl]`, or a value
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AluOperand {
+    /// `a`, `b`, …, `l`, `[hl]`
+    R8(R8),
+    /// A value, `n8` (a number, a symbol, an expression)
+    Imm(Expr),
+}
+
+/// The operand of `inc` and `dec`: an 8-bit register, `[hl]`, or a 16-bit register
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IncDec {
+    R8(R8),
+    R16(R16),
+}
+
+impl From<R8> for Dst {
+    fn from(r8: R8) -> Dst {
+        Dst::R8(r8)
+    }
+}
+
+impl From<R16> for Dst {
+    fn from(r16: R16) -> Dst {
+        Dst::R16(r16)
+    }
+}
+
+impl From<Mem> for Dst {
+    fn from(mem: Mem) -> Dst {
+        Dst::Mem(mem)
+    }
+}
+
+impl From<R8> for Operand {
+    fn from(r8: R8) -> Operand {
+        Operand::R8(r8)
+    }
+}
+
+impl From<R16> for Operand {
+    fn from(r16: R16) -> Operand {
+        Operand::R16(r16)
+    }
+}
+
+impl From<Mem> for Operand {
+    fn from(mem: Mem) -> Operand {
+        Operand::Mem(mem)
+    }
+}
+
+impl From<Dst> for Operand {
+    fn from(dst: Dst) -> Operand {
+        match dst {
+            Dst::R8(r8) => Operand::R8(r8),
+            Dst::R16(r16) => Operand::R16(r16),
+            Dst::Mem(mem) => Operand::Mem(mem),
         }
     }
 }
+
+impl From<R8> for AluOperand {
+    fn from(r8: R8) -> AluOperand {
+        AluOperand::R8(r8)
+    }
+}
+
+impl From<R8> for IncDec {
+    fn from(r8: R8) -> IncDec {
+        IncDec::R8(r8)
+    }
+}
+
+impl From<R16> for IncDec {
+    fn from(r16: R16) -> IncDec {
+        IncDec::R16(r16)
+    }
+}
+
+/// A value converts into an [`Operand::Imm`] and an [`AluOperand::Imm`]: an [`Expr`], a
+/// Rust integer, or text read by `Expr::from` (a symbol or a number; it panics on
+/// anything else, a register name included)
+macro_rules! from_value {
+    ($($t:ty),*) => {$(
+        impl From<$t> for Operand {
+            #[track_caller]
+            fn from(value: $t) -> Operand {
+                Operand::Imm(Expr::from(value))
+            }
+        }
+
+        impl From<$t> for AluOperand {
+            #[track_caller]
+            fn from(value: $t) -> AluOperand {
+                AluOperand::Imm(Expr::from(value))
+            }
+        }
+    )*};
+}
+from_value!(Expr, &Expr, &str, String, &String, u8, i8, u16, i16, i32);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JumpTarget {
@@ -482,21 +606,92 @@ pub enum Condition {
 
 impl fmt::Display for R8 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            R8::AtHl => write!(f, "[hl]"),
-            other => write!(f, "{}", Operand::from(*other)),
-        }
+        let name = match self {
+            R8::A => "a",
+            R8::B => "b",
+            R8::C => "c",
+            R8::D => "d",
+            R8::E => "e",
+            R8::H => "h",
+            R8::L => "l",
+            R8::AtHl => "[hl]",
+        };
+        write!(f, "{}", name)
     }
 }
 
 impl fmt::Display for R16 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", Register::from(*self))
+        let name = match self {
+            R16::BC => "bc",
+            R16::DE => "de",
+            R16::HL => "hl",
+            R16::SP => "sp",
+        };
+        write!(f, "{}", name)
     }
 }
 
 impl fmt::Display for R16Stack {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", Register::from(*self))
+        let name = match self {
+            R16Stack::BC => "bc",
+            R16Stack::DE => "de",
+            R16Stack::HL => "hl",
+            R16Stack::AF => "af",
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl fmt::Display for Mem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Mem::Bc => write!(f, "[bc]"),
+            Mem::De => write!(f, "[de]"),
+            Mem::Hli => write!(f, "[hli]"),
+            Mem::Hld => write!(f, "[hld]"),
+            Mem::C => write!(f, "[c]"),
+            Mem::Addr(address) => write!(f, "[{}]", address),
+        }
+    }
+}
+
+impl fmt::Display for Dst {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Dst::R8(r8) => write!(f, "{}", r8),
+            Dst::R16(r16) => write!(f, "{}", r16),
+            Dst::Mem(mem) => write!(f, "{}", mem),
+        }
+    }
+}
+
+impl fmt::Display for Operand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Operand::R8(r8) => write!(f, "{}", r8),
+            Operand::R16(r16) => write!(f, "{}", r16),
+            Operand::Imm(value) => write!(f, "{}", value),
+            Operand::Mem(mem) => write!(f, "{}", mem),
+        }
+    }
+}
+
+impl fmt::Display for AluOperand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AluOperand::R8(r8) => write!(f, "{}", r8),
+            AluOperand::Imm(value) => write!(f, "{}", value),
+        }
+    }
+}
+
+impl fmt::Display for IncDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IncDec::R8(r8) => write!(f, "{}", r8),
+            IncDec::R16(r16) => write!(f, "{}", r16),
+        }
     }
 }

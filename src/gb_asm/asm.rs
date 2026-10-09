@@ -1,4 +1,7 @@
-use super::instr::{Condition, Instr, JumpTarget, Operand, R8, R16, R16Stack, Register};
+use super::expr::Expr;
+use super::instr::{
+    AluOperand, Condition, Dst, IncDec, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
+};
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -89,141 +92,124 @@ impl Asm {
     // ============================================
     // Load instructions
     // ============================================
+    // The operands are typed: a destination is a register (`R8`, `R16`) or memory
+    // (`Mem`, `R8::AtHl`), a source is one of those or a value (an `Expr`, a Rust integer,
+    // or a symbol or number as text). A pair that no SM83 load takes (`ld [hl], [hl]`,
+    // `ld b, [de]`) or a value that does not fit panics.
 
-    pub fn ld(&mut self, dst: Operand, src: Operand) -> &mut Self {
-        self.emit(Instr::Ld { dst, src })
+    /// `ld dst, src`: `ld(R8::B, R8::A)`, `ld(R8::A, 5)`, `ld(R16::HL, "_OAMRAM")`,
+    /// `ld(Mem::Hli, R8::A)`, `ld(Mem::addr("wScore"), R8::A)`
+    ///
+    /// ```
+    /// use rust_boy::gb_asm::{Asm, Expr, Mem, R8, R16};
+    ///
+    /// let mut asm = Asm::new();
+    /// asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4)
+    ///     .ld(R8::A, -1)
+    ///     .ld(Mem::Hli, R8::A)
+    ///     .ld(R8::B, R8::AtHl);
+    /// let text: Vec<String> = asm.get_main_instrs().iter().map(|i| i.to_string()).collect();
+    /// assert_eq!(text, ["ld hl, _OAMRAM+4", "ld a, -1", "ld [hli], a", "ld b, [hl]"]);
+    /// ```
+    ///
+    /// A value is never a destination, so `ld 1, 2` does not compile:
+    /// ```compile_fail,E0277
+    /// use rust_boy::gb_asm::Asm;
+    ///
+    /// Asm::new().ld(1, 2);
+    /// ```
+    ///
+    /// # Panics
+    /// If [`Instr::check`] rejects the operands: a pair that no SM83 load takes
+    /// (`ld [hl], [hl]`, `ld b, [de]`, `ld bc, de`, `ld [hli], 5`), or a constant that does
+    /// not fit (`ld a, 300`).
+    #[track_caller]
+    pub fn ld(&mut self, dst: impl Into<Dst>, src: impl Into<Operand>) -> &mut Self {
+        self.emit(Instr::Ld {
+            dst: dst.into(),
+            src: src.into(),
+        })
     }
 
+    /// `ld a, value`
     pub fn ld_a(&mut self, value: u8) -> &mut Self {
-        self.ld(Operand::Reg(Register::A), Operand::Imm(value))
+        self.ld(R8::A, value)
     }
 
+    /// `ld b, value`
     pub fn ld_b(&mut self, value: u8) -> &mut Self {
-        self.ld(Operand::Reg(Register::B), Operand::Imm(value))
+        self.ld(R8::B, value)
     }
 
+    /// `ld c, value`
     pub fn ld_c(&mut self, value: u8) -> &mut Self {
-        self.ld(Operand::Reg(Register::C), Operand::Imm(value))
+        self.ld(R8::C, value)
     }
 
+    /// `ld d, value`
     pub fn ld_d(&mut self, value: u8) -> &mut Self {
-        self.ld(Operand::Reg(Register::D), Operand::Imm(value))
+        self.ld(R8::D, value)
     }
 
+    /// `ld e, value`
     pub fn ld_e(&mut self, value: u8) -> &mut Self {
-        self.ld(Operand::Reg(Register::E), Operand::Imm(value))
+        self.ld(R8::E, value)
     }
 
+    /// `ld h, value`
     pub fn ld_h(&mut self, value: u8) -> &mut Self {
-        self.ld(Operand::Reg(Register::H), Operand::Imm(value))
+        self.ld(R8::H, value)
     }
 
+    /// `ld l, value`
     pub fn ld_l(&mut self, value: u8) -> &mut Self {
-        self.ld(Operand::Reg(Register::L), Operand::Imm(value))
+        self.ld(R8::L, value)
     }
 
+    /// `ld bc, value`
     pub fn ld_bc(&mut self, value: u16) -> &mut Self {
-        self.ld(Operand::Reg(Register::BC), Operand::Imm16(value))
+        self.ld(R16::BC, value)
     }
 
+    /// `ld de, value`
     pub fn ld_de(&mut self, value: u16) -> &mut Self {
-        self.ld(Operand::Reg(Register::DE), Operand::Imm16(value))
+        self.ld(R16::DE, value)
     }
 
+    /// `ld hl, value`
     pub fn ld_hl(&mut self, value: u16) -> &mut Self {
-        self.ld(Operand::Reg(Register::HL), Operand::Imm16(value))
+        self.ld(R16::HL, value)
     }
 
-    pub fn ld_a_label(&mut self, label: &str) -> &mut Self {
-        self.ld(Operand::Reg(Register::A), Operand::Label(label.to_string()))
+    /// `ld a, [address]`: `ld_a_addr_def("rLY")`, `ld_a_addr_def(Expr::sym("_OAMRAM") + 4)`
+    ///
+    /// # Panics
+    /// If `address` is text that is neither a symbol nor a number (see [`Expr`]).
+    #[track_caller]
+    pub fn ld_a_addr_def(&mut self, address: impl Into<Expr>) -> &mut Self {
+        self.ld(R8::A, Mem::addr(address))
     }
 
-    pub fn ld_bc_label(&mut self, label: &str) -> &mut Self {
-        self.ld(
-            Operand::Reg(Register::BC),
-            Operand::Label(label.to_string()),
-        )
+    /// `ld [address], a`: `ld_addr_def_a("rLCDC")`, `ld_addr_def_a(Expr::sym("wScore") + 1)`
+    ///
+    /// # Panics
+    /// If `address` is text that is neither a symbol nor a number (see [`Expr`]).
+    #[track_caller]
+    pub fn ld_addr_def_a(&mut self, address: impl Into<Expr>) -> &mut Self {
+        self.ld(Mem::addr(address), R8::A)
     }
 
-    pub fn ld_de_label(&mut self, label: &str) -> &mut Self {
-        self.ld(
-            Operand::Reg(Register::DE),
-            Operand::Label(label.to_string()),
-        )
-    }
-
-    pub fn ld_hl_label(&mut self, label: &str) -> &mut Self {
-        self.ld(
-            Operand::Reg(Register::HL),
-            Operand::Label(label.to_string()),
-        )
-    }
-
-    pub fn ld_hli_label(&mut self, label: &str) -> &mut Self {
-        self.ld(
-            Operand::AddrRegInc(Register::HL),
-            Operand::Label(label.to_string()),
-        )
-    }
-
-    pub fn ld_b_label(&mut self, label: &str) -> &mut Self {
-        self.ld(Operand::Reg(Register::B), Operand::Label(label.to_string()))
-    }
-
-    pub fn ld_c_label(&mut self, label: &str) -> &mut Self {
-        self.ld(Operand::Reg(Register::C), Operand::Label(label.to_string()))
-    }
-
-    pub fn ld_d_label(&mut self, label: &str) -> &mut Self {
-        self.ld(Operand::Reg(Register::D), Operand::Label(label.to_string()))
-    }
-
-    pub fn ld_e_label(&mut self, label: &str) -> &mut Self {
-        self.ld(Operand::Reg(Register::E), Operand::Label(label.to_string()))
-    }
-
-    pub fn ld_h_label(&mut self, label: &str) -> &mut Self {
-        self.ld(Operand::Reg(Register::H), Operand::Label(label.to_string()))
-    }
-
-    pub fn ld_l_label(&mut self, label: &str) -> &mut Self {
-        self.ld(Operand::Reg(Register::L), Operand::Label(label.to_string()))
-    }
-
-    pub fn ld_addr_label_a(&mut self, address: &str) -> &mut Self {
-        self.ld(
-            Operand::Label(address.to_string()),
-            Operand::Reg(Register::A),
-        )
-    }
-
-    pub fn ldh(&mut self, dst: Operand, src: Operand) -> &mut Self {
-        self.emit(Instr::Ldh { dst, src })
-    }
-
-    pub fn ldh_label(&mut self, dest: &str, src: &str) -> &mut Self {
-        self.ldh(
-            Operand::Label(dest.to_string()),
-            Operand::Label(src.to_string()),
-        )
-    }
-
-    pub fn ld_a_addr_def(&mut self, def_name: &str) -> &mut Self {
-        self.ld(
-            Operand::Reg(Register::A),
-            Operand::AddrDef(def_name.to_string()),
-        )
-    }
-
-    pub fn ld_addr_def_a(&mut self, def_name: &str) -> &mut Self {
-        self.ld(
-            Operand::AddrDef(def_name.to_string()),
-            Operand::Reg(Register::A),
-        )
-    }
-
-    pub fn ld_a_addr_reg(&mut self, reg: Register) -> &mut Self {
-        self.ld(Operand::Reg(Register::A), Operand::AddrReg(reg))
+    /// `ldh dst, src`: `ldh(Mem::addr("rP1"), R8::A)`, `ldh(R8::A, Mem::C)`
+    ///
+    /// # Panics
+    /// If [`Instr::check`] rejects the operands: `ldh` moves `a` to or from `[c]` or an
+    /// address from `$FF00` to `$FFFF`.
+    #[track_caller]
+    pub fn ldh(&mut self, dst: impl Into<Dst>, src: impl Into<Operand>) -> &mut Self {
+        self.emit(Instr::Ldh {
+            dst: dst.into(),
+            src: src.into(),
+        })
     }
 
     /// `ld hl, sp + offset`
@@ -244,151 +230,100 @@ impl Asm {
     // ============================================
     // 8-bit arithmetic and logic: `op a, src`
     // ============================================
-    // `src` is an 8-bit register, `[hl]` (`Operand::AddrReg(Register::HL)`), a number
-    // or an expression (`Operand::Label`); anything else panics.
+    // `src` is an 8-bit register or `[hl]` (`R8`), or a value: an `Expr`, a Rust integer,
+    // or a symbol or number as text (`cp("BRICK_LEFT")`). A constant that does not fit in
+    // 8 bits (-128 to 255) panics.
 
     /// `add a, src`
-    #[track_caller]
-    pub fn add(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::Add { src })
-    }
-
-    /// `add a, src`, `add hl, src` or `add sp, src`, both as text: `add_label("a", "5")`,
-    /// `add_label("hl", "bc")`, `add_label("sp", "-2")`
     ///
-    /// # Panics
-    /// Panics if `dst` is not `a`, `hl` or `sp`; for `hl` if `src` is not `bc`, `de`, `hl`
-    /// or `sp`; for `sp` if `src` is not a decimal number from -128 to 127 (an expression
-    /// is no longer accepted there).
+    /// The source is an 8-bit register, `[hl]` or a value; a 16-bit register or memory
+    /// does not compile (`add a, hl`, `cp a, [wCount]`):
+    /// ```compile_fail,E0277
+    /// use rust_boy::gb_asm::{Asm, R16};
+    ///
+    /// Asm::new().add(R16::HL);
+    /// ```
+    /// ```compile_fail,E0277
+    /// use rust_boy::gb_asm::{Asm, Mem};
+    ///
+    /// Asm::new().cp(Mem::addr("wCount"));
+    /// ```
     #[track_caller]
-    pub fn add_label(&mut self, dst: &str, src: &str) -> &mut Self {
-        match dst.trim().to_ascii_lowercase().as_str() {
-            "a" => self.add(Operand::Label(src.to_string())),
-            "hl" => self.add_hl(R16::from_name(src)),
-            "sp" => match src.trim().parse::<i8>() {
-                Ok(offset) => self.add_sp(offset),
-                Err(_) => panic!(
-                    "add_label(\"sp\", {:?}): the offset of add sp must be a number from \
-                     -128 to 127",
-                    src
-                ),
-            },
-            _ => panic!(
-                "add_label({:?}, {:?}): the destination of add must be a, hl or sp",
-                dst, src
-            ),
-        }
+    pub fn add(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::Add { src: src.into() })
     }
 
     /// `adc a, src`: `a + src + carry`
     #[track_caller]
-    pub fn adc(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::Adc { src })
-    }
-
-    /// `adc a, src`, the source as text
-    #[track_caller]
-    pub fn adc_label(&mut self, src: &str) -> &mut Self {
-        self.adc(Operand::Label(src.to_string()))
+    pub fn adc(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::Adc { src: src.into() })
     }
 
     /// `sub a, src`
     #[track_caller]
-    pub fn sub(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::Sub { src })
-    }
-
-    /// `sub a, src`, both as text: `sub_label("a", "8")`
-    ///
-    /// # Panics
-    /// Panics if `dst` is not `a`.
-    #[track_caller]
-    pub fn sub_label(&mut self, dst: &str, src: &str) -> &mut Self {
-        check_dst_a("sub", dst, src);
-        self.sub(Operand::Label(src.to_string()))
+    pub fn sub(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::Sub { src: src.into() })
     }
 
     /// `sbc a, src`: `a - src - carry`
     #[track_caller]
-    pub fn sbc(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::Sbc { src })
+    pub fn sbc(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::Sbc { src: src.into() })
     }
 
     /// `and a, src`
     #[track_caller]
-    pub fn and(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::And { src })
-    }
-
-    /// `and a, src`, the source as text
-    #[track_caller]
-    pub fn and_label(&mut self, src: &str) -> &mut Self {
-        self.and(Operand::Label(src.to_string()))
+    pub fn and(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::And { src: src.into() })
     }
 
     /// `xor a, src`
     #[track_caller]
-    pub fn xor(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::Xor { src })
-    }
-
-    /// `xor a, src`, both as text: `xor_label("a", "b")`
-    ///
-    /// # Panics
-    /// Panics if `dst` is not `a`.
-    #[track_caller]
-    pub fn xor_label(&mut self, dst: &str, src: &str) -> &mut Self {
-        check_dst_a("xor", dst, src);
-        self.xor(Operand::Label(src.to_string()))
+    pub fn xor(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::Xor { src: src.into() })
     }
 
     /// `or a, src`
     #[track_caller]
-    pub fn or(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::Or { src })
-    }
-
-    /// `or a, src`, both as text: `or_label("a", "c")`
-    ///
-    /// # Panics
-    /// Panics if `dst` is not `a`.
-    #[track_caller]
-    pub fn or_label(&mut self, dst: &str, src: &str) -> &mut Self {
-        check_dst_a("or", dst, src);
-        self.or(Operand::Label(src.to_string()))
+    pub fn or(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::Or { src: src.into() })
     }
 
     /// `cp a, src`: the flags of `a - src`
     #[track_caller]
-    pub fn cp(&mut self, src: Operand) -> &mut Self {
-        self.emit(Instr::Cp { src })
+    pub fn cp(&mut self, src: impl Into<AluOperand>) -> &mut Self {
+        self.emit(Instr::Cp { src: src.into() })
     }
 
     /// `cp a, value`
     pub fn cp_imm(&mut self, value: u8) -> &mut Self {
-        self.cp(Operand::Imm(value))
+        self.cp(value)
     }
 
-    /// `cp a, src`, the source as text
-    #[track_caller]
-    pub fn cp_label(&mut self, src: &str) -> &mut Self {
-        self.cp(Operand::Label(src.to_string()))
+    /// `inc operand`: an 8-bit register, `[hl]` or a 16-bit register
+    ///
+    /// Anything else does not compile, a value (`inc 5`) or memory (`inc [wCount]`):
+    /// ```compile_fail,E0277
+    /// use rust_boy::gb_asm::Asm;
+    ///
+    /// Asm::new().inc(5);
+    /// ```
+    /// ```compile_fail,E0277
+    /// use rust_boy::gb_asm::{Asm, Mem};
+    ///
+    /// Asm::new().inc(Mem::addr("wCount"));
+    /// ```
+    pub fn inc(&mut self, operand: impl Into<IncDec>) -> &mut Self {
+        self.emit(Instr::Inc {
+            operand: operand.into(),
+        })
     }
 
-    pub fn inc(&mut self, operand: Operand) -> &mut Self {
-        self.emit(Instr::Inc { operand })
-    }
-
-    pub fn inc_label(&mut self, register: &str) -> &mut Self {
-        self.inc(Operand::Label(register.to_string()))
-    }
-
-    pub fn dec(&mut self, operand: Operand) -> &mut Self {
-        self.emit(Instr::Dec { operand })
-    }
-
-    pub fn dec_label(&mut self, register: &str) -> &mut Self {
-        self.dec(Operand::Label(register.to_string()))
+    /// `dec operand`: an 8-bit register, `[hl]` or a 16-bit register
+    pub fn dec(&mut self, operand: impl Into<IncDec>) -> &mut Self {
+        self.emit(Instr::Dec {
+            operand: operand.into(),
+        })
     }
 
     // ============================================
@@ -464,27 +399,9 @@ impl Asm {
         self.emit(Instr::Srl { operand })
     }
 
-    /// `srl operand`, the operand as text (`"a"`, `"[hl]"`)
-    ///
-    /// # Panics
-    /// Panics if `register` is not an 8-bit register or `[hl]`.
-    #[track_caller]
-    pub fn srl_label(&mut self, register: &str) -> &mut Self {
-        self.srl(R8::from_name(register))
-    }
-
     /// `swap operand`: swap the two nibbles
     pub fn swap(&mut self, operand: R8) -> &mut Self {
         self.emit(Instr::Swap { operand })
-    }
-
-    /// `swap operand`, the operand as text (`"a"`, `"[hl]"`)
-    ///
-    /// # Panics
-    /// Panics if `register` is not an 8-bit register or `[hl]`.
-    #[track_caller]
-    pub fn swap_label(&mut self, register: &str) -> &mut Self {
-        self.swap(R8::from_name(register))
     }
 
     // ============================================
@@ -717,17 +634,4 @@ impl Asm {
             line: line.to_string(),
         })
     }
-}
-
-/// Panics unless `dst`, the destination of an 8-bit ALU instruction written as text, is `a`
-#[track_caller]
-fn check_dst_a(mnemonic: &str, dst: &str, src: &str) {
-    assert!(
-        dst.trim().eq_ignore_ascii_case("a"),
-        "{}_label({:?}, {:?}): the destination of {} must be a",
-        mnemonic,
-        dst,
-        src,
-        mnemonic
-    );
 }

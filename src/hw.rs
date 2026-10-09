@@ -30,10 +30,38 @@ pub const SCRN_ROW_TILES: usize = 32;
 /// Rows in a tilemap, `SCRN_VY_B`
 pub const SCRN_ROWS: usize = 32;
 
+/// `hardware.inc` name of the LCD control register
+pub const LCDC: &str = "rLCDC";
+/// `hardware.inc` name of the LCD Y coordinate register (144 to 153: VBlank)
+pub const LY: &str = "rLY";
+/// `hardware.inc` name of the joypad register
+pub const P1: &str = "rP1";
+/// `hardware.inc` names of the palette registers: background, objects 0 and 1
+pub const BGP: &str = "rBGP";
+pub const OBP0: &str = "rOBP0";
+pub const OBP1: &str = "rOBP1";
+
+/// `hardware.inc` LCDC flag: the LCD is on
+pub const LCDCF_ON: &str = "LCDCF_ON";
+/// `hardware.inc` LCDC flag: the background is shown
+pub const LCDCF_BGON: &str = "LCDCF_BGON";
+/// `hardware.inc` LCDC flag: the objects (sprites) are shown
+pub const LCDCF_OBJON: &str = "LCDCF_OBJON";
+/// `hardware.inc` LCDC flag: 8x8 objects
+pub const LCDCF_OBJ8: &str = "LCDCF_OBJ8";
+/// `hardware.inc` LCDC flag: 8x16 objects
+pub const LCDCF_OBJ16: &str = "LCDCF_OBJ16";
 /// `hardware.inc` LCDC flag: the background shows the tilemap at `$9800`
 pub const LCDCF_BG9800: &str = "LCDCF_BG9800";
 /// `hardware.inc` LCDC flag: the background shows the tilemap at `$9C00`
 pub const LCDCF_BG9C00: &str = "LCDCF_BG9C00";
+
+/// `hardware.inc` value for `rP1`: select the buttons (A, B, Select, Start)
+pub const P1F_GET_BTN: &str = "P1F_GET_BTN";
+/// `hardware.inc` value for `rP1`: select the D-pad
+pub const P1F_GET_DPAD: &str = "P1F_GET_DPAD";
+/// `hardware.inc` value for `rP1`: select nothing
+pub const P1F_GET_NONE: &str = "P1F_GET_NONE";
 
 /// Start of WRAM bank 0, `_RAM`
 pub const WRAM0: u16 = 0xC000;
@@ -63,14 +91,10 @@ pub const OAM_X_OFFSET: u8 = 8;
 /// OAM Y of the screen's top edge: OAM Y = screen y + 16
 pub const OAM_Y_OFFSET: u8 = 16;
 
-/// The address of byte `byte` (`OAMA_Y`, `OAMA_X`, ...) of OAM entry `index`, as the
-/// generated code writes it: `_OAMRAM+5` for entry 1, X
-pub fn oam_address(index: u8, byte: u8) -> String {
-    format!(
-        "{}+{}",
-        OAMRAM,
-        u16::from(index) * u16::from(OAM_ENTRY_SIZE) + u16::from(byte)
-    )
+/// The offset from [`OAMRAM`] of byte `byte` (`OAMA_Y`, `OAMA_X`, ...) of OAM entry
+/// `index`: 5 for entry 1, X (the generated code writes `_OAMRAM+5`)
+pub fn oam_offset(index: u8, byte: u8) -> u16 {
+    u16::from(index) * u16::from(OAM_ENTRY_SIZE) + u16::from(byte)
 }
 
 #[cfg(test)]
@@ -78,10 +102,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_oam_address() {
-        assert_eq!(oam_address(0, OAMA_Y), "_OAMRAM+0");
-        assert_eq!(oam_address(1, OAMA_X), "_OAMRAM+5");
-        assert_eq!(oam_address(39, OAMA_TILEID), "_OAMRAM+158");
+    fn test_oam_offset() {
+        assert_eq!(oam_offset(0, OAMA_Y), 0);
+        assert_eq!(oam_offset(1, OAMA_X), 5);
+        assert_eq!(oam_offset(39, OAMA_TILEID), 158);
     }
 
     #[test]

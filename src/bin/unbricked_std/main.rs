@@ -2,7 +2,7 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, LabelAllocator, Operand},
+    gb_asm::{Asm, LabelAllocator, R8},
     gb_std::{
         flow::{Emittable, If},
         graphics::{
@@ -54,7 +54,7 @@ fn main() {
     sprite_manager.add_sprite(32, 100, 1, 0); // Ball (id 1)
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumX");
-    asm.ld_a_label("-1");
+    asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
     asm.emit_all(sprite_manager.draw());
 
@@ -105,7 +105,7 @@ fn main() {
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
-    asm.ld_a_label("-1");
+    asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumX");
     asm.label("BounceOnRightEnd");
 
@@ -115,7 +115,7 @@ fn main() {
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
-    asm.ld_a_label("1");
+    asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumX");
     asm.label("BounceOnLeftEnd");
 
@@ -125,7 +125,7 @@ fn main() {
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
-    asm.ld_a_label("-1");
+    asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
     asm.label("BounceOnBottomEnd");
 
@@ -139,7 +139,7 @@ fn main() {
         let ball_y_plus_5 = {
             let mut a = Asm::new();
             a.emit_all(ball.get_y());
-            a.add(Operand::Imm(5));
+            a.add(5);
             a.get_main_instrs()
         };
 
@@ -147,7 +147,7 @@ fn main() {
         let paddle_x_minus_8 = {
             let mut a = Asm::new();
             a.emit_all(paddle.get_x());
-            a.sub(Operand::Imm(8));
+            a.sub(8);
             a.get_main_instrs()
         };
 
@@ -155,14 +155,14 @@ fn main() {
         let paddle_x_plus_16 = {
             let mut a = Asm::new();
             a.emit_all(paddle.get_x());
-            a.add(Operand::Imm(16));
+            a.add(16);
             a.get_main_instrs()
         };
 
         // Bounce body: set Y momentum to -1
         let bounce = {
             let mut a = Asm::new();
-            a.ld_a_label("-1");
+            a.ld(R8::A, -1);
             a.ld_addr_def_a("wBallMomentumY");
             a.get_main_instrs()
         };

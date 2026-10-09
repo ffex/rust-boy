@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::gb_asm::labels::{code_lines, split_def, split_label, symbol_words};
-use crate::gb_asm::{Asm, Condition, Instr, Operand, Register};
+use crate::gb_asm::{Asm, Condition, Instr, R8, R16};
 use crate::gb_std::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
 use crate::gb_std::inputs::update_keys;
 
@@ -439,9 +439,9 @@ fn generate_delay() -> Vec<Instr> {
     asm.comment("Delay loop using BC as counter");
     asm.comment("@param bc: delay counter (higher = longer delay)");
     asm.label("Delay");
-    asm.ld(Operand::Reg(Register::A), Operand::Reg(Register::B));
-    asm.or(Operand::Reg(Register::C));
-    asm.dec(Operand::Reg(Register::BC));
+    asm.ld(R8::A, R8::B);
+    asm.or(R8::C);
+    asm.dec(R16::BC);
     asm.jr_cond(Condition::NZ, "Delay");
     asm.ret();
 
@@ -451,6 +451,7 @@ fn generate_delay() -> Vec<Instr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gb_asm::Expr;
 
     fn function_body(label: &str) -> Vec<Instr> {
         let mut asm = Asm::new();
@@ -572,8 +573,8 @@ mod tests {
             .call("Func")
             .jp_cond(Condition::NZ, ".loop")
             .jr("Other.local")
-            .ld_hl_label("Table + 2")
-            .ld_bc_label("TilesEnd - Tiles")
+            .ld(R16::HL, Expr::sym("Table") + 2)
+            .ld(R16::BC, Expr::sym("TilesEnd") - "Tiles")
             .ld_a(5)
             .comment("call NotAReference")
             .raw("Raw: dw Target ; NotAReference either")

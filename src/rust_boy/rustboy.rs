@@ -1,7 +1,7 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
 use crate::gb_asm::labels::code_lines;
-use crate::gb_asm::{Asm, Chunk, Instr, JumpTarget, LabelAllocator, is_identifier};
+use crate::gb_asm::{Asm, Chunk, Expr, Instr, JumpTarget, LabelAllocator, R8, is_identifier};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
 use crate::hw;
@@ -527,7 +527,7 @@ impl RustBoy {
 
         // Turn off screen for safe VRAM access
         startup.ld_a(0);
-        startup.ld_addr_def_a("rLCDC");
+        startup.ld_addr_def_a(hw::LCDC);
 
         // Copy the tile data to VRAM (empty blobs are skipped, B27)
         startup.emit_all(self.tiles.generate_memcopy_calls());
@@ -542,7 +542,7 @@ impl RustBoy {
 
         // Default palettes, every one of them (OBP1 too, B28)
         startup.ld_a(DEFAULT_PALETTE);
-        for palette in ["rBGP", "rOBP0", "rOBP1"] {
+        for palette in [hw::BGP, hw::OBP0, hw::OBP1] {
             startup.ld_addr_def_a(palette);
         }
 
@@ -556,15 +556,15 @@ impl RustBoy {
         // Turn on screen, with the sprite size chosen by set_sprite_size, and the
         // background map chosen by set_background_tilemap (`LCDCF_BG9800` is 0, so it is
         // left out, as before B19)
-        let mut lcdc = format!(
-            "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
-            self.sprites.size().lcdc_flag()
-        );
+        let mut lcdc = Expr::sym(hw::LCDCF_ON)
+            | hw::LCDCF_BGON
+            | hw::LCDCF_OBJON
+            | self.sprites.size().lcdc_flag();
         if self.background_tilemap != TilemapArea::Map9800 {
-            lcdc = format!("{} | {}", lcdc, self.background_tilemap.lcdc_bg_flag());
+            lcdc = lcdc | self.background_tilemap.lcdc_bg_flag();
         }
-        finish.ld_a_label(&lcdc);
-        finish.ld_addr_def_a("rLCDC");
+        finish.ld(R8::A, lcdc);
+        finish.ld_addr_def_a(hw::LCDC);
         let startup = startup.get_main_instrs();
         let finish = finish.get_main_instrs();
 
@@ -1920,7 +1920,7 @@ mod tests {
             asm.chunk(Chunk::Constants).def("RAW_CONST", 5);
             asm.chunk(Chunk::Functions)
                 .label("RawFunc")
-                .ld_a_label("RAW_CONST")
+                .ld(R8::A, "RAW_CONST")
                 .call("UpdateKeys")
                 .ret();
             asm.chunk(Chunk::Data).section("RawData", "WRAM0");
@@ -2231,7 +2231,7 @@ mod tests {
         gb.add_to_main_loop(Call::new("Called"));
         let mut table = Asm::new();
         table
-            .ld_hl_label("ByAddress")
+            .ld(crate::gb_asm::R16::HL, "ByAddress")
             .jp_cond(crate::gb_asm::Condition::Z, "Jumped")
             // Raw text of several lines, the call after a comment
             .raw("ld a, 1 ; one\n    call FromRawText");
@@ -2425,7 +2425,7 @@ mod tests {
         };
         let mut gb = RustBoy::new();
         gb.define_const("Delay", 5);
-        gb.add_to_main_loop(Asm::new().ld_a_label("Delay").get_main_instrs());
+        gb.add_to_main_loop(Asm::new().ld(R8::A, "Delay").get_main_instrs());
         let out = gb.build();
         assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
         assert_links(&out);
@@ -2762,8 +2762,7 @@ mod tests {
             let mut body = Asm::new();
             body.label(&name);
             for i in 0..48 {
-                body.ld_a_addr_def(&format!("wVar{}", i % 10))
-                    .inc(crate::gb_asm::Operand::Reg(crate::gb_asm::Register::A));
+                body.ld_a_addr_def(format!("wVar{}", i % 10)).inc(R8::A);
             }
             // Each function calls the next one, and has a second entry point
             if f < 99 {
@@ -2774,7 +2773,7 @@ mod tests {
         }
         let mut main = Asm::new();
         for i in 0..5000 {
-            main.ld_a_addr_def(&format!("wVar{}", i % 10));
+            main.ld_a_addr_def(format!("wVar{}", i % 10));
         }
         main.call("Func0");
         gb.add_to_main_loop(main.get_main_instrs());

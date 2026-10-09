@@ -126,8 +126,10 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine` (started: `src/hw.rs` since
       [B22](CONTEXT.md#b22) holds the VRAM, WRAM and OAM layout the new code uses; the older strings are left)
 - [ ] Move `Emittable` into the asm layer; add a `Block` instruction buffer (stop using `Asm` + `get_main_instrs()` as scratch)
-- [ ] Typed operands: remove string-register helpers (`inc_label("de")`, `ld_hli_label("a")`, …); add an
-      `Expr` operand for constants/expressions; reject invalid destinations
+- [x] Typed operands: remove string-register helpers (`inc_label("de")`, `ld_hli_label("a")`, …); add an
+      `Expr` operand for constants/expressions; reject invalid destinations (branch `refactor-p2-typed-operands`:
+      `Dst`/`Operand`/`Mem`/`AluOperand`/`IncDec`, `ld 1, 2` and `inc 5` do not compile, `Instr::check` accepts exactly
+      the `ld`/`ldh` pairs of the opcode table; `Expr` with `Expr::raw` as the escape hatch; every call site migrated)
 - [x] Consistent instruction shapes (`And`/`Cp` vs `Or`/`Xor`/`Sub`, `AdcA` vs `Adc`); derive `Debug`, `PartialEq` on `Instr`
       (branch `refactor-p2-isa`: the 8-bit ALU instructions take one source and print `op a, src`; `AddHl`/`AddSp` for
       the 16-bit additions; the shifts and bit instructions take an `R8`; `Instr::check` rejects what the types cannot)

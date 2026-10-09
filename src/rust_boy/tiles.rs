@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::gb_asm::Instr;
+use crate::gb_asm::{Expr, Instr};
 use crate::gb_std::graphics::utility::cp_in_memory;
 use crate::hw;
 
@@ -408,12 +408,7 @@ impl TileManager {
         self.tiles
             .values()
             .filter(|tile| !matches!(&tile.source, TileSource::Raw(data) if data.is_empty()))
-            .flat_map(|tile| {
-                cp_in_memory(
-                    &tile.name,
-                    &MemoryAllocator::format_address(tile.vram_address),
-                )
-            })
+            .flat_map(|tile| cp_in_memory(&tile.name, Expr::hex(tile.vram_address)))
             .collect()
     }
 

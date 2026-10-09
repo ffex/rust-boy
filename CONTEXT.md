@@ -164,9 +164,19 @@ The problems are where each layer reaches across the line:
    | `Operand::AddrDef("x")`, `Operand::AddrReg(Register::HL)`, `Operand::AddrRegInc(..)` | `Mem::addr("x")`, `R8::AtHl`, `Mem::Hli` |
    | `Operand::Label("TilesEnd - Tiles")` | `Expr::sym("TilesEnd") - "Tiles"` (or `Expr::raw(..)`) |
    | `ld_a_addr_def(&format!("_OAMRAM+{}", n))`, `hw::oam_address(i, b)` | `ld_a_addr_def(Expr::sym("_OAMRAM") + n)`, `hw::oam_offset(i, b)` |
+   | `IfA::eq("X + 1", ..)`, `IfConst::lt(.., "SCRN_X - 8", ..)` | `IfA::eq(Expr::sym("X") + 1, ..)`, `IfConst::lt(.., Expr::sym("SCRN_X") - 8, ..)` (or `Expr::raw("X + 1")`) |
+   | `IfA::eq("LOW(X)", ..)`, `IfA::eq("'A'", ..)` | `IfA::eq(Expr::low("X"), ..)`, `IfA::eq(Expr::raw("'A'"), ..)` |
+   | `TileRef::load_address_label("_SCRN0 + 32")`, `TileRef::set_tile_label("T + 1")` | `load_address_label(Expr::sym("_SCRN0") + 32)`, `set_tile_label(Expr::sym("T") + 1)` |
+   | `cp_in_memory("Tiles", "_VRAM + 16")` | `cp_in_memory("Tiles", Expr::sym("_VRAM") + 16)` |
+   | `is_specific_tile(.., &["BRICK+1"])` | an id is a symbol or a number: define `DEF BRICK_2 EQU BRICK + 1`, or test it with `IfA` and an `Expr` |
 
    `IfConst`/`IfA`, `TileRef::set_tile_label`/`load_address_label` and `cp_in_memory`'s address take an
-   `impl Into<Expr>` (a `&str` still works). A side effect: a `RustBoy` variable whose name is not a valid RGBDS
+   `impl Into<Expr>`, and `is_specific_tile` (same signature) reads its tile ids as `Expr`s. **Breaking:** a `&str`
+   still works only when it is a symbol or a number (spaces around it are ignored); text that is an expression
+   (`"BRICK + 1"`, `"SCRN_X - 8"`, `"LOW(BRICK)"`, `"_SCRN0 + 32"`), a character literal (`"'A'"`) or a raw
+   identifier (`"#name"`) assembled before and now panics when the code is generated, with a message saying what to
+   write: build it with `Expr` or pass it with `Expr::raw` (rows above). RGBDS keywords (`ld`, `LOW`, `DEF`, …) are not
+   symbols either. A side effect: a `RustBoy` variable whose name is not a valid RGBDS
    symbol now panics when its code is generated (`Var::set`/`get`, the start-up initialisation); before, rgbasm
    rejected the output (checking every user name stays the Phase 3 item).
 3. **Hardware facts are hardcoded in every layer.** `_OAMRAM+{id*4+1}` strings in both sprite managers,

@@ -529,7 +529,7 @@ impl RustBoy {
 
         // Turn off screen for safe VRAM access
         startup.ld_a(0);
-        startup.ld_addr_def_a("rLCDC");
+        startup.ld_addr_def_a(hw::LCDC);
 
         // Copy the tile data to VRAM (empty blobs are skipped, B27)
         startup.emit_all(self.tiles.generate_memcopy_calls());
@@ -544,7 +544,7 @@ impl RustBoy {
 
         // Default palettes, every one of them (OBP1 too, B28)
         startup.ld_a(DEFAULT_PALETTE);
-        for palette in ["rBGP", "rOBP0", "rOBP1"] {
+        for palette in [hw::BGP, hw::OBP0, hw::OBP1] {
             startup.ld_addr_def_a(palette);
         }
 

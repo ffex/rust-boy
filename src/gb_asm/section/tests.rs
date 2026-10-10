@@ -127,6 +127,10 @@ fn forms() -> Vec<(Section, &'static str)> {
             Section::new("Any text: 1 + 2 = 3, é }", MemoryType::Rom0),
             r#"SECTION "Any text: 1 + 2 = 3, é }", ROM0"#,
         ),
+        (
+            Section::new("A\ttab", MemoryType::Rom0),
+            "SECTION \"A\ttab\", ROM0",
+        ),
     ]
 }
 
@@ -656,4 +660,114 @@ fn test_memory_types_print_their_keyword() {
     for pair in MemoryType::ALL.windows(2) {
         assert!(pair[0].range().end() < pair[1].range().start());
     }
+}
+
+/// The text of the `Asm` that `write` writes, or the message it panics with (when the
+/// instruction is emitted, or when the program is printed)
+fn written(write: impl FnOnce(&mut Asm)) -> Result<String, String> {
+    catch(|| {
+        let mut asm = Asm::new();
+        write(&mut asm);
+        asm.to_asm()
+    })
+}
+
+#[test]
+fn test_conditional_assembly_stops_the_checks() {
+    // The same section in both branches of an IF: RGBDS assembles one of them
+    let both_branches = written(|asm| {
+        asm.raw("IF DEF(DEBUG)")
+            .section(Section::wram0("Buffers"))
+            .label("wBuffer")
+            .ds("16")
+            .raw("ELSE")
+            .section(Section::wram0("Buffers"))
+            .label("wBuffer")
+            .ds("8")
+            .raw("ENDC");
+    })
+    .expect("the same section in both branches of an IF");
+    assert_ne!(
+        rgbds_accepts(&both_branches),
+        Some(false),
+        "{}",
+        both_branches
+    );
+
+    // Code in a RAM section that RGBDS never assembles
+    let skipped = written(|asm| {
+        asm.section(Section::rom0("Code"))
+            .label("Main")
+            .ret()
+            .raw("IF 0")
+            .section(Section::wram0("Dead"))
+            .nop()
+            .raw("ENDC");
+    })
+    .expect("code in an IF 0");
+    assert_ne!(rgbds_accepts(&skipped), Some(false), "{}", skipped);
+
+    // Any block directive, in any case, after a label or in a multi-line raw text
+    for line in [
+        "if 1",
+        "  ELIF X",
+        "else",
+        "EndC",
+        "MyMacro: MACRO",
+        "ENDM",
+        "REPT 2",
+        "FOR I, 3",
+        "ENDR",
+        "    nop\nIF 1",
+    ] {
+        let built = written(|asm| {
+            asm.raw(line)
+                .section(Section::wram0("Vars"))
+                .nop()
+                .section(Section::wram0("Vars"));
+        });
+        assert!(built.is_ok(), "{:?}: {:?}", line, built);
+    }
+    // A word that only starts like one is no directive: the checks go on after it
+    for line in ["IFFY: db", "Format", "ENDCOUNT EQU 3"] {
+        let built = written(|asm| {
+            asm.raw(line).section(Section::wram0("Vars")).nop();
+        });
+        assert!(built.is_err(), "{:?}: {:?}", line, built);
+    }
+}
+
+#[test]
+fn test_a_multi_line_instruction_is_checked_as_itself() {
+    // `db 1` with a line break after it is still data in RAM
+    let error = written(|asm| {
+        asm.section(Section::wram0("Vars")).db("1\n");
+    })
+    .expect_err("db 1 in WRAM0");
+    assert!(
+        error.contains("a RAM section holds no code or data"),
+        "{}",
+        error
+    );
+    let error = written(|asm| {
+        asm.section(Section::wram0("Vars"))
+            .ld(crate::gb_asm::R8::A, crate::gb_asm::Expr::raw("1\n"));
+    })
+    .expect_err("ld a in WRAM0");
+    assert!(
+        error.contains("a RAM section holds no code or data"),
+        "{}",
+        error
+    );
+    // A label or comment with a line break is fine there; the lines after it are read
+    // as a raw line
+    assert!(
+        written(|asm| {
+            asm.section(Section::wram0("Vars"))
+                .comment("note\nwA: ds 1")
+                .label("wB")
+                .ds("1");
+        })
+        .is_ok()
+    );
 }

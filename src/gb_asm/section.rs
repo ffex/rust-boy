@@ -180,7 +180,7 @@ impl Section {
     ///
     /// # Panics
     /// If `name` has a character that a plain RGBDS string cannot hold as it is: `"`, `\`,
-    /// `{` (interpolation) or a control character (a line break).
+    /// `{` (interpolation) or a control character other than a tab (a line break).
     #[track_caller]
     pub fn new(name: &str, memory: MemoryType) -> Self {
         Section {
@@ -340,7 +340,7 @@ impl Section {
         if let Some(c) = self
             .name
             .chars()
-            .find(|c| matches!(c, '"' | '\\' | '{') || c.is_control())
+            .find(|c| matches!(c, '"' | '\\' | '{') || (c.is_control() && *c != '\t'))
         {
             return Err(format!(
                 "section name {:?}: {:?} cannot be written in an RGBDS string as it is",
@@ -469,17 +469,32 @@ enum Place {
 ///   `INCBIN`. A RAM section takes labels, `ds n`, `db` / `dw` without values (one byte, two
 ///   bytes), comments, `DEF`s;
 /// - a section name used twice, unless both are `UNION`s, or both `FRAGMENT`s, of the same
-///   memory type and bank.
+///   memory type and bank. This check is partial: a new piece is compared with the first
+///   piece of that name only, by kind, memory type and bank. rgbasm still rejects the
+///   reuses it lets through (`UNION`s at two fixed addresses, a fixed address and an `ALIGN`
+///   that disagree, two `FRAGMENT`s at one fixed address, a bank given to one piece and
+///   another bank to a third, ...).
 ///
 /// Raw lines are never rejected (the escape hatch). A raw line whose code is only labels
 /// and `db` / `dw` / `ds` keeps the current section; any other raw line with code (it may
 /// be a `SECTION`, a `LOAD`, a macro that opens one), and an `INCLUDE`, make the section
-/// unknown, and nothing is checked until the next typed `SECTION`. An instruction whose
-/// text has a line break (a comment or label written with `\n`) is read as a raw line.
+/// unknown, and nothing is checked until the next typed `SECTION`. A raw line with a
+/// conditional or repeating block, or a macro definition (`IF`, `ELIF`, `ELSE`, `ENDC`,
+/// `MACRO`, `ENDM`, `REPT`, `FOR`, `ENDR`), stops every check for the rest of the program:
+/// RGBDS may skip, repeat or move what follows (the same section in both branches of an
+/// `IF`, code in an `IF 0`), which the tracker cannot follow.
+///
+/// An instruction whose text has a line break (`db("1\n...")`, a comment or label written
+/// with `\n`) is checked as the instruction it is (so `db 1` in RAM is rejected), and the
+/// lines after the break are then read as a raw line. What those lines hold is not
+/// checked, as for a raw line.
 #[derive(Clone, Debug)]
 pub(crate) struct SectionTracker {
     opened: Vec<Section>,
     place: Place,
+    /// A raw line with a conditional, a repetition or a macro definition was seen: nothing
+    /// is checked any more
+    off: bool,
 }
 
 impl Default for SectionTracker {
@@ -487,6 +502,7 @@ impl Default for SectionTracker {
         SectionTracker {
             opened: Vec::new(),
             place: Place::Outside,
+            off: false,
         }
     }
 }
@@ -495,13 +511,32 @@ impl SectionTracker {
     /// Follow `instr`, emitted after everything given so far: `Err` with what is wrong if
     /// it does not belong there (and then nothing changes)
     pub(crate) fn add(&mut self, instr: &Instr) -> Result<(), String> {
-        // A label, comment or data whose text goes on to other lines prints those lines as
-        // code: it is read like a raw line
-        if !matches!(instr, Instr::Raw { .. })
-            && instr.check().is_ok()
-            && instr.to_string().contains('\n')
-        {
-            if !only_reserves(&instr.to_string()) {
+        if self.off {
+            return Ok(());
+        }
+        // The text of a raw line, or of an instruction that goes on to other lines (those
+        // lines are printed as code, like a raw line)
+        let raw_text = match instr {
+            Instr::Raw { line } => Some(line.clone()),
+            _ if instr.check().is_ok() && instr.to_string().contains('\n') => {
+                Some(instr.to_string())
+            }
+            _ => None,
+        };
+        if !matches!(instr, Instr::Raw { .. }) {
+            self.check_placement(instr)?;
+        }
+        if let Some(text) = raw_text {
+            let words = first_words(&text);
+            if words
+                .iter()
+                .any(|word| BLOCK_DIRECTIVES.contains(&word.as_str()))
+            {
+                self.off = true;
+            } else if !words
+                .iter()
+                .all(|word| RESERVATIONS.contains(&word.as_str()))
+            {
                 self.place = Place::Unknown;
             }
             return Ok(());
@@ -526,43 +561,49 @@ impl SectionTracker {
                 }
                 self.opened.push(section.clone());
                 self.place = Place::In(self.opened.len() - 1);
-                Ok(())
             }
-            Instr::Include { .. } => {
-                self.place = Place::Unknown;
-                Ok(())
+            Instr::Include { .. } => self.place = Place::Unknown,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// `Err` if `instr` is code or data and the program is in a RAM section
+    fn check_placement(&self, instr: &Instr) -> Result<(), String> {
+        match self.place {
+            Place::In(index) if !self.opened[index].memory.is_rom() && !reserves_space(instr) => {
+                let section = &self.opened[index];
+                Err(format!(
+                    "`{}` in the {} section \"{}\": a RAM section holds no code or data, it \
+                     only reserves space (labels, `ds n` without a fill value)",
+                    instr, section.memory, section.name
+                ))
             }
-            Instr::Raw { line } => {
-                if !only_reserves(line) {
-                    self.place = Place::Unknown;
-                }
-                Ok(())
-            }
-            _ => match self.place {
-                Place::In(index) if !self.opened[index].memory.is_rom() => {
-                    if reserves_space(instr) {
-                        Ok(())
-                    } else {
-                        let section = &self.opened[index];
-                        Err(format!(
-                            "`{}` in the {} section \"{}\": a RAM section holds no code or \
-                             data, it only reserves space (labels, `ds n` without a fill \
-                             value)",
-                            instr, section.memory, section.name
-                        ))
-                    }
-                }
-                _ => Ok(()),
-            },
+            _ => Ok(()),
         }
     }
 }
 
-/// Whether `instr` may be in a RAM section: it takes no room (a label, a comment, a `DEF`)
-/// or only reserves it (`ds n`, a `db` / `dw` without values)
+/// The first words of a raw line that keep the section: none (a label or an empty line),
+/// or a reservation (`db`, `dw`, `dl`, `ds`)
+const RESERVATIONS: [&str; 5] = ["", "db", "dw", "dl", "ds"];
+
+/// The first words of a raw line after which nothing is checked: RGBDS may skip, repeat
+/// or move the lines that follow
+const BLOCK_DIRECTIVES: [&str; 9] = [
+    "if", "elif", "else", "endc", "macro", "endm", "rept", "for", "endr",
+];
+
+/// Whether `instr` may be in a RAM section: it takes no room (a label, a comment, a `DEF`,
+/// a directive that opens a section or includes a file) or only reserves it (`ds n`, a
+/// `db` / `dw` without values)
 fn reserves_space(instr: &Instr) -> bool {
     match instr {
-        Instr::Label { .. } | Instr::Comment { .. } | Instr::Def { .. } => true,
+        Instr::Label { .. }
+        | Instr::Comment { .. }
+        | Instr::Def { .. }
+        | Instr::Section(_)
+        | Instr::Include { .. } => true,
         Instr::Ds { fill, .. } => fill.is_none(),
         Instr::Db { values } => values.trim().is_empty(),
         Instr::Dw { value } => value.trim().is_empty(),
@@ -570,24 +611,28 @@ fn reserves_space(instr: &Instr) -> bool {
     }
 }
 
-/// Whether the code of a raw line is only labels and `db` / `dw` / `ds` (it cannot open a
-/// section): `wScore: db`, `.end:`, `ds 4`
-fn only_reserves(line: &str) -> bool {
-    code_lines(line).iter().all(|code| {
-        let mut rest = code.trim();
-        // Labels first: `Name:`, `Name::`, `.local:`, `Scope.local:`
-        while let Some((label, after)) = rest.split_once(':') {
-            let label = label.trim();
-            let name = label.strip_prefix('.').unwrap_or(label);
-            let is_label = name.split('.').all(is_identifier) && !name.is_empty();
-            if !is_label {
-                break;
+/// The first word of each line of code of `text`, after its labels (`Name:`, `Name::`,
+/// `.local:`, `Scope.local:`), in lower case; `""` for a line with none
+fn first_words(text: &str) -> Vec<String> {
+    code_lines(text)
+        .iter()
+        .map(|code| {
+            let mut rest = code.trim();
+            while let Some((label, after)) = rest.split_once(':') {
+                let label = label.trim();
+                let name = label.strip_prefix('.').unwrap_or(label);
+                let is_label = !name.is_empty() && name.split('.').all(is_identifier);
+                if !is_label {
+                    break;
+                }
+                rest = after.trim_start_matches(':').trim();
             }
-            rest = after.trim_start_matches(':').trim();
-        }
-        let word = rest.split_whitespace().next().unwrap_or("");
-        word.is_empty() || ["db", "dw", "dl", "ds"].contains(&word.to_ascii_lowercase().as_str())
-    })
+            rest.split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+        })
+        .collect()
 }
 
 #[cfg(test)]

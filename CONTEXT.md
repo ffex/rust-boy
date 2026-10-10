@@ -117,13 +117,18 @@ rgbfix -v -p 0xFF main.gb
   (`Section::check`): a bank on `ROM0`, `WRAM0`, `OAM` or `HRAM`, a bank out of the range rgbasm accepts (`ROMX`
   1-65535, `VRAM` 0-1, `SRAM` 0-255, `WRAMX` 1-7), an address outside the memory type (RGBDS's default ranges, no
   `rgblink -t`/`-w`), an alignment above 16 bits or that the fixed address, or no address of the type, has, `UNION`
-  in ROM, a name with `"`, `\`, `{` or a control character. It prints `SECTION [UNION|FRAGMENT] "name",
+  in ROM, a name with `"`, `\`, `{` or a control character other than a tab. It prints `SECTION [UNION|FRAGMENT] "name",
   TYPE[$addr], BANK[n], ALIGN[n, offset]`. `SectionTracker` follows a program in its printed order (`Asm::to_asm`,
   `Asm::program`) and panics on code or data in a RAM section (an instruction, `ds n, fill`, `db`/`dw` with values,
   `INCBIN`; labels, `ds n`, `db`/`dw` without values, comments and `DEF`s are fine) and on a section name used twice
-  (only `UNION`s, or `FRAGMENT`s, of one memory type and bank share one). Raw lines are never rejected; a raw line
-  with other code than labels and `db`/`dw`/`ds` (it may open a section), or an `INCLUDE`, makes the section
-  unknown until the next typed `SECTION`. `ds n` reserves (`Asm::ds`), `ds n, fill` fills (`Asm::ds_fill`).
+  (only `UNION`s, or `FRAGMENT`s, of one memory type and bank share one; this check is partial, it compares a new
+  piece with the first one by kind, memory type and bank, and leaves the rest, such as two `UNION`s at different
+  fixed addresses, to rgbasm). Raw lines are never rejected; a raw line with other code than labels and
+  `db`/`dw`/`ds` (it may open a section), or an `INCLUDE`, makes the section unknown until the next typed
+  `SECTION`, and a raw line with `IF`, `ELIF`, `ELSE`, `ENDC`, `MACRO`, `ENDM`, `REPT`, `FOR` or `ENDR` stops every
+  check for the rest of the program (RGBDS may skip or repeat what follows: the same section in both branches of an
+  `IF`, code in an `IF 0`). An instruction whose text has a line break is checked as itself, then the lines after
+  the break are read as a raw line. `ds n` reserves (`Asm::ds`), `ds n, fill` fills (`Asm::ds_fill`).
 - **Chunks** (`src/gb_asm/asm.rs:23-43`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
   Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`CHUNK_ORDER`, `src/gb_asm/codegen.rs:7-17`).
 - **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and

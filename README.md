@@ -242,20 +242,35 @@ assert!(text.contains("jp Main"), "printed as a jp");
 
 ## Building a ROM
 
+One command builds an example (or any binary of the crate) into a ROM, with its symbol and map files, and with
+`--run` opens it in an emulator:
+
+```bash
+scripts/run.sh fosdem          # target/examples/fosdem/main.gb, .sym, .map and .asm
+scripts/run.sh --run fosdem    # ... then runs it
+```
+
+`--run` uses `$GB_EMULATOR` when it is set (a command, such as `GB_EMULATOR="wine ~/bgb/bgb.exe"`), or else the
+first emulator it finds: `sameboy`, `mgba-qt`, `mgba`, `gambatte_qt`, `gambatte_sdl`, `bgb`, `bgb64`, `bgb.exe` or
+`bgb64.exe` through `wine`, `pyboy`; with none, it prints where the files are. `--emulator <command>` picks one for
+one run. The `.sym` file sits next to the ROM, so emulators with a debugger (SameBoy, bgb, Emulicious) show the
+program's labels. The steps it runs, by hand:
+
 ```bash
 cargo run --bin fosdem > main.asm
 rgbasm -I include -I examples/fosdem -o main.o main.asm   # include/: hardware.inc, examples/fosdem: .2bpp assets
-rgblink -o main.gb main.o
+rgblink -n main.sym -m main.map -o main.gb main.o
 rgbfix -v -p 0xFF main.gb
 ```
 
-Or build every example at once into `target/examples/<bin>/main.gb` (under `$CARGO_TARGET_DIR` if set):
+Or build every example at once into `target/examples/<bin>/` (under `$CARGO_TARGET_DIR` if set):
 
 ```bash
 scripts/assemble-examples.sh
 ```
 
-CI does the same on every pull request and keeps the ROMs as a downloadable artifact (`example-roms`).
+CI does the same on every pull request and keeps the ROMs, with their `.sym` and `.map` files, as a downloadable
+artifact (`example-roms`).
 Open them in any Game Boy emulator.
 
 The assembly each example generates is committed as `examples/<bin>/main.asm`, next to the example's assets.
@@ -344,6 +359,7 @@ tests/                        # integration tests: snapshots.rs (the examples' g
 include/hardware.inc          # hardware definitions for RGBDS (v4.x)
 examples/<bin>/               # per example: main.asm, its generated asm (the snapshot), and its assets
                               # (.2bpp, .png, .aseprite); examples/unbricked/originals/ is the tutorial's own source
+scripts/run.sh                # build one binary into a ROM (.gb, .sym, .map) and run it in an emulator
 scripts/assemble-examples.sh  # build every example into a ROM
 scripts/fetch-test-roms.sh    # Blargg's test ROMs, which check the test emulator
 Task.md, CONTEXT.md, CLAUDE.md

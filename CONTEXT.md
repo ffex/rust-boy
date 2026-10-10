@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 247 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 248 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -176,8 +176,10 @@ rgbfix -v -p 0xFF main.gb
 The problems are where each layer reaches across the line:
 
 1. **The assembler layer knows the game layout.** `Chunk::{Init, MainLoop, Tiles, Tilemap, Data}`
-   (`src/gb_asm/asm.rs:23-43`) and their fixed order (`src/gb_asm/codegen.rs:7-17`) are engine
-   concepts. `include_hardware()` hardcodes `hardware.inc` (`src/gb_asm/builders.rs:490-494`, since `refactor-p2-typed-operands-2b`).
+   (`src/gb_asm/asm.rs:23-43` at `4601a5c`) and their fixed order (`src/gb_asm/codegen.rs:7-17` at `4601a5c`) are engine
+   concepts. *Fixed since `refactor-p2-sections-layout`:* both are the engine's, `Chunk` and `Chunk::ORDER` in
+   `src/rust_boy/layout.rs:24-60` (see below). `include_hardware()` hardcodes `hardware.inc`
+   (`src/gb_asm/builders.rs:544-549`, since `refactor-p2-typed-operands-2b`).
    Sections were strings (`section("Header", "ROM0[$100]")`, any text), and `ds` always had a fill value, so RAM
    could not be reserved with it. *Since `refactor-p2-sections`:* sections are typed (`gb_asm::Section`, see
    [Key concepts](#key-concepts)), checked against what RGBDS 1.0.4 accepts, and a program panics on code or data in
@@ -204,7 +206,7 @@ The problems are where each layer reaches across the line:
    | `asm.chunk(Chunk::Functions)` on a `gb_asm` `Asm` program | write the parts in the order they are printed (build a part early in a `Block` and emit it later, as `unbricked_std` does), `asm.blank_line()` between them for the same text; or use a `rust_boy::Layout` and `layout.program()` |
    | `asm.get_chunk(chunk)` | `layout.get_chunk(chunk)` (engine); an `Asm` has `asm.instrs()` |
    | `asm.get_main_instrs()` | `asm.instrs()` (`&[Instr]`, every instruction as written) |
-   | code or data in a RAM section panics in `Asm::to_asm` | panics in `Asm::emit` (or `emit_all`, a builder method), at the call that writes it |
+   | code or data in a RAM section panics in `Asm::to_asm` | panics in `Asm::emit` (or `emit_all`, a builder method); every builder method is `#[track_caller]`, so the panic points at the call that writes it |
 2. **L1 is not really typed.** Registers and expressions are passed as strings:
    `ld_hli_label("a")`, `inc_label("de")`, `or_label("a", "c")` (`src/gb_asm/asm.rs:162-167, 382-384, 356-359`).
    `Operand::Imm`/`Label` are accepted as destinations, so `ld 1, 2` or `inc 5` compile in Rust and

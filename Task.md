@@ -101,8 +101,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [x] Duplicated, diverged builtins (`GetTileByPixel` with two contracts) — [B23](CONTEXT.md#b23)
       (branch `refactor-p1-builtins`: one `GetTileByPixel` in the library, in `gb_std`: `hl` = tile address and
       `a` = tile index; `rust_boy` emits the `gb_std` routines. Decided by the maintainer: the raw-`gb_asm`
-      tutorial `src/bin/unbricked.rs` keeps its own copies (GetTileByPixel, Memcopy, UpdateKeys), the one stated
-      exception to "every routine exists once" (CLAUDE.md); its `GetTileByPixel` keeps the old contract, `hl` only)
+      tutorial `src/bin/unbricked.rs` keeps its own copies (GetTileByPixel, Memcopy, UpdateKeys, and WaitVBlank), the one stated
+      exception to "every routine exists once" (CLAUDE.md; `basic_usage.rs` is the second since `refactor-p2-routines-sprites`); its `GetTileByPixel` keeps the old contract, `hl` only)
 - [x] Unused user functions always emitted (after B26) — [B24](CONTEXT.md#b24)
       (branch `refactor-p1-builtins`: only used functions, transitively; `RustBoy::keep_function` forces one)
 - [x] Animation labels not namespaced by sprite; validate label names — [B25](CONTEXT.md#b25)
@@ -171,8 +171,17 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       value (`Delay` moved to `gb_std`), whose dependencies are given in full; `RustBoy::define_routine` / `call_routine`
       register a routine with its dependencies; the scan reads typed operands by type and raw text as before. The 6
       example ROMs, their asm, `.map` and `.sym` are byte-identical)
-- [ ] One source of truth for builtins: `rust_boy` reuses `gb_std` (done for the routines since [B23](CONTEXT.md#b23);
+- [x] One source of truth for builtins: `rust_boy` reuses `gb_std` (done for the routines since [B23](CONTEXT.md#b23);
       `Delay` is `gb_std`'s too since `refactor-p2-routines`); remove the duplicate `gb_std::graphics::sprites::SpriteManager`
+      (branch `refactor-p2-routines-sprites`: the `gb_std` `SpriteManager` is gone, `unbricked_std` uses `Sprite` values and
+      `gb_std::graphics::sprites::draw_sprites`, which the engine's start-up code uses too, as it uses `gb_std`'s
+      `move_coord_var` for `move_x_var` / `move_y_var`; each routine is defined once in the library, `unbricked.rs` excepted.
+      The 6 example ROMs, their asm, `.map` and `.sym` are byte-identical)
+  - [ ] Follow-up (data, not routines): the engine writes its tile data and its variable sections itself, as `gb_std`'s
+        `add_tiles` / `add_tiles_2bpp` and `VariableSection::generate` do (the same text); make the engine call them
+  - [x] Decided by the maintainer (2026-10-10): `src/bin/basic_usage.rs`, the minimal raw-`gb_asm` example, keeps its own
+        `WaitVBlank` (another routine: it waits for `rLY` = 144, `jr nz`; the README's `gb_asm` example does the same). It
+        is a stated exception next to `unbricked.rs` (CLAUDE.md)
 - [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s (the sprite manager panics since
       [B20](CONTEXT.md#b20) instead of returning empty `Vec`s; a `Result` API is left)
 - [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4

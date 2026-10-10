@@ -154,48 +154,76 @@ pub(crate) fn pivot(oam_index: u8, x_offset: i16, y_offset: i16) -> Vec<Instr> {
     asm.into_instrs()
 }
 
-pub struct SpriteManager {
-    sprites: Vec<Sprite>,
-    current_sprite_index: u8,
-}
-impl Default for SpriteManager {
-    fn default() -> Self {
-        Self::new()
-    }
+/// The code of `move_x_var` / `move_y_var` (of a `gb_std` [`Sprite`], or of the `RustBoy`
+/// sprite manager): add the value of the variable `var_name` to the coordinate at `coord`
+/// (an OAM Y or X byte). Changes `a`, `b` and the flags.
+pub(crate) fn move_coord_var(coord: &Expr, var_name: &str) -> Vec<Instr> {
+    let mut asm = Block::new();
+    asm.ld_a_addr_def(var_name)
+        .ld(R8::B, R8::A)
+        .ld_a_addr_def(coord)
+        .add(R8::B)
+        .ld_addr_def_a(coord);
+    asm.into_instrs()
 }
 
-impl SpriteManager {
-    pub fn new() -> Self {
-        SpriteManager {
-            sprites: Vec::new(),
-            current_sprite_index: 0,
+/// Write `sprites` to OAM, each in its entry (its [`Sprite::id`]), in the order given: its
+/// position (OAM Y = y + 16, X = x + 8), tile and flags
+///
+/// `hl` starts at the first sprite's entry and walks through the bytes (`ld [hli], a`), so
+/// sprites in consecutive entries are written one after the other; `hl` is loaded again
+/// for a sprite that is not in the entry after the previous one. Changes `a`, `hl` and
+/// nothing else (no flag). Both the `gb_std` programs and `RustBoy` (the sprites it
+/// writes at start-up) use it.
+///
+/// # Panics
+/// If two sprites have the same id: the later one would overwrite the earlier one.
+///
+/// # Example
+/// ```
+/// use rust_boy::gb_std::graphics::sprites::{Sprite, draw_sprites};
+///
+/// let paddle = Sprite::new(0, 16, 128, 0, 0);
+/// let ball = Sprite::new(1, 32, 100, 1, 0);
+/// let text: Vec<String> = draw_sprites(&[paddle, ball]).iter().map(|i| i.to_string()).collect();
+/// assert_eq!(text[0], "ld hl, _OAMRAM");
+/// assert_eq!(text[1..3], ["ld a, 144", "ld [hli], a"]); // paddle Y: 128 + 16
+/// assert_eq!(text.len(), 1 + 2 * 8);
+/// ```
+#[track_caller]
+pub fn draw_sprites<'a>(sprites: impl IntoIterator<Item = &'a Sprite>) -> Vec<Instr> {
+    let mut asm = Block::new();
+    let mut next_entry = None;
+    let mut written = [false; hw::OAM_COUNT.value as usize];
+    for sprite in sprites {
+        let entry = &mut written[usize::from(sprite.id)];
+        if *entry {
+            panic!(
+                "draw_sprites: two sprites are in OAM entry {}: the second would overwrite the \
+                 first",
+                sprite.id
+            );
         }
-    }
-    /// Add a sprite in the next OAM entry
-    ///
-    /// # Panics
-    /// On a 41st sprite: OAM holds 40 ([`Sprite::new`]).
-    #[track_caller]
-    pub fn add_sprite(&mut self, x: u8, y: u8, tile: u8, flags: u8) {
-        let sprite = Sprite::new(self.current_sprite_index, x, y, tile, flags);
-        self.sprites.push(sprite);
-        self.current_sprite_index += 1;
-    }
-    pub fn draw(&self) -> Vec<Instr> {
-        let mut asm = Block::new();
-        asm.ld(R16::HL, hw::OAMRAM);
-        for sprite in &self.sprites {
-            asm.emit_all(sprite.draw());
+        *entry = true;
+        if next_entry != Some(sprite.id) {
+            let entry = match sprite.id {
+                0 => Expr::from(hw::OAMRAM),
+                id => oam_address(id, hw::OAMA_Y),
+            };
+            asm.ld(R16::HL, entry);
         }
-        asm.into_instrs()
+        asm.emit_all(sprite.draw());
+        next_entry = sprite.id.checked_add(1);
     }
-    pub fn get_sprite(&self, id: u8) -> Option<&Sprite> {
-        self.sprites.iter().find(|s| s.id == id)
-    }
-    pub fn get_sprite_mut(&mut self, id: u8) -> Option<&mut Sprite> {
-        self.sprites.iter_mut().find(|s| s.id == id)
-    }
+    asm.into_instrs()
 }
+
+/// A sprite in OAM entry `id`, for `gb_std` programs: the code that writes it
+/// ([`draw_sprites`]), moves it and reads its position
+///
+/// (The `gb_std` sprite manager, which handed out the ids in order, is gone: the engine's,
+/// `rust_boy::SpriteManager`, is the one sprite manager.)
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sprite {
     pub id: u8,
     pub x: u8,
@@ -227,6 +255,8 @@ impl Sprite {
             flags,
         }
     }
+    /// Write the sprite's OAM entry through `hl`, which must point at it (`ld [hli], a`,
+    /// four times: Y + 16, X + 8, tile, flags); see [`draw_sprites`]
     pub fn draw(&self) -> Vec<Instr> {
         let mut asm = Block::new();
 
@@ -370,26 +400,16 @@ impl Sprite {
         )
     }
 
+    /// Add the value of the variable `var_name` to the sprite's X (changes `a`, `b` and the
+    /// flags)
     pub fn move_x_var(&mut self, var_name: &str) -> Vec<Instr> {
-        let mut asm = Block::new();
-        asm.ld_a_addr_def(var_name)
-            .ld(R8::B, R8::A)
-            .ld_a_addr_def(oam_address(self.id, hw::OAMA_X))
-            .add(R8::B)
-            .ld_addr_def_a(oam_address(self.id, hw::OAMA_X));
-
-        asm.into_instrs()
+        move_coord_var(&oam_address(self.id, hw::OAMA_X), var_name)
     }
 
+    /// Add the value of the variable `var_name` to the sprite's Y (changes `a`, `b` and the
+    /// flags)
     pub fn move_y_var(&mut self, var_name: &str) -> Vec<Instr> {
-        let mut asm = Block::new();
-        asm.ld_a_addr_def(var_name)
-            .ld(R8::B, R8::A)
-            .ld_a_addr_def(oam_address(self.id, hw::OAMA_Y))
-            .add(R8::B)
-            .ld_addr_def_a(oam_address(self.id, hw::OAMA_Y));
-
-        asm.into_instrs()
+        move_coord_var(&oam_address(self.id, hw::OAMA_Y), var_name)
     }
 
     /// The sprite's pixel offset by (`x_offset`, `y_offset`) into `b` (x) and `c` (y),
@@ -431,18 +451,69 @@ pub(crate) mod tests {
             message,
             "Sprite::new: sprite id 40 is not an OAM entry: OAM holds 40 sprites, ids 0 to 39"
         );
+    }
 
-        // The manager hands out ids in order: the 41st sprite panics
-        let mut manager = SpriteManager::new();
-        for _ in 0..40 {
-            manager.add_sprite(0, 0, 0, 0);
-        }
-        let message = crate::rust_boy::panic_message(move || manager.add_sprite(0, 0, 0, 0));
-        assert!(
-            message.contains("sprite id 40 is not an OAM entry"),
-            "{}",
-            message
+    #[test]
+    fn test_draw_sprites_writes_each_entry() {
+        // Entries 0 and 1 one after the other, then 5 (hl loaded again), then 39, the last
+        let sprites = [
+            Sprite::new(0, 16, 128, 0, 0),
+            Sprite::new(1, 32, 100, 1, 0x20),
+            Sprite::new(5, 0, 0, 7, 0x80),
+            Sprite::new(39, 247, 239, 255, 0x10),
+        ];
+        let code = draw_sprites(&sprites);
+        let loads: Vec<String> = code
+            .iter()
+            .map(|instr| instr.to_string())
+            .filter(|line| line.starts_with("ld hl"))
+            .collect();
+        assert_eq!(
+            loads,
+            ["ld hl, _OAMRAM", "ld hl, _OAMRAM+20", "ld hl, _OAMRAM+156"]
         );
+
+        let mut cpu = TestCpu::default();
+        cpu.run(&code);
+        for sprite in &sprites {
+            let bytes = [
+                (hw::OAMA_Y, sprite.y + 16),
+                (hw::OAMA_X, sprite.x + 8),
+                (hw::OAMA_TILEID, sprite.tile),
+                (hw::OAMA_FLAGS, sprite.flags),
+            ];
+            for (byte, value) in bytes {
+                let address = oam_address(sprite.id, byte).to_string();
+                assert_eq!(cpu.mem[&address], value, "[{}]", address);
+            }
+        }
+        assert_eq!(cpu.trace.len(), 16, "four bytes per sprite, nothing else");
+    }
+
+    #[test]
+    #[should_panic(expected = "draw_sprites: two sprites are in OAM entry 1")]
+    fn test_draw_sprites_rejects_two_sprites_in_one_entry() {
+        // Review of #28: the later sprite silently overwrote the earlier one
+        draw_sprites(&[
+            Sprite::new(0, 0, 0, 0, 0),
+            Sprite::new(1, 8, 8, 1, 0),
+            Sprite::new(1, 16, 16, 2, 0),
+        ]);
+    }
+
+    #[test]
+    fn test_move_var_adds_the_variable() {
+        let mut ball = Sprite::new(1, 0, 0, 0, 0);
+        for (code, moved) in [
+            (ball.move_x_var("wMomentumX"), "_OAMRAM+5"),
+            (ball.move_y_var("wMomentumX"), "_OAMRAM+4"),
+        ] {
+            let mut cpu = TestCpu::default();
+            cpu.mem.insert("wMomentumX".to_string(), 0xFF); // -1
+            cpu.mem.insert(moved.to_string(), 50);
+            cpu.run(&code);
+            assert_eq!(cpu.mem[moved], 49, "{}", moved);
+        }
     }
 
     /// The OAM clear (`hl` walking from `_OAMRAM`, `hw::OAM_SIZE` bytes) writes exactly the

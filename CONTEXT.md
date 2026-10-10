@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 281 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 284 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -69,7 +69,7 @@ rgbfix -v -p 0xFF main.gb
 | Layer | Path | LOC | Role |
 |---|---|---|---|
 | **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
-| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3300 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
+| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3300 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), `Sprite` and the sprite snippets the engine uses too (`draw_sprites`, moves, `get_pivot`; its own `SpriteManager` is gone since `refactor-p2-routines-sprites`), `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2800 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` |
 | **`hw`** (data) | `src/hw.rs` | ~390 | Hardware facts as pure data (since [B22](#b22); complete since Phase 2 `refactor-p2-hw`): `hw::Symbol`s, each a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM layout and the screen sizes (`hw::SYMBOLS` lists them), the facts with no `hardware.inc` name as plain numbers, and `oam_offset`; depends on nothing, used by `gb_std` (which turns a `Symbol` into an `Expr`, `src/gb_std/hw_symbols.rs`), `rust_boy` and the examples, not by `gb_asm` |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
@@ -349,6 +349,25 @@ The problems are where each layer reaches across the line:
    WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel from `gb_std`, and they had already
    diverged ([B23](#b23)). *Since B23* `rust_boy` emits the `gb_std` routines (only `Delay` was its own), and its
    tile copies use `gb_std`'s `cp_in_memory`. L2 still contains its own `SpriteManager` that duplicates L3's.
+   *Fixed since `refactor-p2-routines-sprites`:* the `gb_std` `SpriteManager` is gone; the engine's
+   (`rust_boy::SpriteManager`) is the one sprite manager. A `gb_std` program uses `Sprite` values (an OAM entry, its
+   position, tile and flags) and `gb_std::graphics::sprites::draw_sprites` to write them, which the engine's start-up
+   code uses too (it wrote the same bytes with its own loop), as it uses `gb_std`'s `move_coord_var` for
+   `move_x_var` / `move_y_var` (a copy of `Sprite::move_x_var`). Each routine is defined once in the library
+   (`gb_std`); the examples written with `gb_std` or `RustBoy` emit those. `src/bin/unbricked.rs` keeps its copies
+   (the stated exception); `src/bin/basic_usage.rs`, the other raw-`gb_asm` example, writes its own `WaitVBlank`, another
+   routine (it waits for `rLY` = 144), and keeps it: the maintainer made it a stated exception too (CLAUDE.md), and
+   added `WaitVBlank` to the list of `unbricked.rs`'s own copies (`src/bin/unbricked.rs:22`). `draw_sprites` panics on
+   two sprites in one OAM entry (the independent review found that the later one silently overwrote the earlier one). The engine still writes its tile
+   data and variable sections with its own code, the same text as `gb_std`'s `add_tiles` and `VariableSection` (data,
+   not routines; a Task.md follow-up). The output is unchanged: the 6 example ROMs, their asm, `.map` and `.sym` are
+   byte-identical. **Breaking**, with the migration:
+
+   | Before | After |
+   |---|---|
+   | `let mut sm = gb_std::graphics::sprites::SpriteManager::new(); sm.add_sprite(x, y, tile, flags)` (ids from 0, in order) | `let paddle = Sprite::new(0, x, y, tile, flags)` (the id is the OAM entry, 0 to 39) |
+   | `sm.draw()` | `draw_sprites([&paddle, &ball])` (the same code for entries in order; `hl` is loaded again for an entry that does not follow) |
+   | `sm.get_sprite(1).unwrap().get_pivot(..)`, `get_sprite_mut(0).unwrap().move_left_limit(..)` | the `Sprite` itself: `ball.get_pivot(..)`, `paddle.move_left_limit(..)` |
    *Since Phase 2 (`refactor-p2-routines`):* routines are values (`gb_std::routine::Routine`, see
    [Key concepts](#key-concepts)) and `Delay` is `gb_std`'s too (`gb_std::utility::delay`), so the engine has no routine
    of its own: a builtin is the `gb_std` value, with its dependencies, variables and calling convention. The output is
@@ -817,11 +836,11 @@ identical), and `TileManager` copies with `gb_std`'s `cp_in_memory`; only `Delay
 Memcopy passes its registers typed instead of as strings (same text). Every caller follows the contract:
 `unbricked_std` drops its four `ld a, [hl]` after `call GetTileByPixel` (its only change: −4 bytes, +1 in the
 routine; the same game in an emulator, 3000 frames compared, see the PR). **Decided by the maintainer (no longer pending):**
-`src/bin/unbricked.rs` keeps its own copies of the routines (GetTileByPixel, Memcopy, UpdateKeys), and its
+`src/bin/unbricked.rs` keeps its own copies of the routines (GetTileByPixel, Memcopy, UpdateKeys, and WaitVBlank at `:22`), and its
 `GetTileByPixel` (`:345`) keeps the old contract (`hl` only, no `a`; its callers load `[hl]` themselves). It is the
 tutorial written instruction by instruction with `gb_asm` alone (README), a program of its own and not a layer, and
 it never links with the library's routines; switching it to `gb_std`'s routine would make it a `gb_std` example. It
-is the one stated exception to "every routine exists once" (CLAUDE.md, Architecture rules); its `Memcopy` is still
+is a stated exception to "every routine exists once" (CLAUDE.md, Architecture rules; `basic_usage.rs`, with its own `WaitVBlank`, is the other since `refactor-p2-routines-sprites`); its `Memcopy` is still
 the do-while loop, which its four callers use with non-empty data (its own tiles and tilemap). Tests run the routine on `gb_asm::test_cpu`
 for 81 pixel positions (`test_get_tile_by_pixel_returns_the_address_and_the_tile`), the `gb_std` callers'
 `get_pivot` → `GetTileByPixel` → tile test, and the `unbricked_rustboy` brick handler, which tests `a`

@@ -1,12 +1,13 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
-use crate::gb_asm::labels::code_lines;
+use crate::gb_asm::labels::{code_lines, defines};
 use crate::gb_asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, Section, is_identifier};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
+use crate::gb_std::routine::Routine;
 use crate::hw;
 
-use super::functions::{BuiltinFunction, FunctionRegistry, defines};
+use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
 use super::layout::{Chunk, Layout};
 use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
@@ -373,9 +374,12 @@ impl RustBoy {
     /// Register a user-defined function from raw instructions
     ///
     /// The function body should include its own label as the first instruction.
-    /// `build()` emits it only if the program uses it (see [`RustBoy::keep_function`]).
-    /// A call to another global label of the body (a second entry point) uses it too.
-    /// A function with the name of a builtin (`Memcopy`, ...) replaces that builtin.
+    /// `build()` emits it only if the program uses it (see [`RustBoy::keep_function`]),
+    /// with every function its body refers to. A call to another global label of the body
+    /// (a second entry point) uses it too. A function with the name of a builtin
+    /// (`Memcopy`, ...) replaces that builtin. To give the routines it needs, its variables
+    /// and its calling convention, register a [`Routine`] with
+    /// [`RustBoy::define_routine`] instead.
     ///
     /// # Panics
     /// If `name` is not a valid RGBDS identifier, or `body` does not define the global
@@ -397,6 +401,88 @@ impl RustBoy {
         }
         self.functions.register_user_function(name, body);
         self
+    }
+
+    /// Register a routine (a [`Routine`]: a `gb_std` routine, or one of your own) as a
+    /// user function, with the routines it depends on
+    ///
+    /// `build()` emits the routine only if the program uses it (see
+    /// [`RustBoy::keep_function`]), and then every routine it depends on ([`Routine::deps`],
+    /// each once), with the variables they need ([`Routine::variables`], created as `u8`s
+    /// unless the program defines them). What its body refers to is emitted too, as for
+    /// [`RustBoy::define_function`]. A typed call, [`Routine::call`] (or `call` with its
+    /// name), reaches it.
+    ///
+    /// The routine replaces a user function of the same name, and one with the name of a
+    /// builtin replaces that builtin, as with `define_function`. Its dependencies are
+    /// shared, not replaced: a `gb_std` routine of a builtin is that builtin, and a
+    /// dependency with the name and code of a function the program has is that function.
+    ///
+    /// # Panics
+    /// If a dependency has the name of a function the program already has, but other code
+    /// (a call to that name could reach only one of them). `build()` panics if the
+    /// routine's name is also a variable, a constant, a label of the program or an external
+    /// symbol, as for `define_function`.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_asm::{Block, R16};
+    /// use rust_boy::gb_std::graphics::utility::memcopy;
+    /// use rust_boy::gb_std::routine::{Regs, Routine};
+    /// use rust_boy::rust_boy::RustBoy;
+    /// use rust_boy::hw;
+    ///
+    /// let mut body = Block::new();
+    /// body.label("LoadLevel")
+    ///     .ld(R16::DE, "LevelMap")
+    ///     .ld(R16::HL, hw::SCRN0)
+    ///     .ld(R16::BC, 1024)
+    ///     .call("Memcopy")
+    ///     .ret();
+    /// let load_level = Routine::new("LoadLevel", body)
+    ///     .with_dep(memcopy())
+    ///     .with_clobbers(Regs::ALL);
+    ///
+    /// let mut gb = RustBoy::new();
+    /// gb.define_routine(load_level.clone());
+    /// gb.init(load_level.call());
+    /// gb.raw(|asm| {
+    ///     asm.chunk(rust_boy::rust_boy::Chunk::Tilemap).label("LevelMap").ds_fill("1024", "0");
+    /// });
+    /// let out = gb.build();
+    /// assert!(out.contains("LoadLevel:") && out.contains("Memcopy:"));
+    /// ```
+    pub fn define_routine(&mut self, routine: Routine) -> &mut Self {
+        self.functions.register_routine(routine);
+        self
+    }
+
+    /// A call to `routine` (`call Name`), which makes sure the program has the routine
+    ///
+    /// The routine is registered with its dependencies, as with [`RustBoy::define_routine`],
+    /// unless the program already has it: a builtin (its `gb_std` routine), or a function
+    /// of that name with the same code. So a typed call brings what it calls, wherever
+    /// the call goes (main loop, `init`, an `If` body, a function).
+    ///
+    /// # Panics
+    /// If the program has a function with the routine's name but other code.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_std::utility::delay;
+    /// use rust_boy::rust_boy::RustBoy;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// let call = gb.call_routine(&delay());
+    /// gb.add_to_main_loop(call);
+    /// assert!(gb.build().contains("Delay:"));
+    /// ```
+    pub fn call_routine(&mut self, routine: &Routine) -> Vec<Instr> {
+        self.functions
+            .register_dep(routine, &format!("call_routine(\"{}\")", routine.name()));
+        vec![Instr::Call {
+            target: JumpTarget::Label(routine.name().to_string()),
+        }]
     }
 
     /// Register a user-defined function from an Emittable
@@ -659,7 +745,7 @@ impl RustBoy {
         // however the program calls them, unless it defines them already (as variables or
         // in raw code)
         for name in functions.variables {
-            self.vars.create_u8(name, 0);
+            self.vars.create_u8(&name, 0);
         }
 
         asm.chunk(Chunk::Init);

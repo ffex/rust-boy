@@ -577,6 +577,32 @@ impl TestCpu {
         }
     }
 
+    /// The value of the 8-bit register `reg` (not `[hl]`), or `None` when the model does
+    /// not know it (its pair holds a symbolic address, or a stubbed routine was called)
+    pub fn known(&self, reg: R8) -> Option<u8> {
+        let value = match reg {
+            R8::A => self.a,
+            R8::B => self.b,
+            R8::C => self.c,
+            R8::D => self.d,
+            R8::E => self.e,
+            R8::H => self.h,
+            R8::L => self.l,
+            R8::AtHl => panic!("[hl] is memory, not a register"),
+        };
+        (self.unknown & Self::unknown_bit(reg) == 0).then_some(value)
+    }
+
+    /// The Z flag, or `None` when the model does not know it
+    pub fn known_zero(&self) -> Option<bool> {
+        (self.unknown & UNKNOWN_ZERO == 0).then_some(self.zero)
+    }
+
+    /// The carry flag, or `None` when the model does not know it
+    pub fn known_carry(&self) -> Option<bool> {
+        (self.unknown & UNKNOWN_CARRY == 0).then_some(self.carry)
+    }
+
     /// The result and the carry of the rotate, shift or swap `instr` on `value`; reads the
     /// carry only for the rotates through it (`rl`, `rr`, `rla`, `rra`)
     fn rotate(&self, instr: &Instr, value: u8) -> (u8, bool) {

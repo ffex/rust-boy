@@ -56,13 +56,10 @@ fn main() {
     // ========================================
     // FUNCTIONS - Auto WRAM allocation!
     // ========================================
-    gb.define_function(
+    gb.define_routine(is_specific_tile(
         "IsWallTile",
-        is_specific_tile(
-            "IsWallTile",
-            &["$00", "$01", "$02", "$04", "$05", "$06", "$07"],
-        ),
-    );
+        &["$00", "$01", "$02", "$04", "$05", "$06", "$07"],
+    ));
     gb.define_function_from(
         "CheckAndHandleBrick",
         vec![

@@ -1,4 +1,5 @@
 use crate::gb_asm::{Block, Condition, Expr, Instr, Mem, R8, R16};
+use crate::gb_std::routine::{Regs, Routine};
 use crate::hw;
 
 //TODO
@@ -67,14 +68,14 @@ pub fn cp_in_memory(label: &str, addr: impl Into<Expr>) -> Vec<Instr> {
 
 /// The `Memcopy` routine: copy `bc` bytes from `de` to `hl`
 ///
-/// - In: `de` = source, `hl` = destination, `bc` = length; a length of 0 copies nothing.
-/// - Out: `de` and `hl` point after the copied bytes, `bc` = 0.
-/// - Changes: `a` and the flags.
+/// - Reads: `de` = source, `hl` = destination, `bc` = length; a length of 0 copies nothing.
+/// - Returns: `de` and `hl` point after the copied bytes, `bc` = 0.
+/// - Clobbers: `a` and the flags.
 ///
 /// The length is tested before the first byte (3 bytes of code): the copy loop alone
 /// copies at least one byte, so a length of 0 used to wrap to `$FFFF` and copy 64 KiB
 /// over WRAM, the stack and the I/O registers (B27).
-pub fn memcopy() -> Vec<Instr> {
+pub fn memcopy() -> Routine {
     let mut asm = Block::new();
     asm.comment("Copy bytes from one area to another");
     asm.comment("@param de: source");
@@ -93,7 +94,10 @@ pub fn memcopy() -> Vec<Instr> {
     asm.or(R8::C);
     asm.jp_cond(Condition::NZ, ".copy");
     asm.ret();
-    asm.into_instrs()
+    Routine::new("Memcopy", asm)
+        .with_reads(Regs::BC | Regs::DE | Regs::HL)
+        .with_returns(Regs::BC | Regs::DE | Regs::HL)
+        .with_clobbers(Regs::A | Regs::F)
 }
 pub fn turn_off_screen() -> Vec<Instr> {
     let mut asm = Block::new();
@@ -110,39 +114,49 @@ pub fn turn_on_screen() -> Vec<Instr> {
     asm.into_instrs()
 }
 
-pub fn wait_vblank() -> Vec<Instr> {
+/// The `WaitVBlank` routine: wait until the LCD is in VBlank (`rLY` from 144 to 153)
+///
+/// Returns at once in VBlank. With the LCD off, `rLY` stays 0 and it never returns.
+/// - Reads and returns nothing.
+/// - Clobbers: `a` and the flags.
+pub fn wait_vblank() -> Routine {
     let mut asm = Block::new();
     asm.label("WaitVBlank");
     asm.ld_a_addr_def(hw::LY);
     asm.cp_imm(hw::SCRN_Y.value); // VBlank: LY from 144 to 153
     asm.jp_cond(Condition::C, "WaitVBlank");
     asm.ret();
-    asm.into_instrs()
+    Routine::new("WaitVBlank", asm).with_clobbers(Regs::A | Regs::F)
 }
-pub fn wait_not_vblank() -> Vec<Instr> {
+
+/// The `WaitNotVBlank` routine: wait until the LCD is out of VBlank (`rLY` below 144)
+///
+/// - Reads and returns nothing.
+/// - Clobbers: `a` and the flags.
+pub fn wait_not_vblank() -> Routine {
     let mut asm = Block::new();
     asm.label("WaitNotVBlank");
     asm.ld_a_addr_def(hw::LY);
     asm.cp_imm(hw::SCRN_Y.value);
     asm.jp_cond(Condition::NC, "WaitNotVBlank");
     asm.ret();
-    asm.into_instrs()
+    Routine::new("WaitNotVBlank", asm).with_clobbers(Regs::A | Regs::F)
 }
 
 /// The `GetTileByPixel` routine: the background tile under a pixel
 ///
 /// This is the only `GetTileByPixel`: `RustBoy` emits this one too
 /// (`BuiltinFunction::GetTileByPixel`). Its contract:
-/// - In: `b` = X and `c` = Y, in pixels on the background map at `$9800` (0 to 255; the
-///   screen pixel when `rSCX` and `rSCY` are 0). `get_pivot` (of a `gb_std` `Sprite`, or
-///   of the `RustBoy` sprite manager) loads them from a sprite's position.
-/// - Out: `hl` = the address of that tile in the map, `$9800 + (Y / 8) * 32 + X / 8`,
+/// - Reads: `b` = X and `c` = Y, in pixels on the background map at `$9800` (0 to 255;
+///   the screen pixel when `rSCX` and `rSCY` are 0). `get_pivot` (of a `gb_std` `Sprite`,
+///   or of the `RustBoy` sprite manager) loads them from a sprite's position.
+/// - Returns: `hl` = the address of that tile in the map, `$9800 + (Y / 8) * 32 + X / 8`,
 ///   and `a` = the tile index stored there (`[hl]`). So a caller can test the tile at
 ///   once (`IfConst`, `IfA`, `IfCall`), then change it through `hl` (`TileRef`).
-/// - Changes: `bc` and the flags; `de` is kept.
+/// - Clobbers: `bc` and the flags; `de` is kept.
 ///
 /// It reads VRAM: call it while VRAM is accessible (in VBlank, or with the LCD off).
-pub fn get_tile_by_pixel() -> Vec<Instr> {
+pub fn get_tile_by_pixel() -> Routine {
     let mut asm = Block::new();
 
     asm.comment("Convert a pixel position to a tilemap address and read the tile there");
@@ -191,18 +205,24 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     asm.ld(R8::A, R8::AtHl);
     asm.ret();
 
-    asm.into_instrs()
+    Routine::new("GetTileByPixel", asm)
+        .with_reads(Regs::BC)
+        .with_returns(Regs::A | Regs::HL)
+        .with_clobbers(Regs::BC | Regs::F)
 }
 
 /// A routine `label` that sets the Z flag when `a` is one of the tiles `tiles_ids`
 ///
 /// Each tile id is a number (`"$00"`) or a constant (`"BRICK_LEFT"`), as [`Expr`] reads
 /// text.
+/// - Reads: `a`, the tile index (as `GetTileByPixel` returns it).
+/// - Returns: the flags, Z set when `a` is one of the tiles (`IfCall::is_true`).
+/// - Clobbers nothing: `a` is kept.
 ///
 /// # Panics
-/// If a tile id is neither a symbol nor a number.
+/// If `label` is not an RGBDS identifier, or a tile id is neither a symbol nor a number.
 #[track_caller]
-pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
+pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Routine {
     let mut asm = Block::new();
     asm.label(label);
     for (index, tile_id) in tiles_ids.iter().enumerate() {
@@ -212,7 +232,10 @@ pub fn is_specific_tile(label: &str, tiles_ids: &[&str]) -> Vec<Instr> {
         }
     }
     asm.ret();
-    asm.into_instrs()
+    Routine::new(label, asm)
+        .with_reads(Regs::A)
+        .with_returns(Regs::F)
+        .with_clobbers(Regs::NONE)
 }
 
 #[cfg(test)]
@@ -245,7 +268,7 @@ mod tests {
             for y in positions {
                 let mut cpu = cpu_with_map();
                 (cpu.b, cpu.c, cpu.d, cpu.e) = (x, y, 0x12, 0x34);
-                cpu.run(&routine);
+                cpu.run(routine.body());
                 let addr = 0x9800 + u16::from(y / 8) * 32 + u16::from(x / 8);
                 let hl = u16::from_be_bytes([cpu.h, cpu.l]);
                 assert_eq!(hl, addr, "hl for X {} Y {}", x, y);

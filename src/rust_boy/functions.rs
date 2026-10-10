@@ -1,12 +1,22 @@
 //! Function registry: the builtin routines and the user functions, and which of them
 //! `build()` emits
+//!
+//! Every function is a [`Routine`]: the builtins are the `gb_std` routines, and a user
+//! function is a routine registered with `RustBoy::define_routine`, or built from its body
+//! by `define_function` / `define_function_from`. What a function needs is the routines it
+//! depends on ([`Routine::deps`], given with the routine), and what its body refers to
+//! (read as [`symbols`] reads code: typed operands by their type, raw text as RGBDS reads
+//! it). A builtin's dependencies are given in full (a test checks them against its body),
+//! so its body is not read.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::gb_asm::labels::{code_lines, split_def, split_label, symbol_words};
-use crate::gb_asm::{Block, Condition, Instr, R8, R16};
+use crate::gb_asm::Instr;
+use crate::gb_asm::labels::symbols;
 use crate::gb_std::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
 use crate::gb_std::inputs::update_keys;
+use crate::gb_std::routine::Routine;
+use crate::gb_std::utility::delay;
 
 /// Builtin functions that can be auto-included
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -28,7 +38,7 @@ pub enum BuiltinFunction {
 
 impl BuiltinFunction {
     /// Every builtin, in the order `build()` emits them
-    const ALL: [BuiltinFunction; 6] = [
+    pub const ALL: [BuiltinFunction; 6] = [
         BuiltinFunction::Memcopy,
         BuiltinFunction::WaitVBlank,
         BuiltinFunction::WaitNotVBlank,
@@ -54,27 +64,30 @@ impl BuiltinFunction {
         Self::ALL.into_iter().find(|func| func.label() == name)
     }
 
-    /// Generate the assembly instructions for this function
+    /// The routine: its code, the routines it needs, its variables and its calling
+    /// convention
     ///
-    /// Every routine but `Delay` is the `gb_std` one: a routine exists once (B23).
-    pub fn generate(&self) -> Vec<Instr> {
+    /// Every builtin is the `gb_std` routine: a routine exists once (B23).
+    pub fn routine(&self) -> Routine {
         match self {
             BuiltinFunction::Memcopy => memcopy(),
             BuiltinFunction::WaitVBlank => wait_vblank(),
             BuiltinFunction::WaitNotVBlank => wait_not_vblank(),
             BuiltinFunction::UpdateKeys => update_keys(),
             BuiltinFunction::GetTileByPixel => get_tile_by_pixel(),
-            BuiltinFunction::Delay => generate_delay(),
+            BuiltinFunction::Delay => delay(),
         }
     }
 
+    /// The code of the routine ([`BuiltinFunction::routine`])
+    pub fn generate(&self) -> Vec<Instr> {
+        self.routine().into()
+    }
+
     /// The `u8` variables (WRAM) the routine reads or writes, which `build()` creates
-    /// when it emits the routine
-    pub fn variables(&self) -> &'static [&'static str] {
-        match self {
-            BuiltinFunction::UpdateKeys => &["wCurKeys", "wNewKeys"],
-            _ => &[],
-        }
+    /// when it emits the routine ([`Routine::variables`])
+    pub fn variables(&self) -> Vec<String> {
+        self.routine().variables().to_vec()
     }
 }
 
@@ -82,8 +95,8 @@ impl BuiltinFunction {
 pub struct UsedFunctions {
     /// The functions to emit, in their fixed order
     pub code: Vec<Instr>,
-    /// The variables the emitted builtins need, in builtin order
-    pub variables: Vec<&'static str>,
+    /// The variables the emitted routines need, in the order of the routines, each once
+    pub variables: Vec<String>,
 }
 
 /// A function a name refers to
@@ -94,27 +107,35 @@ enum Function {
     User(usize),
 }
 
-/// A user function, with the global symbols its body refers to and the global labels it
-/// defines, read once when it is registered
+/// A user function: its routine, the global symbols it refers to (its dependencies, then
+/// what its body refers to) and the global labels its body defines, read once when it is
+/// registered
 struct UserFunction {
-    name: String,
-    body: Vec<Instr>,
+    routine: Routine,
     refs: Vec<String>,
     labels: BTreeSet<String>,
 }
 
 impl UserFunction {
-    fn new(name: &str, body: Vec<Instr>) -> Self {
-        let (mut refs, mut labels) = (Vec::new(), BTreeSet::new());
-        for instr in &body {
+    fn new(routine: Routine) -> Self {
+        let mut refs: Vec<String> = routine
+            .deps()
+            .iter()
+            .map(|dep| dep.name().to_string())
+            .collect();
+        let mut labels = BTreeSet::new();
+        for instr in routine.body() {
             symbols(instr, &mut refs, &mut labels);
         }
         Self {
-            name: name.to_string(),
-            body,
+            routine,
             refs,
             labels,
         }
+    }
+
+    fn name(&self) -> &str {
+        self.routine.name()
     }
 }
 
@@ -179,12 +200,71 @@ impl FunctionRegistry {
         self.external_symbols.insert(name.to_string());
     }
 
-    /// Register a user-defined function
+    /// Register a user-defined function, from its body: what it needs is read from the body
     ///
-    /// Registering the same name again replaces the body and keeps its position.
+    /// Registering the same name again replaces the function and keeps its position.
     pub fn register_user_function(&mut self, name: &str, body: Vec<Instr>) {
-        let function = UserFunction::new(name, body);
-        let index = match self.by_name.get(name) {
+        self.register(Routine::new(name, body));
+    }
+
+    /// Register a routine and the routines it depends on (each one before the routines that
+    /// need it), as user functions
+    ///
+    /// The routine replaces a user function of the same name (keeping its position), as
+    /// [`register_user_function`](Self::register_user_function) does. A dependency is
+    /// shared, not replaced: a builtin's `gb_std` routine is the builtin (or the user
+    /// function that replaces it), and a dependency with the name and code of a user
+    /// function is that function.
+    ///
+    /// # Panics
+    /// If a dependency has the name of a user function, or of another global label of one
+    /// (a second entry point), but other code: a call to that name could reach only one.
+    pub fn register_routine(&mut self, routine: Routine) {
+        let parent = format!("routine `{}`", routine.name());
+        for dep in routine.deps() {
+            self.register_dep(dep, &parent);
+        }
+        self.register(routine);
+    }
+
+    /// Make sure the program has the routine `routine`, which `needed_by` needs (a
+    /// routine, `routine \`Name\``, or a typed call): register it, with its dependencies,
+    /// unless it is a builtin or a user function already (see
+    /// [`register_routine`](Self::register_routine))
+    pub fn register_dep(&mut self, routine: &Routine, needed_by: &str) {
+        let name = routine.name();
+        if let Some(builtin) = BuiltinFunction::from_name(name) {
+            if builtin.routine().body() == routine.body() {
+                // The builtin, or the user function that replaces it
+                return;
+            }
+        }
+        let owner = self.user_function(name);
+        if let Some(index) = owner {
+            let function = &self.user_functions[index];
+            if function.name() == name && function.routine.body() == routine.body() {
+                return;
+            }
+            panic!(
+                "{} needs a routine `{}`, but the program already has a function with that \
+                 name and other code (`{}`); rename one of them",
+                needed_by,
+                name,
+                function.name()
+            );
+        }
+        let parent = format!("routine `{}`", name);
+        for dep in routine.deps() {
+            self.register_dep(dep, &parent);
+        }
+        self.register(routine.clone());
+    }
+
+    /// Register `routine` as a user function, replacing one of the same name
+    fn register(&mut self, routine: Routine) {
+        let name = routine.name().to_string();
+        let function = UserFunction::new(routine);
+        let index = match self.by_name.get(&name) {
             Some(&index) => {
                 // Forget the old body's labels, of this function only
                 for label in &self.user_functions[index].labels {
@@ -200,7 +280,7 @@ impl FunctionRegistry {
             }
             None => {
                 let index = self.user_functions.len();
-                self.by_name.insert(name.to_string(), index);
+                self.by_name.insert(name, index);
                 self.user_functions.push(function);
                 index
             }
@@ -249,7 +329,7 @@ impl FunctionRegistry {
             .iter()
             .map(|func| func.label().to_string())
             .collect();
-        names.extend(self.user_functions.iter().map(|f| f.name.clone()));
+        names.extend(self.user_functions.iter().map(|f| f.name().to_string()));
         names.extend(self.generated.iter().cloned());
         names.sort();
         names.dedup();
@@ -258,20 +338,22 @@ impl FunctionRegistry {
 
     /// The functions a program needs, given its code outside the functions (`code`) and
     /// its variables (`variables`): every function that code refers to, then every
-    /// function those refer to, and so on, plus the forced builtins and kept user
-    /// functions (B24, B26)
+    /// function those need, and so on, plus the forced builtins and kept user functions
+    /// (B24, B26)
     ///
     /// A function is found by its name anywhere in an instruction (`call`, `jp`, `jr`,
-    /// `ld hl, Name`, `dw Name`, a raw line), so a call made through `Call`, `IfCall`, a
-    /// user function body or raw code is seen. A name only counts once, so each function
-    /// is emitted once. A name the program defines elsewhere is not a builtin: a label
-    /// or `DEF` of `code` (its own copy of a routine, a constant), a variable, or an
-    /// external symbol; and a builtin whose label an emitted user function defines is not
-    /// emitted either.
+    /// `ld hl, Name`, `dw Name`, a raw line; see [`symbols`]), so a call made through
+    /// `Call`, `IfCall`, a user function body or raw code is seen. What a function needs
+    /// is its dependencies ([`Routine::deps`]) and, for a user function, what its body
+    /// refers to. A name only counts once, so each function is emitted once. A name the
+    /// program defines elsewhere is not a builtin: a label or `DEF` of `code` (its own
+    /// copy of a routine, a constant), a variable, or an external symbol; and a builtin
+    /// whose label an emitted user function defines is not emitted either.
     ///
     /// The order is fixed: builtins in [`BuiltinFunction`] order, then user functions in
-    /// registration order. The variables the emitted builtins need come with them, but
-    /// not the ones the program already defines.
+    /// registration order (a routine's dependencies are registered before it). The
+    /// variables the emitted routines need come with them, but not the ones the program
+    /// already defines.
     ///
     /// # Panics
     /// If a user function's name is also a variable, a label or `DEF` of `code`, or an
@@ -290,12 +372,13 @@ impl FunctionRegistry {
             }
         }
         for function in &self.user_functions {
-            let other = if variables.contains(&function.name) {
+            let name = function.name();
+            let other = if variables.contains(name) {
                 "a variable"
-            } else if self.external_symbols.contains(&function.name) {
+            } else if self.external_symbols.contains(name) {
                 "an external symbol (a function is defined either with define_function or \
                  outside the generated code, with external_symbol)"
-            } else if code_defs.contains(&function.name) {
+            } else if code_defs.contains(name) {
                 "a constant or a label of the program (define_const, a DEF, or a label in \
                  raw code)"
             } else {
@@ -304,7 +387,7 @@ impl FunctionRegistry {
             panic!(
                 "function `{0}` is also {1}: `call {0}` would not reach the function; \
                  rename one of them",
-                function.name, other
+                name, other
             );
         }
         // Names defined outside the functions: variables, external symbols, the labels
@@ -321,9 +404,13 @@ impl FunctionRegistry {
         let mut visit = |function: Function, pending: &mut Vec<String>| match function {
             Function::Builtin(func) => {
                 if builtins.insert(func) {
-                    for instr in func.generate() {
-                        symbols(&instr, pending, &mut BTreeSet::new());
-                    }
+                    // Its dependencies, given in full: the body is not read
+                    pending.extend(
+                        func.routine()
+                            .deps()
+                            .iter()
+                            .map(|dep| dep.name().to_string()),
+                    );
                 }
             }
             Function::User(index) => {
@@ -356,102 +443,37 @@ impl FunctionRegistry {
             seen.insert(name);
         }
 
+        // A builtin is only here when no user function defines its label (user names and
+        // labels are looked up first)
+        let routines = builtins.into_iter().map(|func| func.routine()).chain(
+            users
+                .into_iter()
+                .map(|index| self.user_functions[index].routine.clone()),
+        );
         let mut used = UsedFunctions {
             code: Vec::new(),
             variables: Vec::new(),
         };
-        // A builtin is only here when no user function defines its label (user names and
-        // labels are looked up first)
-        for func in builtins {
-            used.code.extend(func.generate());
-            used.variables.extend(
-                func.variables()
-                    .iter()
-                    .filter(|name| !defined.contains(**name) && !user_labels.contains(**name)),
-            );
-        }
-        for index in users {
-            used.code
-                .extend(self.user_functions[index].body.iter().cloned());
+        for routine in routines {
+            for variable in routine.variables() {
+                let needed = !defined.contains(variable)
+                    && !user_labels.contains(variable)
+                    && !used.variables.contains(variable);
+                if needed {
+                    used.variables.push(variable.clone());
+                }
+            }
+            used.code.extend(routine);
         }
         used
     }
 }
 
-/// Whether `code` defines the global symbol `name`: a label (`Name:`, also in a raw line)
-/// or a `DEF`
-pub(crate) fn defines(code: &[Instr], name: &str) -> bool {
-    let mut defs = BTreeSet::new();
-    for instr in code {
-        symbols(instr, &mut Vec::new(), &mut defs);
-    }
-    defs.contains(name)
-}
-
-/// Add to `refs` the global symbols `instr` refers to, and to `defs` the global labels it
-/// defines
-///
-/// The text of the instruction is read line by line (a raw instruction can hold several
-/// lines), as RGBDS reads it ([`code_lines`]): comments (`;`, `/* … */`) and the contents
-/// of strings are skipped, and a line that starts with `Name:` defines `Name`, as does
-/// `DEF Name`. A local symbol (`.end_if_0`) is skipped, and `Scope.local` refers to
-/// `Scope`. Sections and file names refer to nothing.
-fn symbols(instr: &Instr, refs: &mut Vec<String>, defs: &mut BTreeSet<String>) {
-    let text = match instr {
-        Instr::Label { name } => {
-            if !name.starts_with('.') {
-                defs.insert(name.clone());
-            }
-            return;
-        }
-        Instr::Comment { .. }
-        | Instr::Section { .. }
-        | Instr::Include { .. }
-        | Instr::Incbin { .. } => return,
-        Instr::Def { label, value } => {
-            defs.insert(label.clone());
-            value.clone()
-        }
-        other => other.to_string(),
-    };
-    for code in code_lines(&text) {
-        let (label, rest) = split_label(&code);
-        if let Some(label) = label {
-            defs.insert(label.to_string());
-        }
-        // `DEF Name EQU value` (also in raw text): defines `Name`, refers to the value
-        let rest = match split_def(rest) {
-            Some((name, value)) => {
-                defs.insert(name.to_string());
-                value
-            }
-            None => rest,
-        };
-        refs.extend(symbol_words(rest).map(str::to_string));
-    }
-}
-
-// Function implementations
-
-fn generate_delay() -> Vec<Instr> {
-    let mut asm = Block::new();
-
-    asm.comment("Delay loop using BC as counter");
-    asm.comment("@param bc: delay counter (higher = longer delay)");
-    asm.label("Delay");
-    asm.ld(R8::A, R8::B);
-    asm.or(R8::C);
-    asm.dec(R16::BC);
-    asm.jr_cond(Condition::NZ, "Delay");
-    asm.ret();
-
-    asm.into_instrs()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::Expr;
+    use crate::gb_asm::Block;
+    use crate::gb_std::routine::Regs;
 
     fn function_body(label: &str) -> Vec<Instr> {
         let mut asm = Block::new();
@@ -478,8 +500,11 @@ mod tests {
         for name in names {
             registry.register_user_function(name, function_body(name));
         }
-        // Registering a name again replaces the body but keeps its position
-        registry.register_user_function("Echo", function_body("EchoV2"));
+        // Registering a name again replaces the body but keeps its position (the new body
+        // has a second label, to tell it from the old one)
+        let mut echo = Block::new();
+        echo.label("Echo").label("EchoV2").ret();
+        registry.register_user_function("Echo", echo.into_instrs());
 
         // All of them called, in another order
         let mut calls = Block::new();
@@ -489,7 +514,8 @@ mod tests {
         assert_eq!(
             labels(&registry.generate_used(&[&calls.into_instrs()], []).code),
             [
-                "Golf:", "Alpha:", "EchoV2:", "Hotel:", "Bravo:", "Foxtrot:", "Charlie:", "Delta:",
+                "Golf:", "Alpha:", "Echo:", "EchoV2:", "Hotel:", "Bravo:", "Foxtrot:", "Charlie:",
+                "Delta:",
             ]
         );
         assert!(registry.function_exists("Alpha"));
@@ -504,7 +530,8 @@ mod tests {
     #[test]
     fn test_builtins_are_the_gb_std_routines() {
         // B23: each routine exists once; rust_boy's GetTileByPixel had another contract
-        // than gb_std's (it also loaded the tile into a)
+        // than gb_std's (it also loaded the tile into a). Each builtin is the gb_std
+        // Routine value: code, dependencies, variables and calling convention
         let gb_std = [
             (BuiltinFunction::Memcopy, memcopy()),
             (BuiltinFunction::WaitVBlank, wait_vblank()),
@@ -513,14 +540,191 @@ mod tests {
             (BuiltinFunction::GetTileByPixel, get_tile_by_pixel()),
         ];
         for (builtin, routine) in gb_std {
-            assert_eq!(text(&builtin.generate()), text(&routine), "{:?}", builtin);
+            assert_eq!(builtin.routine(), routine, "{:?}", builtin);
+            assert_eq!(
+                text(&builtin.generate()),
+                text(routine.body()),
+                "{:?}",
+                builtin
+            );
         }
+        // Delay is gb_std's too since routines are values: rust_boy has no routine of its own
+        assert_eq!(BuiltinFunction::Delay.routine(), delay());
         for builtin in BuiltinFunction::ALL {
             assert_eq!(BuiltinFunction::from_name(builtin.label()), Some(builtin));
+            assert_eq!(builtin.routine().name(), builtin.label());
             let label = format!("{}:", builtin.label());
             let body = text(&builtin.generate());
             assert_eq!(body.lines().filter(|line| *line == label).count(), 1);
+            assert_eq!(builtin.variables(), builtin.routine().variables());
         }
+    }
+
+    #[test]
+    fn test_builtin_dependencies_are_complete() {
+        // build() does not read a builtin's body: what it needs is its dependencies and its
+        // variables. So every global symbol its body refers to must be one of them, one of its
+        // own labels, or a hardware.inc name; and a dependency must be a builtin, which
+        // build() knows by name.
+        let hardware: BTreeSet<&str> = crate::hw::SYMBOLS.iter().map(|(name, _)| *name).collect();
+        for builtin in BuiltinFunction::ALL {
+            let routine = builtin.routine();
+            let (mut refs, mut defs) = (Vec::new(), BTreeSet::new());
+            for instr in routine.body() {
+                symbols(instr, &mut refs, &mut defs);
+            }
+            for name in refs {
+                let known = defs.contains(&name)
+                    || routine.deps().iter().any(|dep| dep.name() == name)
+                    || routine.variables().contains(&name)
+                    || hardware.contains(name.as_str());
+                assert!(known, "{}: `{}` is not a dependency", builtin.label(), name);
+            }
+            for dep in routine.deps() {
+                let dep_builtin = BuiltinFunction::from_name(dep.name());
+                assert!(
+                    dep_builtin.is_some_and(|b| b.routine() == *dep),
+                    "{}: dependency {} is not a builtin",
+                    builtin.label(),
+                    dep.name()
+                );
+            }
+        }
+    }
+
+    /// A routine `name` that calls each of `deps`, which it depends on
+    fn routine_calling(name: &str, deps: Vec<Routine>) -> Routine {
+        let mut body = Block::new();
+        body.label(name);
+        for dep in &deps {
+            body.call(dep.name());
+        }
+        body.ret();
+        deps.into_iter()
+            .fold(Routine::new(name, body), Routine::with_dep)
+            .with_clobbers(Regs::ALL)
+    }
+
+    /// The global labels of `code`, in order
+    fn global_labels(code: &[Instr]) -> Vec<String> {
+        text(code)
+            .lines()
+            .filter(|l| l.ends_with(':') && !l.starts_with('.'))
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn test_a_routine_brings_its_dependencies() {
+        // Top -> (Middle, Memcopy); Middle -> (Leaf, Memcopy, WaitVBlank); Leaf -> Delay.
+        // Only Top is registered: its dependencies come with it, each once, in a fixed
+        // order (builtins first, then each routine after the ones it needs)
+        let leaf = routine_calling("Leaf", vec![delay()]);
+        let middle = routine_calling("Middle", vec![leaf.clone(), memcopy(), wait_vblank()]);
+        let top = routine_calling("Top", vec![middle.clone(), memcopy()]);
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(top.clone());
+        assert!(registry.function_exists("Leaf"));
+
+        let mut main = Block::new();
+        main.call("Top").call("Top");
+        let used = registry.generate_used(&[&main.into_instrs()], []);
+        assert_eq!(
+            global_labels(&used.code),
+            [
+                "Memcopy:",
+                "WaitVBlank:",
+                "Delay:",
+                "Leaf:",
+                "Middle:",
+                "Top:"
+            ]
+        );
+
+        // A dependency that is reached only through the dependency list (nothing in the body
+        // names it, as for a jump table built elsewhere) is emitted too
+        let mut body = Block::new();
+        body.label("Dispatch").ret();
+        let dispatch = Routine::new("Dispatch", body).with_dep(leaf);
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(dispatch);
+        let mut main = Block::new();
+        main.call("Dispatch");
+        let used = registry.generate_used(&[&main.into_instrs()], []);
+        assert_eq!(global_labels(&used.code), ["Delay:", "Leaf:", "Dispatch:"]);
+
+        // And a dependency's variables come with it
+        let poll = routine_calling("Poll", vec![crate::gb_std::inputs::update_keys()]);
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(poll);
+        let mut main = Block::new();
+        main.call("Poll");
+        let used = registry.generate_used(&[&main.into_instrs()], []);
+        assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
+    }
+
+    #[test]
+    fn test_a_routine_variable_is_created_once() {
+        // A user routine that needs wCurKeys, as UpdateKeys does: one variable
+        let mut body = Block::new();
+        body.label("ReadKeys").ld_a_addr_def("wCurKeys").ret();
+        let read_keys = Routine::new("ReadKeys", body)
+            .with_variable("wCurKeys")
+            .with_dep(crate::gb_std::inputs::update_keys());
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(read_keys);
+        let mut main = Block::new();
+        main.call("ReadKeys");
+        let used = registry.generate_used(&[&main.into_instrs()], []);
+        assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
+        // Not the ones the program defines
+        let mut main = Block::new();
+        main.call("ReadKeys");
+        let used = registry.generate_used(&[&main.into_instrs()], ["wNewKeys"]);
+        assert_eq!(used.variables, ["wCurKeys"]);
+    }
+
+    #[test]
+    fn test_a_dependency_is_shared_not_replaced() {
+        // Two routines that need the same Helper: registered once, at its first place
+        let helper = routine_calling("Helper", vec![]);
+        let first = routine_calling("First", vec![helper.clone()]);
+        let second = routine_calling("Second", vec![helper.clone()]);
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(first);
+        registry.register_routine(second);
+        let mut main = Block::new();
+        main.call("Second").call("First");
+        let used = registry.generate_used(&[&main.into_instrs()], []);
+        assert_eq!(global_labels(&used.code), ["Helper:", "First:", "Second:"]);
+
+        // A user function that replaces a builtin stays: a gb_std dependency on the builtin
+        // reaches it
+        let mut own = Block::new();
+        own.label("Delay").ld_a(42).ret();
+        let mut registry = FunctionRegistry::new();
+        registry.register_user_function("Delay", own.into_instrs());
+        registry.register_routine(routine_calling("Wait", vec![delay()]));
+        let mut main = Block::new();
+        main.call("Wait");
+        let out = text(&registry.generate_used(&[&main.into_instrs()], []).code);
+        assert!(out.contains("ld a, 42"), "{}", out);
+        assert!(!out.contains("Delay loop"), "{}", out);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "routine `Second` needs a routine `Helper`, but the program \
+                               already has a function with that name and other code"
+    )]
+    fn test_two_routines_with_one_name_panic() {
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(routine_calling(
+            "First",
+            vec![routine_calling("Helper", vec![])],
+        ));
+        let other_helper = routine_calling("Helper", vec![delay()]);
+        registry.register_routine(routine_calling("Second", vec![other_helper]));
     }
 
     #[test]
@@ -563,64 +767,5 @@ mod tests {
         main.call("Poll");
         let used = registry.generate_used(&[&main.into_instrs()], []);
         assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
-    }
-
-    #[test]
-    fn test_symbols_of_an_instruction() {
-        let mut asm = Block::new();
-        asm.label("Start")
-            .label(".loop")
-            .call("Func")
-            .jp_cond(Condition::NZ, ".loop")
-            .jr("Other.local")
-            .ld(R16::HL, Expr::sym("Table") + 2)
-            .ld(R16::BC, Expr::sym("TilesEnd") - "Tiles")
-            .ld_a(5)
-            .comment("call NotAReference")
-            .raw("Raw: dw Target ; NotAReference either")
-            .raw("ld [hl], BLANK_TILE")
-            // Several lines in one raw instruction: each read on its own (a comment ends
-            // at its line), a `;` in a string is not a comment, strings are not code
-            .raw("ld a, 1 ; one\n    call Helper\nSecond: jp Third")
-            .raw("db \"a;b\", LOW(Fourth), \"NotAReference\"")
-            // Block comments, also over several lines
-            .raw("Blocked: /* call NotAReference */ ret /* and\n call NotAReference */")
-            .def("CONSTANT", "Fifth + 1");
-        let mut refs = Vec::new();
-        let mut defs = BTreeSet::new();
-        for instr in asm.into_instrs() {
-            symbols(&instr, &mut refs, &mut defs);
-        }
-        // Mnemonics and registers are words too (`call`, `hl`): they never name a function
-        for name in [
-            "Func",
-            "Other",
-            "Table",
-            "TilesEnd",
-            "Tiles",
-            "Target",
-            "BLANK_TILE",
-            "Helper",
-            "Third",
-            "Fourth",
-            "Fifth",
-        ] {
-            assert!(refs.iter().any(|r| r == name), "{} not in {:?}", name, refs);
-        }
-        for name in [
-            "Start",
-            "Raw",
-            "Second",
-            "loop",
-            "local",
-            "NotAReference",
-            "5",
-        ] {
-            assert!(!refs.iter().any(|r| r == name), "{} in {:?}", name, refs);
-        }
-        assert_eq!(
-            defs.into_iter().collect::<Vec<_>>(),
-            ["Blocked", "CONSTANT", "Raw", "Second", "Start"]
-        );
     }
 }

@@ -1,0 +1,2 @@
+# The snapshots of the generated asm are compared byte for byte (tests/snapshots.rs)
+examples/*/main.asm text eol=lf

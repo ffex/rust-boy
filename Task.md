@@ -188,7 +188,12 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       as `RustBoy::set_sprite_size`
 - [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since
       [B17](CONTEXT.md#b17); HRAM, and real addresses for the variables (rgblink places the sections), are left)
-- [ ] `If` that never clobbers user registers (or documents what it uses)
+- [x] `If` that never clobbers user registers (or documents what it uses) (branch `refactor-p2-routines-if`: documented,
+      in the clobber model of routines: `If::clobbers()` is `a`, `b` and the flags, `IfConst` `a` and the flags, `IfA` and
+      `IfCall` the flags, each checked on the test CPU for every operator, with and without else. Not a `push`/`pop` of
+      every user register, which would change every example ROM. The B5 hole is closed: left code that may change `b` (a
+      call, raw code, a write to `b`; `Regs::written_by`) is wrapped in `push bc` / `pop bc`, which no example needs, so
+      the 6 example ROMs, their asm, `.map` and `.sym` are byte-identical)
 - [ ] `prelude` module; avoid the `rust_boy::rust_boy` stutter (optional rename: `asm` / `std` / `engine`)
 - [ ] Ship all breaking API changes together in one release
 

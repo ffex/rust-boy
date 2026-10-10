@@ -103,6 +103,10 @@ let out = gb.build();
 assert!(out.contains("CopyScore:") && out.contains("Memcopy:"));
 ```
 
+Control flow uses the same model: `If` uses `a`, `b` and the flags (`If::clobbers()`; the bodies start with `a` = left
+and `b` = right), `IfConst` `a` and the flags, `IfA` and `IfCall` the flags. Left code that may change `b` (a call, for
+example) is wrapped in `push bc` / `pop bc`, so the compare always reads the right value.
+
 ## Low level (`gb_asm`)
 
 The same building blocks the engine uses, one instruction at a time. An `Asm` is a program: it is printed in the

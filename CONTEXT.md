@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 281 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 286 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -205,6 +205,9 @@ rgbfix -v -p 0xFF main.gb
   symbols of an `Expr`), what is only text (a raw line, `db`, `dw`, `ds`, a `DEF` value, `Expr::raw`) as RGBDS reads
   it (the scan of [B26](#b26), with all its rules). The variables of every emitted routine are created, as they were
   for the builtins.
+  The same model describes control flow (since `refactor-p2-routines-if`): `If`, `IfConst`, `IfA` and `IfCall` have a
+  `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
+  may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
 ### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:575-766`, `build` prints the program of the `Layout` `build_asm` returns)
 
@@ -486,6 +489,20 @@ right is evaluated first into `b`, left into `a`, then `cp b`; `unbricked_rustbo
 order again (byte-identical asm), `unbricked_std` now bounces and its right edge is `+16` (was `+24`).
 Regression test `test_if_compares_left_with_right` runs the emitted code for every operator. The left
 operand must not change `b` (documented; a register-safe `If` is planned in Phase 2).
+**Phase 2 (`refactor-p2-routines-if`):** the registers of each `If` kind are documented in the clobber model of
+routines (`Regs`, see [Key concepts](#key-concepts)): `If::clobbers()` = `a`, `b`, flags (the bodies start with `a` =
+left, `b` = right); `IfConst` = `a`, flags; `IfA` = flags (`a` is kept); `IfCall` = flags (the routine's result; the
+routine changes what its convention says). The choice: document, not save. Saving every register the `If` uses
+(`push bc` / `pop bc` around the whole compare, 2 bytes and 7 M-cycles per `If`) would change the ROM of both
+Unbricked examples for no bug. The latent bug is fixed instead where it is: left code that may change `b` (a `call`,
+`rst`, `jp hl`, raw code, or an instruction that writes `b`, read by `Regs::written_by`) is wrapped in `push bc` /
+`pop bc`, so the compare reads the right value (the left code's changes to `b` and `c` are undone). Left code that
+cannot change `b` gets no `push`/`pop`: no example's does, so the 6 example ROMs, their asm, `.map` and `.sym` are
+byte-identical. Tests: `test_each_if_kind_changes_only_what_it_lists` (every kind and operator, with and without
+else, on the test CPU: the changed registers are exactly the listed ones), `test_if_left_code_that_changes_b` (it
+failed before: left code writing `b`), `test_if_left_code_that_calls_a_routine` (a left `Call` to `GetTileByPixel`),
+`test_if_left_code_that_keeps_b_is_emitted_as_before`, and `test_written_by_covers_what_each_instruction_changes`
+(`Regs::written_by` against the test CPU).
 
 #### B6
 **Composite (16×16) sprites split apart at screen edges.** `move_composite_{left,right}_limit`

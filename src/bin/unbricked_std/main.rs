@@ -2,11 +2,12 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, Block, R8, Section},
+    gb_asm::{Asm, Block, Expr, R8, Section},
     gb_std::{
         flow::If,
         graphics::{
             sprites::{SpriteManager, clear_objects_screen, initialize_objects_screen},
+            tile_ref::TileRef,
             utility::{
                 add_tilemap, add_tiles, cp_in_memory, get_tile_by_pixel, is_specific_tile, memcopy,
                 turn_off_screen, turn_on_screen, wait_not_vblank, wait_vblank,
@@ -16,6 +17,7 @@ use rust_boy::{
         utility::header_section,
         variables::VariableSection,
     },
+    hw,
 };
 
 fn main() {
@@ -25,8 +27,9 @@ fn main() {
     asm.def("BRICK_RIGHT", 0x06);
     asm.def("BLANK_TILE", 0x08);
     asm.def("DIGIT_OFFSET", 0x1A);
-    asm.def("SCORE_TENS", 0x9870);
-    asm.def("SCORE_ONES", 0x9871);
+    // The score digits, on the map at row 3, columns 16 and 17
+    asm.def("SCORE_TENS", TileRef::from_xy(16, 3).tilemap_addr);
+    asm.def("SCORE_ONES", TileRef::from_xy(17, 3).tilemap_addr);
     asm.emit_all(header_section());
     asm.label("EntryPoint");
 
@@ -39,10 +42,12 @@ fn main() {
     tile_data.emit_all(add_tiles("Ball", tiles::BALL));
     tile_data.emit_all(add_tiles("Paddle", tiles::PADDLE));
 
-    asm.emit_all(cp_in_memory("Tiles", "$9000"));
-    asm.emit_all(cp_in_memory("Ball", "$8010"));
-    asm.emit_all(cp_in_memory("Paddle", "$8000"));
-    asm.emit_all(cp_in_memory("Tilemap", "$9800"));
+    // Background tiles at $9000, the paddle (sprite tile 0) and the ball (tile 1) at $8000
+    let sprite_tile = |index: u16| Expr::hex(hw::VRAM8000.value + index * hw::TILE_SIZE);
+    asm.emit_all(cp_in_memory("Tiles", Expr::hex(hw::VRAM9000.value)));
+    asm.emit_all(cp_in_memory("Ball", sprite_tile(1)));
+    asm.emit_all(cp_in_memory("Paddle", sprite_tile(0)));
+    asm.emit_all(cp_in_memory("Tilemap", Expr::hex(hw::SCRN0.value)));
 
     asm.emit_all(initialize_objects_screen());
     asm.emit_all(clear_objects_screen(asm.labels()));
@@ -59,9 +64,9 @@ fn main() {
 
     asm.emit_all(turn_on_screen());
     asm.ld_a(0b11100100);
-    asm.ld_addr_def_a("rBGP");
+    asm.ld_addr_def_a(hw::BGP);
     asm.ld_a(0b11100100);
-    asm.ld_addr_def_a("rOBP0");
+    asm.ld_addr_def_a(hw::OBP0);
 
     asm.ld_a(0);
     asm.ld_addr_def_a("wFrameCounter");

@@ -278,7 +278,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] *(optional)* Game Boy Color: palettes, VRAM bank 1, double speed
 
 ### Tooling
-- [ ] One-command build & run: produce `.gb` + `.sym` + `.map` via rgbasm/rgblink/rgbfix and open an emulator
+- [x] One-command build & run: produce `.gb` + `.sym` + `.map` via rgbasm/rgblink/rgbfix and open an emulator
+      (branch `refactor-p3-tooling-run`: `scripts/run.sh [--run] [--emulator <cmd>] <bin>` builds
+      `target/examples/<bin>/main.{asm,o,gb,sym,map}`; `--run` opens `$GB_EMULATOR` or the first of sameboy, mgba,
+      gambatte, bgb (also through wine), pyboy, and without one prints where the files are;
+      `scripts/assemble-examples.sh` builds every example with it)
 - [x] Snapshot tests of generated asm (after [B13](CONTEXT.md#b13)) (branch `refactor-p3-tooling`: `tests/snapshots.rs`
       compares what each example binary prints with its committed `examples/<bin>/main.asm` and fails with a unified
       diff; `UPDATE_SNAPSHOTS=1 cargo test --test snapshots` rewrites them; no new dependency)

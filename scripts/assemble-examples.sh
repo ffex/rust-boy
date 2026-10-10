@@ -3,7 +3,8 @@
 #
 # Usage: scripts/assemble-examples.sh
 # Needs rgbasm, rgblink and rgbfix (RGBDS >= 0.9) on PATH.
-# Output: target/examples/<bin>/main.{asm,o,gb} (under $CARGO_TARGET_DIR when it is set)
+# Output: target/examples/<bin>/main.{asm,o,gb,sym,map} (under $CARGO_TARGET_DIR when it is set),
+# each built by scripts/run.sh <bin>
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -19,16 +20,8 @@ failed=()
 cargo build --quiet --bins
 
 for bin in "${examples[@]}"; do
-    out="$out_root/$bin"
-    mkdir -p "$out"
-
-    include_flags=(-I include -I "examples/$bin")
-
-    if cargo run --quiet --bin "$bin" > "$out/main.asm" &&
-        rgbasm "${include_flags[@]}" -o "$out/main.o" "$out/main.asm" &&
-        rgblink -o "$out/main.gb" "$out/main.o" &&
-        rgbfix -v -p 0xFF "$out/main.gb"; then
-        echo "ok      $bin -> $out/main.gb"
+    if scripts/run.sh "$bin" > /dev/null; then
+        echo "ok      $bin -> $out_root/$bin/main.gb"
     else
         echo "FAILED  $bin" >&2
         failed+=("$bin")

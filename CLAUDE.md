@@ -31,7 +31,10 @@ cargo clippy --all-targets                # lint
 cargo fmt                                 # format
 cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbricked_std,
                                           #       unbricked_rustboy, fosdem, coin-anim
-scripts/assemble-examples.sh              # every example -> target/examples/<bin>/main.gb (needs RGBDS;
+scripts/run.sh <bin>                      # one bin -> target/examples/<bin>/main.{gb,sym,map,asm} via RGBDS
+scripts/run.sh --run <bin>                # ... and open it in an emulator ($GB_EMULATOR, sameboy, mgba, gambatte,
+                                          # bgb (also through wine), pyboy); none found: prints where the files are
+scripts/assemble-examples.sh              # every example -> target/examples/<bin>/ with scripts/run.sh (needs RGBDS;
                                           # under $CARGO_TARGET_DIR when it is set)
 RGBDS_LINK_CHECK=1 cargo test --lib --test emulator   # with RGBDS: link the test programs, and build ROMs
                                           # and run them on the test emulator (tests/emulator.rs)

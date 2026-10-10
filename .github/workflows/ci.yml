@@ -76,4 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: example-roms
-          path: target/examples/*/main.gb
+          path: |
+            target/examples/*/main.gb
+            target/examples/*/main.sym
+            target/examples/*/main.map

@@ -460,10 +460,11 @@ impl Routine {
     /// defines it
     ///
     /// # Panics
-    /// If `name` is not an RGBDS identifier.
+    /// If `name` is not an RGBDS identifier, or is a register or keyword name (`a`, `LOW`):
+    /// the variable is a label.
     #[track_caller]
     pub fn with_variable(mut self, name: &str) -> Routine {
-        if !is_identifier(name) {
+        if !is_identifier(name) || crate::asm::expr::check_symbol(name).is_err() {
             panic!(
                 "routine \"{}\": invalid variable name \"{}\"",
                 self.name, name

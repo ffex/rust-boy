@@ -203,7 +203,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       [B17](CONTEXT.md#b17); HRAM, and real addresses for the variables (rgblink places the sections), are left)
       (branch `refactor-p2-engine-api-memory`: `create_hram_*` variables in `MemoryRegion::Hram`, $FF80-$FFBF (the stack
       keeps the top of HRAM), read and written with `ldh`; every variable section is printed at the address the
-      allocator gives it, `WRAM0[$C000]`, `HRAM[$FF80]`, so `get_address` is the linked address (checked against the
+      allocator gives it, `WRAM0[$C000]`, `HRAM[$FF80]`, so `get_address` is the linked address once the program's
+      variables are created (`build()` adds its own at the end of the last `WRAM0` section; checked against the
       `.sym` of RGBDS). The asm of the 3 `RustBoy` examples changes in that one line; their ROM, `.map` and `.sym` are
       byte-identical)
 - [x] `If` that never clobbers user registers (or documents what it uses) (branch `refactor-p2-routines-if`: documented,

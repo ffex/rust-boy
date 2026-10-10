@@ -340,8 +340,9 @@ impl VariableManager {
     /// Create a variable in a specific section
     ///
     /// # Panics
-    /// If `initial` is out of the range of `var_type` (see [`VarType::range`]), and as
-    /// [`create_u8`](Self::create_u8).
+    /// If `initial` is out of the range of `var_type` (see [`VarType::range`]), if
+    /// `section` cannot be a section name (`"`, `\`, `{` or a line break: see
+    /// [`Section::new`]), and as [`create_u8`](Self::create_u8).
     #[track_caller]
     pub fn create_in_section(
         &mut self,
@@ -350,6 +351,8 @@ impl VariableManager {
         initial: i32,
         section: &str,
     ) -> Var {
+        // `build()` writes it as `SECTION "section", WRAM0`: checked here, not there
+        Section::wram0(section);
         let (min, max) = var_type.range();
         if !(min..=max).contains(&initial) {
             panic!(
@@ -372,7 +375,15 @@ impl VariableManager {
             // An HRAM one too: `ld [name]` reaches it
             Some(_) => Ok(()),
             None => {
-                self.create_u8(name, initial);
+                // At the end of the last WRAM0 section, after every variable of the
+                // program, so none of them moves: their addresses are the ones
+                // `get_address` gave before the build (review of #32)
+                let section = self
+                    .sections
+                    .last()
+                    .map(|(section, _)| section.clone())
+                    .unwrap_or_else(|| "Variables".to_string());
+                self.create_var(name, VarType::U8, initial.into(), Place::Wram0(&section));
                 Ok(())
             }
         }
@@ -495,14 +506,17 @@ impl VariableManager {
         self.variables.get(&id).map(|v| v.name.as_str())
     }
 
-    /// The WRAM address of a variable in the program as it is now: sections in the order
-    /// they were first used, each variable after the one before it in its section (with
-    /// one section, in creation order from $C000)
+    /// The address of a variable: where rgblink puts it, since each section is printed at
+    /// the address the allocator gives it
     ///
-    /// A variable created later in an earlier section moves the ones after it, and
-    /// `build()` adds its own variables after the program's, so the address is final once
-    /// every variable is created. `None` for an unknown id, or a variable that does not fit
-    /// in WRAM0 (`build()` then returns [`Error::MemoryFull`]).
+    /// The HRAM variables from $FF80, then the `WRAM0` sections in the order they were
+    /// first used, from $C000, each variable after the one before it in its section (with
+    /// one section, in creation order). A variable created later in an earlier section
+    /// moves the sections after it, so the address is final once the program's variables
+    /// are created. The variables `build()` adds (`wFrameCounter`, `wAnim_*`, a routine's)
+    /// go at the end of the last `WRAM0` section, after all of them, and move none. `None`
+    /// for an unknown id, or a variable that does not fit (`build()` then returns
+    /// [`Error::MemoryFull`]).
     pub fn get_address(&self, id: VarId) -> Option<u16> {
         self.addresses().0.get(&id).copied()
     }

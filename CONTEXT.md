@@ -46,7 +46,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 309 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `prelude` module, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 312 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `prelude` module, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -62,7 +62,7 @@ rgbfix -v -p 0xFF main.gb
 | Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`). Typed operands since `refactor-p2-typed-operands`: no register or expression is a string any more (`Dst`, `Operand`, `Mem`, `AluOperand`, `IncDec`, and `Expr` for values), a value cannot be a destination, and `Instr::check` accepts exactly the `ld`/`ldh` operand pairs of the opcode table (`isa_tests`: all 91 load opcodes, `Expr` operands assembled by RGBDS, 554 instructions) |
 | Hardware facts | ✅ since Phase 2 (`refactor-p2-hw`) every register, flag, address, OAM offset and screen size that `gb_std`, `rust_boy` and the examples write comes from `hw` (see [Key concepts](#key-concepts)): 110 `hw::Symbol`s, each a `hardware.inc` name and its value, plus the facts `hardware.inc` has no name for. Tests: every symbol is a name `include/hardware.inc` defines, and with `RGBDS_LINK_CHECK` a file that includes it `ASSERT`s every value (a wrong value fails); `test_no_hardware_strings_outside_hw` fails on a `hardware.inc` name or an address from `$8000` on written as a string (or a hex integer) in `gb_std`, `rust_boy` or the examples, outside their tests and the hand-written `unbricked.rs`. The 6 example ROMs, their asm, `.map` and `.sym`, are byte-identical |
 | Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
-| Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address (checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
+| Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address once the program's variables are created (the variables `build()` adds go at the end of the last `WRAM0` section and move none; checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -218,7 +218,7 @@ rgbfix -v -p 0xFF main.gb
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
-### What `RustBoy::build()` emits (`src/engine/rustboy.rs:611-817`, `build` prints the program of the `Layout` `build_layout` returns)
+### What `RustBoy::build()` emits (`src/engine/rustboy.rs:637-857`, `build` prints the program of the `Layout` `build_layout` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -421,16 +421,21 @@ The problems are where each layer reaches across the line:
    program were separate setters. *Since Phase 2 (`refactor-p2-engine-api-errors`):* `build(&self) -> Result<String,
    Error>`. `rust_boy::Error` lists what can go wrong at build time: `UnknownFunction` (a name given to `call`,
    `call_args` or `keep_function` that is no function when the program is built), `NameConflict` (a name with two
-   `Definition`s: a function and a variable, a constant or raw label, an external symbol; a variable `build()` needs,
+   `Definition`s: a function and a variable, a constant or raw label, an external symbol, an animation function `build()`
+   generates; a variable `build()` needs,
    `wFrameCounter` or `wAnim_*`, created by the program with another type), `MemoryFull` (the variables, laid out by
    `build()` with the ones it adds, do not fit in WRAM0), `Section` (code or data in a RAM section, a section name used
    twice; the asm layer's message, from `Asm::try_emit` / `Layout::try_program`). **The rule** (documented on `Error`):
    a method panics when the call itself is wrong (an invalid argument, an unknown id, a contradiction with an earlier
    call on the same object; VRAM tiles and OAM entries, which the call needs at once, are allocated there and panic when
    full), and `build()` returns an `Err` for what only the whole program shows; `build()` itself does not panic on what a
-   program contains. For that, what used to panic inside `build()` is checked where it enters: a variable name and a
-   tile name must be symbols (not a register or keyword name), and an instruction built by hand is checked by `init`,
-   `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` and `add_inputs`. Building changes
+   program contains. For that, what used to panic inside `build()` is checked where it enters: a variable name, a
+   routine's variable (`Routine::with_variable`) and a tile name must be symbols (not a register or keyword name), the
+   section of `create_in_section` must be a section name, and an instruction built by hand is checked by `init`,
+   `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` and `add_inputs`
+   (`test_build_does_not_panic_on_what_a_program_contains` gives 25 bad names through 22 ways into a program: each
+   call panics, or `build()` returns `Ok` or `Err`; the independent review found the section name and the routine
+   variable, which it caught, still panicking in `build()`). Building changes
    nothing, so building twice gives the same text (`test_build_changes_nothing`). Every variant is reached through
    `build()` in `test_every_error_variant_is_reachable_through_build`. The 6 example ROMs, their asm, `.map` and `.sym`
    are byte-identical. **Breaking**, with the migration:
@@ -479,7 +484,10 @@ The problems are where each layer reaches across the line:
    sections and documenting rgblink's placement went to fixed addresses. `build()` prints each variable section at the
    address the allocator gives its first variable (`SECTION "HRAM Variables", HRAM[$FF80]`, then `SECTION "Variables",
    WRAM0[$C000]`, the next section after it, ...), so `VariableManager::get_address` is where rgblink puts the variable,
-   whatever else the program has: with floating sections rgblink placed them itself (by its own order, which puts bigger
+   whatever else the program has, once its variables are created. The variables `build()` adds itself (`wFrameCounter`,
+   `wAnim_*`, a routine's) go at the end of the last `WRAM0` section, after every variable of the program, so they move
+   none (the independent review found that they went to the first section and moved the others: with two sections and
+   an animation, `get_address` said $C001 and rgblink put the variable at $C003). Before, with floating sections rgblink placed them itself (by its own order, which puts bigger
    sections first), so the addresses held only for a program with one `WRAM0` section. The program's own sections
    (a `raw()` `SECTION`) float around the engine's; a `raw()` section fixed at an address the variables use is an
    rgblink error, as any overlap. The HRAM section comes first, so the `raw()` data still lands in the last `WRAM0`
@@ -491,8 +499,9 @@ The problems are where each layer reaches across the line:
    and the initialisation on the test CPU, each access an `ldh`), `test_the_test_cpu_rejects_ldh_outside_hram`,
    `test_hram_has_room_for_64_bytes_of_variables`, `test_a_variable_is_in_one_memory`, `test_hram_variables_in_a_program`
    (the start-up code on the test CPU; raw data with only HRAM variables; HRAM full), and
-   `test_variables_are_where_get_address_says` (WRAM0 in two sections, HRAM, and a bigger floating `raw()` section:
-   with `RGBDS_LINK_CHECK`, every variable's address in the `.sym` of RGBDS is its `get_address`, and the ROM holds
+   `test_variables_are_where_get_address_says` (WRAM0 in two sections, HRAM, a bigger floating `raw()` section, and the
+   variables `build()` adds for an animation and `UpdateKeys`: `get_address` is the same before and after the build,
+   and with `RGBDS_LINK_CHECK` every variable's address in the `.sym` of RGBDS is its `get_address`, and the ROM holds
    `E0 80` / `F0 80`, `ldh [$FF80], a` / `ldh a, [$FF80]`). **Breaking**, with the migration:
 
    | Before | After |
@@ -1042,7 +1051,7 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is worked out once all the code is known (`src/engine/rustboy.rs:748-784` since `refactor-p2-engine-api-errors`): the global
+Functions chunk is worked out once all the code is known (`src/engine/rustboy.rs:788-824` since `refactor-p2-engine-api-prelude`): the global
 symbols of every other chunk and of the animation functions are looked up (`symbols`, since `refactor-p2-routines`
 `src/asm/labels.rs:440`; it read the text of every instruction, it now reads typed operands by their type and
 reads the text of each raw instruction line by line as RGBDS does, with

@@ -1,9 +1,11 @@
 use rust_boy::{
     gb_std::inputs::PadButton,
-    rust_boy::{ANIM_DISABLED, AnimationType, InputManager, RustBoy, SpriteSize, TileSource},
+    rust_boy::{
+        ANIM_DISABLED, AnimationType, Error, InputManager, RustBoy, SpriteSize, TileSource,
+    },
 };
 
-fn main() {
+fn main() -> Result<(), Error> {
     let mut gb = RustBoy::new();
 
     // The 16x16 character is made of 8x16 sprites (the default is 8x8)
@@ -79,5 +81,6 @@ fn main() {
         .concat(),
     );
     gb.add_inputs(inputs);
-    println!("{}", gb.build());
+    println!("{}", gb.build()?);
+    Ok(())
 }

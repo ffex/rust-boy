@@ -2,8 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::gb_asm::{Block, Expr, Instr, R8, Section};
+use crate::gb_asm::expr::check_symbol;
+use crate::gb_asm::{Block, Expr, Instr, R8, Section, is_identifier};
 
+use super::error::{Definition, Error};
 use super::memory::{MemoryAllocator, MemoryRegion};
 
 /// Unique identifier for a variable
@@ -163,25 +165,24 @@ pub(crate) struct Variable {
     pub name: String,
     pub var_type: VarType,
     pub initial_value: i32,
-    pub wram_address: u16,
 }
 
-/// Manages variables with automatic WRAM allocation
+/// Manages variables, laid out in WRAM0 by `build()`
 ///
 /// A name is one WRAM label: creating a variable whose name already exists returns the
 /// existing variable (its first initial value and section are kept). Creating it again
 /// with a different type panics.
 ///
 /// Every section is a `WRAM0` section, so all the variables share its 4 KiB
-/// ($C000-$CFFF): creating one that does not fit panics (B17).
-#[derive(Debug)]
+/// ($C000-$CFFF). They get their addresses when the program is built, section by section,
+/// each variable after the one before it in its section, together with the variables
+/// `build()` adds (the animations', the routines'): variables that do not fit make
+/// `build()` return [`Error::MemoryFull`] (B17; creating one panicked before).
+#[derive(Debug, Clone)]
 pub struct VariableManager {
     /// Variables by id; ids are sequential, so iteration follows creation order
     variables: BTreeMap<VarId, Variable>,
     next_id: usize,
-    /// WRAM0 ($C000-$CFFF): every section is a `WRAM0` section, so all of them must fit
-    /// in its 4 KiB (B17)
-    wram: MemoryAllocator,
     /// Sections in first-use order, each with its variables in creation order
     sections: Vec<(String, Vec<VarId>)>,
 }
@@ -191,32 +192,41 @@ impl VariableManager {
         Self {
             variables: BTreeMap::new(),
             next_id: 0,
-            wram: MemoryAllocator::new(MemoryRegion::Wram0),
             sections: Vec::new(),
         }
     }
 
-    /// The names (WRAM labels) of every variable, in creation order
-    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
-        self.variables.values().map(|var| var.name.as_str())
+    /// The names (WRAM labels) and types of every variable, in creation order
+    pub(crate) fn names(&self) -> impl Iterator<Item = (&str, VarType)> {
+        self.variables
+            .values()
+            .map(|var| (var.name.as_str(), var.var_type))
     }
 
     /// Create an unsigned 8-bit variable
+    ///
+    /// # Panics
+    /// If `name` is not a valid RGBDS identifier, or is a register or keyword name (it is
+    /// the variable's label), or a variable of another type has it.
+    #[track_caller]
     pub fn create_u8(&mut self, name: &str, initial: u8) -> Var {
         self.create_var(name, VarType::U8, initial as i32, "Variables")
     }
 
-    /// Create an unsigned 16-bit variable
+    /// Create an unsigned 16-bit variable (panics as [`create_u8`](Self::create_u8))
+    #[track_caller]
     pub fn create_u16(&mut self, name: &str, initial: u16) -> Var {
         self.create_var(name, VarType::U16, initial as i32, "Variables")
     }
 
-    /// Create a signed 8-bit variable
+    /// Create a signed 8-bit variable (panics as [`create_u8`](Self::create_u8))
+    #[track_caller]
     pub fn create_i8(&mut self, name: &str, initial: i8) -> Var {
         self.create_var(name, VarType::I8, initial as i32, "Variables")
     }
 
-    /// Create a signed 16-bit variable
+    /// Create a signed 16-bit variable (panics as [`create_u8`](Self::create_u8))
+    #[track_caller]
     pub fn create_i16(&mut self, name: &str, initial: i16) -> Var {
         self.create_var(name, VarType::I16, initial as i32, "Variables")
     }
@@ -224,7 +234,9 @@ impl VariableManager {
     /// Create a variable in a specific section
     ///
     /// # Panics
-    /// If `initial` is out of the range of `var_type` (see [`VarType::range`]).
+    /// If `initial` is out of the range of `var_type` (see [`VarType::range`]), and as
+    /// [`create_u8`](Self::create_u8).
+    #[track_caller]
     pub fn create_in_section(
         &mut self,
         name: &str,
@@ -242,7 +254,32 @@ impl VariableManager {
         self.create_var(name, var_type, initial, section)
     }
 
+    /// Create the `u8` variable `name`, which `build()` needs for the code it generates,
+    /// unless the program has it: `Err` if the program created it with another type
+    pub(crate) fn create_needed(&mut self, name: &str, initial: u8) -> Result<(), Error> {
+        match self.variables.values().find(|v| v.name == name) {
+            Some(existing) if existing.var_type != VarType::U8 => Err(Error::NameConflict {
+                name: name.to_string(),
+                first: Definition::Variable(existing.var_type),
+                second: Definition::GeneratedVariable(VarType::U8),
+            }),
+            _ => {
+                self.create_u8(name, initial);
+                Ok(())
+            }
+        }
+    }
+
+    #[track_caller]
     fn create_var(&mut self, name: &str, var_type: VarType, initial: i32, section: &str) -> Var {
+        // A global label: `build()` writes it as a symbol (`ld [name], a`)
+        if !is_identifier(name) || check_symbol(name).is_err() {
+            panic!(
+                "invalid variable name {:?}: it must be a valid RGBDS identifier (a letter or \
+                 `_`, then letters, digits, `_`, `#`, `$` or `@`), not a register or keyword",
+                name
+            );
+        }
         if let Some((&id, existing)) = self.variables.iter().find(|(_, v)| v.name == name) {
             assert!(
                 existing.var_type == var_type,
@@ -258,9 +295,6 @@ impl VariableManager {
             };
         }
 
-        let what = format!("variable `{}` ({} bytes)", name, var_type.size());
-        let addr = self.wram.allocate_or_panic(var_type.size().into(), &what);
-
         let id = VarId(self.next_id);
         self.next_id += 1;
 
@@ -268,7 +302,6 @@ impl VariableManager {
             name: name.to_string(),
             var_type,
             initial_value: initial,
-            wram_address: addr,
         };
 
         self.variables.insert(id, var);
@@ -284,14 +317,51 @@ impl VariableManager {
         }
     }
 
+    /// The address of each variable in WRAM0, section by section, in their order (each
+    /// variable after the one before it in its section), as far as they fit; and
+    /// [`Error::MemoryFull`] for the first one that does not
+    fn addresses(&self) -> (BTreeMap<VarId, u16>, Option<Error>) {
+        let mut wram = MemoryAllocator::new(MemoryRegion::Wram0);
+        let mut addresses = BTreeMap::new();
+        for (_, ids) in &self.sections {
+            for id in ids {
+                let var = &self.variables[id];
+                let size = var.var_type.size();
+                let what = format!("variable `{}` ({} bytes)", var.name, size);
+                match wram.try_allocate(size.into(), &what) {
+                    Ok(address) => {
+                        addresses.insert(*id, address);
+                    }
+                    Err(error) => return (addresses, Some(error)),
+                }
+            }
+        }
+        (addresses, None)
+    }
+
+    /// `Err` ([`Error::MemoryFull`]) if the variables do not fit in WRAM0
+    pub(crate) fn check_layout(&self) -> Result<(), Error> {
+        match self.addresses() {
+            (_, Some(error)) => Err(error),
+            (_, None) => Ok(()),
+        }
+    }
+
     /// Get the assembly label name for a variable
     pub fn get_label(&self, id: VarId) -> Option<&str> {
         self.variables.get(&id).map(|v| v.name.as_str())
     }
 
-    /// Get the WRAM address for a variable
+    /// The WRAM address of a variable in the program as it is now: sections in the order
+    /// they were first used, each variable after the one before it in its section (with
+    /// one section, in creation order from $C000)
+    ///
+    /// A variable created later in an earlier section moves the ones after it, and
+    /// `build()` adds its own variables after the program's, so the address is final once
+    /// every variable is created. `None` for an unknown id, or a variable that does not fit
+    /// in WRAM0 (`build()` then returns [`Error::MemoryFull`]).
     pub fn get_address(&self, id: VarId) -> Option<u16> {
-        self.variables.get(&id).map(|v| v.wram_address)
+        self.addresses().0.get(&id).copied()
     }
 
     /// Get the variable type
@@ -516,18 +586,110 @@ mod tests {
     fn test_variables_must_fit_in_wram0() {
         // B17: variables were counted past WRAM0 ($C000-$CFFF, 4 KiB), and every
         // section is a WRAM0 section: rgblink failed on a section too big, or the
-        // counter wrapped
+        // counter wrapped. Then creating one too many panicked; they are laid out when
+        // the program is built, which returns the error
         let mut vm = VariableManager::new();
         for i in 0..4094 {
             vm.create_u8(&format!("wByte{}", i), 0);
         }
         let last = vm.create_u16("wLast", 0);
         assert_eq!(vm.get_address(last.id()), Some(0xCFFE));
-        let message = panic_message(|| vm.create_u8("wMore", 0));
+        assert_eq!(vm.check_layout(), Ok(()));
+        let more = vm.create_u8("wMore", 0);
+        assert_eq!(vm.get_address(more.id()), None, "it does not fit");
+        let error = vm.check_layout().unwrap_err();
+        assert_eq!(
+            error,
+            Error::MemoryFull {
+                region: MemoryRegion::Wram0,
+                what: "variable `wMore` (1 bytes)".to_string(),
+                needed: 1,
+                available: 0,
+            }
+        );
         assert!(
-            message.contains("no room for variable `wMore` (1 bytes)"),
+            error.to_string().starts_with(
+                "no room for variable `wMore` (1 bytes): 1 bytes needed, but Wram0 \
+                 ($C000-$CFFF, 4096 bytes) has 0 bytes left"
+            ),
             "{}",
-            message
+            error
+        );
+    }
+
+    #[test]
+    fn test_addresses_follow_the_sections() {
+        // Each section's variables one after the other, sections in first-use order, as
+        // the program lists them: a variable created later in the first section moves
+        // the second section (the addresses were in creation order across sections)
+        let mut vm = VariableManager::new();
+        let a = vm.create_u8("wA", 0);
+        let other = vm.create_in_section("wOther", VarType::U16, 0, "Other");
+        let b = vm.create_u8("wB", 0);
+        let addresses: Vec<Option<u16>> = [&a, &other, &b]
+            .iter()
+            .map(|var| vm.get_address(var.id()))
+            .collect();
+        assert_eq!(addresses, [Some(0xC000), Some(0xC002), Some(0xC001)]);
+        assert_eq!(
+            lines(vm.generate_sections()),
+            [
+                "SECTION \"Variables\", WRAM0",
+                "wA: db",
+                "wB: db",
+                "SECTION \"Other\", WRAM0",
+                "wOther: dw"
+            ]
+        );
+        assert_eq!(vm.get_address(VarId(99)), None);
+    }
+
+    #[test]
+    fn test_a_variable_name_is_a_symbol() {
+        // It panicked only when its code was generated, in build() (or rgbasm failed)
+        for name in [
+            "w Score",
+            "1st",
+            "wScore.lo",
+            ".local",
+            "a",
+            "hl",
+            "ld",
+            "SECTION",
+        ] {
+            let message = panic_message(|| VariableManager::new().create_u8(name, 0));
+            assert!(
+                message.contains(&format!("invalid variable name {:?}", name)),
+                "{}: {}",
+                name,
+                message
+            );
+        }
+        let mut vm = VariableManager::new();
+        for name in ["wScore", "_tmp", "w#1", "LDA"] {
+            vm.create_u8(name, 0);
+        }
+    }
+
+    #[test]
+    fn test_a_variable_build_needs_must_be_a_u8() {
+        let mut vm = VariableManager::new();
+        vm.create_u8("wCounter", 5);
+        assert_eq!(vm.create_needed("wCounter", 0), Ok(()));
+        assert_eq!(vm.create_needed("wNew", 0), Ok(()));
+        assert_eq!(
+            lines(vm.generate_init_code())[0],
+            "ld a, 5",
+            "the first value"
+        );
+        vm.create_u16("wWide", 0);
+        assert_eq!(
+            vm.create_needed("wWide", 0),
+            Err(Error::NameConflict {
+                name: "wWide".to_string(),
+                first: Definition::Variable(VarType::U16),
+                second: Definition::GeneratedVariable(VarType::U8),
+            })
         );
     }
 

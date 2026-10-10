@@ -40,9 +40,9 @@ A sprite that moves with the D-pad:
 
 ```rust
 use rust_boy::gb_std::inputs::PadButton;
-use rust_boy::rust_boy::{InputManager, RustBoy, SpriteSize, TileSource};
+use rust_boy::rust_boy::{Error, InputManager, RustBoy, SpriteSize, TileSource};
 
-fn main() {
+fn main() -> Result<(), Error> {
     let mut gb = RustBoy::new();
 
     // Sprites are 8x8 by default; choose 8x16 before adding any sprite
@@ -61,7 +61,10 @@ fn main() {
     inputs.on_press(PadButton::Down, gb.sprites.move_down_limit(player, 1, 144));
     gb.add_inputs(inputs);
 
-    println!("{}", gb.build());
+    // The program as RGBDS assembly; an `Err` says what is wrong with the program as a
+    // whole (a name defined twice, variables that do not fit in WRAM, ...)
+    println!("{}", gb.build()?);
+    Ok(())
 }
 ```
 
@@ -99,8 +102,9 @@ gb.vars.create_u16("wScore", 0);
 gb.vars.create_u16("wSavedScore", 0);
 let call = gb.call_routine(&copy_score); // `call CopyScore`, and the program gets the routine
 gb.add_to_main_loop(call);
-let out = gb.build();
+let out = gb.build()?;
 assert!(out.contains("CopyScore:") && out.contains("Memcopy:"));
+# Ok::<(), rust_boy::rust_boy::Error>(())
 ```
 
 Control flow uses the same model: `If` uses `a`, `b` and the flags (`If::clobbers()`; the bodies start with `a` = left

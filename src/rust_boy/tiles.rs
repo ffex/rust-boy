@@ -84,6 +84,8 @@ impl TileSource {
 /// Panics if `source` is a file with a tile count of 0 (also built directly as
 /// `TileSource::File`): a file is copied whole, so its count cannot say "empty" (B27)
 fn check_source(name: &str, source: &TileSource) {
+    // `build()` writes the name as a label and as a symbol (`ld de, name`)
+    super::sprites::check_label("tile", name);
     if let TileSource::File(path, 0) = source {
         panic!(
             "tiles \"{}\": the file \"{}\" has a tile count of 0; a tile file needs a tile \
@@ -165,8 +167,9 @@ impl TileManager {
     /// Add sprite tiles (allocated from $8000)
     ///
     /// # Panics
-    /// If they do not fit in the 256 sprite tiles ($8000-$8FFF) with the ones already
-    /// added, or `source` is a file with a tile count of 0.
+    /// If `name` cannot be a label (an RGBDS identifier, not a register or keyword), if
+    /// they do not fit in the 256 sprite tiles ($8000-$8FFF) with the ones already added,
+    /// or `source` is a file with a tile count of 0.
     pub fn add_sprite(&mut self, name: &str, source: TileSource) -> TileId {
         check_source(name, &source);
         let what = format!("sprite tiles \"{}\" ({} tiles)", name, source.tile_count());
@@ -179,8 +182,9 @@ impl TileManager {
     /// Add background tiles (allocated from $9000)
     ///
     /// # Panics
-    /// If they do not fit in the 128 background tiles ($9000-$97FF, before the
-    /// tilemaps) with the ones already added, or `source` is a file with a tile count of 0.
+    /// If `name` cannot be a label (an RGBDS identifier, not a register or keyword), if
+    /// they do not fit in the 128 background tiles ($9000-$97FF, before the tilemaps) with
+    /// the ones already added, or `source` is a file with a tile count of 0.
     pub fn add_background(&mut self, name: &str, source: TileSource) -> TileId {
         check_source(name, &source);
         let what = format!(
@@ -234,6 +238,7 @@ impl TileManager {
     /// `RustBoy::set_background_tilemap` (`$9800` by default).
     ///
     /// # Panics
+    /// - If `name` cannot be a label (an RGBDS identifier, not a register or keyword).
     /// - If `area` already has a tilemap: each one is copied to the start of the map, so
     ///   the second would replace the first (before, every tilemap went to `$9800` and the
     ///   last one created won).
@@ -245,6 +250,7 @@ impl TileManager {
         area: TilemapArea,
         tilemap: &[[u8; 32]],
     ) -> TileId {
+        super::sprites::check_label("tile", name);
         if tilemap.len() > usize::from(hw::SCRN_VY_B.value) {
             panic!(
                 "tilemap \"{}\" has {} rows, but a map has {}: the rows past it would run \

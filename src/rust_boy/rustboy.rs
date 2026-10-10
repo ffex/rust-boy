@@ -7,6 +7,7 @@ use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_
 use crate::gb_std::routine::Routine;
 use crate::hw;
 
+use super::error::Error;
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
 use super::layout::{Chunk, Layout};
@@ -215,9 +216,13 @@ impl RustBoy {
     ///
     /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
     /// off, `rLY` stays 0 and the wait never ends.
+    ///
+    /// # Panics
+    /// On an instruction [`Instr::check`] rejects (code built by hand, `vec![Instr::..]`).
+    #[track_caller]
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
         let instrs = code.emit(self.asm.labels());
-        self.init_code.extend(instrs);
+        self.init_code.extend(checked(instrs));
         self
     }
 
@@ -242,7 +247,7 @@ impl RustBoy {
     ///   variables, raw `Data` code that does not start with a `SECTION` gets a `WRAM0`
     ///   section of its own, `SECTION "Raw Data", WRAM0` (it would land in ROM). A RAM
     ///   section only reserves space (labels, `ds n`): code or data there makes `build()`
-    ///   panic.
+    ///   return [`Error::Section`].
     ///
     /// # Example
     /// ```
@@ -259,8 +264,9 @@ impl RustBoy {
     ///     // Code that runs every frame, after the main loop code
     ///     asm.chunk(Chunk::MainLoop).ld_addr_def_a(hw::SCX);
     /// });
-    /// let out = gb.build();
+    /// let out = gb.build()?;
     /// assert!(out.contains("LoadAnswer:") && out.contains("ld [rSCX], a"));
+    /// # Ok::<(), rust_boy::rust_boy::Error>(())
     /// ```
     pub fn raw<F>(&mut self, f: F) -> &mut Self
     where
@@ -298,8 +304,9 @@ impl RustBoy {
     /// asm added to its output afterwards, or an `INCLUDE`d file. For the opposite, a
     /// routine *defined* where `build()` does not see, use [`RustBoy::external_symbol`].
     ///
-    /// # Panics
-    /// If there is no function `name`: define it first.
+    /// The name is looked up when the program is built, so the function may be defined
+    /// after this call; a function `build()` generates (an animation) is always emitted.
+    /// `build()` returns [`Error::UnknownFunction`] if there is no function `name` then.
     ///
     /// # Example
     /// ```
@@ -310,15 +317,14 @@ impl RustBoy {
     /// let mut body = Block::new();
     /// body.label("OnInterrupt").ret();
     /// gb.define_function("OnInterrupt", body.into_instrs());
-    /// assert!(!gb.build().contains("OnInterrupt:"), "never called");
+    /// assert!(!gb.build()?.contains("OnInterrupt:"), "never called");
     ///
     /// gb.keep_function("OnInterrupt");
-    /// assert!(gb.build().contains("OnInterrupt:"));
+    /// assert!(gb.build()?.contains("OnInterrupt:"));
+    /// # Ok::<(), rust_boy::rust_boy::Error>(())
     /// ```
     pub fn keep_function(&mut self, name: &str) -> &mut Self {
-        if !self.functions.keep_function(name) {
-            self.unknown_function(name);
-        }
+        self.functions.keep_function(name);
         self
     }
 
@@ -334,8 +340,9 @@ impl RustBoy {
     /// [`RustBoy::keep_function`], which emits a function that only outside code calls.
     ///
     /// # Panics
-    /// If `name` is not a valid RGBDS identifier; and `build()` panics if a user function
-    /// has the same name (a function is defined either here or outside, not both).
+    /// If `name` is not a valid RGBDS identifier; and `build()` returns
+    /// [`Error::NameConflict`] if a user function has the same name (a function is defined
+    /// either here or outside, not both).
     ///
     /// # Example
     /// ```
@@ -348,7 +355,8 @@ impl RustBoy {
     /// });
     /// gb.add_to_main_loop(Call::new("UpdateKeys"));
     /// gb.external_symbol("UpdateKeys");
-    /// assert!(!gb.build().contains("UpdateKeys:"));
+    /// assert!(!gb.build()?.contains("UpdateKeys:"));
+    /// # Ok::<(), rust_boy::rust_boy::Error>(())
     /// ```
     pub fn external_symbol(&mut self, name: &str) -> &mut Self {
         if !is_identifier(name) {
@@ -359,16 +367,6 @@ impl RustBoy {
         }
         self.functions.external_symbol(name);
         self
-    }
-
-    /// Panics: there is no function `name`
-    fn unknown_function(&self, name: &str) -> ! {
-        let available = self.functions.available_functions();
-        panic!(
-            "Unknown function '{}'. Available functions: {}",
-            name,
-            available.join(", ")
-        );
     }
 
     /// Register a user-defined function from raw instructions
@@ -383,15 +381,18 @@ impl RustBoy {
     ///
     /// # Panics
     /// If `name` is not a valid RGBDS identifier, or `body` does not define the global
-    /// label `name` (`build()` finds a function by its label). `build()` panics if `name`
-    /// is also a variable, a constant, a label of the program or an external symbol.
+    /// label `name` (`build()` finds a function by its label), or on an instruction
+    /// [`Instr::check`] rejects. `build()` returns [`Error::NameConflict`] if `name` is
+    /// also a variable, a constant, a label of the program or an external symbol.
     ///
     /// # Example
     /// ```ignore
     /// gb.define_function("IsWallTile", is_specific_tile("IsWallTile", &["$00", "$01"]));
     /// ```
+    #[track_caller]
     pub fn define_function(&mut self, name: &str, body: Vec<Instr>) -> &mut Self {
         check_function_name(name);
+        let body = checked(body);
         if !defines(&body, name) {
             panic!(
                 "define_function(\"{0}\"): the body does not define the label `{0}:`, so \
@@ -422,9 +423,10 @@ impl RustBoy {
     /// # Panics
     /// If a dependency has the name of a builtin or of a function the program already has,
     /// but is another routine (a call to that name could reach only one of them). To replace
-    /// a builtin, define the replacement itself. `build()` panics if the
-    /// routine's name is also a variable, a constant, a label of the program or an external
-    /// symbol, as for `define_function`.
+    /// a builtin, define the replacement itself. On an instruction of the routine or of
+    /// a dependency that [`Instr::check`] rejects. `build()` returns [`Error::NameConflict`]
+    /// if the routine's name is also a variable, a constant, a label of the program or an
+    /// external symbol, as for `define_function`.
     ///
     /// # Example
     /// ```
@@ -451,10 +453,13 @@ impl RustBoy {
     /// gb.raw(|asm| {
     ///     asm.chunk(rust_boy::rust_boy::Chunk::Tilemap).label("LevelMap").ds_fill("1024", "0");
     /// });
-    /// let out = gb.build();
+    /// let out = gb.build()?;
     /// assert!(out.contains("LoadLevel:") && out.contains("Memcopy:"));
+    /// # Ok::<(), rust_boy::rust_boy::Error>(())
     /// ```
+    #[track_caller]
     pub fn define_routine(&mut self, routine: Routine) -> &mut Self {
+        check_routine(&routine);
         self.functions.register_routine(routine);
         self
     }
@@ -468,7 +473,8 @@ impl RustBoy {
     ///
     /// # Panics
     /// If the routine has the name of a builtin or of a function the program has, but is
-    /// another routine.
+    /// another routine; on an instruction [`Instr::check`] rejects, as for
+    /// [`RustBoy::define_routine`].
     ///
     /// # Example
     /// ```
@@ -478,9 +484,12 @@ impl RustBoy {
     /// let mut gb = RustBoy::new();
     /// let call = gb.call_routine(&delay());
     /// gb.add_to_main_loop(call);
-    /// assert!(gb.build().contains("Delay:"));
+    /// assert!(gb.build()?.contains("Delay:"));
+    /// # Ok::<(), rust_boy::rust_boy::Error>(())
     /// ```
+    #[track_caller]
     pub fn call_routine(&mut self, routine: &Routine) -> Vec<Instr> {
+        check_routine(routine);
         self.functions
             .register_dep(routine, &format!("call_routine(\"{}\")", routine.name()));
         vec![Instr::Call {
@@ -515,14 +524,12 @@ impl RustBoy {
         self
     }
 
-    /// Generate a call instruction with validation
+    /// A call to the function `name` (`call name`)
     ///
-    /// This method validates that the function exists (either as a builtin or
-    /// user-defined function). Wherever the call ends up in the program, `build()` emits
-    /// the function, like any function the program refers to.
-    ///
-    /// # Panics
-    /// Panics if the function doesn't exist.
+    /// Wherever the call ends up in the program, `build()` emits the function, like any
+    /// function the program refers to. `name` must be a function (a builtin, a user
+    /// function, or an animation function) when the program is built, so it can be defined
+    /// after this call: `build()` returns [`Error::UnknownFunction`] if it is not.
     ///
     /// # Example
     /// ```ignore
@@ -536,9 +543,7 @@ impl RustBoy {
     /// gb.add_to_main_loop(call);
     /// ```
     pub fn call(&mut self, name: &str) -> Vec<Instr> {
-        if !self.functions.function_exists(name) {
-            self.unknown_function(name);
-        }
+        self.functions.called(name);
         vec![Instr::Call {
             target: JumpTarget::Label(name.to_string()),
         }]
@@ -549,8 +554,8 @@ impl RustBoy {
     /// This method emits the setup instructions before the call directly to
     /// the main loop, allowing fluent chaining without borrow checker issues.
     ///
-    /// # Panics
-    /// Panics if the function doesn't exist.
+    /// `name` must be a function when the program is built, as for [`RustBoy::call`].
+    /// Panics on an instruction of `setup` that [`Instr::check`] rejects.
     ///
     /// # Example
     /// ```ignore
@@ -558,30 +563,59 @@ impl RustBoy {
     /// gb.call_args("GetTileByPixel", gb.sprites.get_pivot(ball, 0, 1));
     /// gb.add_to_main_loop(IfCall::is_true("IsWallTile", _ball_momentum_y.set(1)));
     /// ```
+    #[track_caller]
     pub fn call_args(&mut self, name: &str, setup: Vec<Instr>) -> &mut Self {
-        if !self.functions.function_exists(name) {
-            self.unknown_function(name);
-        }
-        self.main_loop_code.extend(setup);
+        self.functions.called(name);
+        self.main_loop_code.extend(checked(setup));
         self.main_loop_code.push(Instr::Call {
             target: JumpTarget::Label(name.to_string()),
         });
         self
     }
 
-    /// Check if a function exists (builtin or user-defined)
+    /// Check if a function exists: a builtin, a user function, or an animation function
+    /// (`Anim_{sprite}_{animation}`, which `build()` generates)
     pub fn function_exists(&self, name: &str) -> bool {
         self.functions.function_exists(name)
+            || self
+                .sprites
+                .animation_function_names()
+                .iter()
+                .any(|generated| generated == name)
     }
 
-    /// Build the final assembly output
-    pub fn build(&mut self) -> String {
-        self.build_asm().program().to_asm()
+    /// The program's assembly, in RGBDS syntax
+    ///
+    /// It changes nothing in `self`: building again gives the same text, and the program
+    /// can still be changed and built again. The labels the generated code makes up come
+    /// after every label handed out so far ([`RustBoy::labels`]), from a copy of the
+    /// allocator.
+    ///
+    /// # Errors
+    /// What only the whole program shows (see [`Error`] for the rule, and what panics
+    /// instead): a function named by `call` / `call_args` / `keep_function` that nothing
+    /// defines ([`Error::UnknownFunction`]), a name defined twice
+    /// ([`Error::NameConflict`]), variables that do not fit in WRAM0
+    /// ([`Error::MemoryFull`]), code or data in a RAM section or a section name used twice
+    /// ([`Error::Section`]).
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::rust_boy::{Error, RustBoy};
+    ///
+    /// let mut gb = RustBoy::new();
+    /// let call = gb.call("Missing");
+    /// gb.add_to_main_loop(call);
+    /// assert!(matches!(gb.build(), Err(Error::UnknownFunction { .. })));
+    /// ```
+    pub fn build(&self) -> Result<String, Error> {
+        Ok(self.build_asm()?.to_asm())
     }
 
     /// The program [`build`](Self::build) prints, as instructions in chunks (its
-    /// [`Layout::program`] is the whole program)
-    pub(crate) fn build_asm(&mut self) -> Layout {
+    /// [`Layout::program`] is the whole program); `Err` as for `build`, but for the
+    /// sections, which [`Layout::try_program`] checks
+    pub(crate) fn build_layout(&self) -> Result<Layout, Error> {
         // Start fresh assembly. The code generated here takes its labels after every
         // label handed out so far, from a fork of the program's allocator, so a second
         // build gives the same labels (B14)
@@ -697,13 +731,17 @@ impl RustBoy {
         let raw_functions = self.raw_chunk(Chunk::Functions);
         let raw_data = self.raw_chunk(Chunk::Data);
 
+        // The variables of this program: the program's, and the ones `build()` adds (on a
+        // copy: building changes nothing in `self`)
+        let mut vars = self.vars.clone();
+
         // Add animation variables if animations are used
         if self.sprites.has_animations() {
-            self.vars.create_u8("wFrameCounter", 0);
+            vars.create_needed("wFrameCounter", 0)?;
 
             // Create enabled flag for each animation
             for (var_name, initial_value) in self.sprites.get_animation_variables() {
-                self.vars.create_u8(&var_name, initial_value);
+                vars.create_needed(&var_name, initial_value)?;
             }
         }
 
@@ -732,13 +770,15 @@ impl RustBoy {
             raw_data.as_slice(),
         ]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
-        let functions = self.functions.generate_used(&code, self.vars.names());
+        let generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
+        let functions = self
+            .functions
+            .generate_used(&code, vars.names(), &generated)?;
         asm.chunk(Chunk::Functions);
         asm.emit_all(functions.code);
 
-        for (name, body) in animations {
-            // Known to `call` from now on; emitted here, not scanned as a user function
-            self.functions.register_generated(&name);
+        for (_, body) in animations {
+            // Emitted here, not scanned as a user function
             asm.emit_all(body);
         }
         asm.emit_all(raw_functions);
@@ -748,24 +788,32 @@ impl RustBoy {
         // those of the user's routines), however the program calls them, unless it defines
         // them already (as variables or in raw code)
         for name in functions.variables {
-            self.vars.create_u8(&name, 0);
+            vars.create_needed(&name, 0)?;
         }
+        // Every variable now: they must fit
+        vars.check_layout()?;
 
         asm.chunk(Chunk::Init);
         asm.emit_all(startup);
-        asm.emit_all(self.vars.generate_init_code());
+        asm.emit_all(vars.generate_init_code());
         asm.emit_all(finish);
 
         asm.chunk(Chunk::Data);
-        asm.emit_all(self.vars.generate_sections());
-        if !raw_data.is_empty() && self.vars.is_empty() && !opens_section(&raw_data) {
+        asm.emit_all(vars.generate_sections());
+        if !raw_data.is_empty() && vars.is_empty() && !opens_section(&raw_data) {
             // No variable section before it: the raw data would land in the ROM0 section
             // of the code, so it gets a WRAM0 section of its own
             asm.section(Section::wram0(RAW_DATA_SECTION));
         }
         asm.emit_all(raw_data);
 
-        asm
+        Ok(asm)
+    }
+
+    /// The whole program [`build`](Self::build) prints, before its jumps are relaxed
+    /// ([`Asm::to_asm`](crate::gb_asm::Asm::to_asm) relaxes them)
+    pub(crate) fn build_asm(&self) -> Result<crate::gb_asm::Asm, Error> {
+        self.build_layout()?.try_program().map_err(Error::Section)
     }
 
     /// Add code to the main game loop
@@ -782,9 +830,13 @@ impl RustBoy {
     /// // If statement (its labels come from the program's allocator, `labels()`)
     /// gb.add_to_main_loop(If::eq(left, right, body));
     /// ```
+    ///
+    /// # Panics
+    /// On an instruction [`Instr::check`] rejects (code built by hand, `vec![Instr::..]`).
+    #[track_caller]
     pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {
         let instrs = code.emit(self.asm.labels());
-        self.main_loop_code.extend(instrs);
+        self.main_loop_code.extend(checked(instrs));
         self
     }
 
@@ -803,6 +855,10 @@ impl RustBoy {
     /// inputs.on_press(PadButton::Right, gb.sprites.move_right_limit(paddle, 1, 104));
     /// gb.add_inputs(inputs);
     /// ```
+    ///
+    /// # Panics
+    /// On an instruction of an action that [`Instr::check`] rejects.
+    #[track_caller]
     pub fn add_inputs(&mut self, inputs: InputManager) -> &mut Self {
         if inputs.is_empty() {
             return self;
@@ -817,9 +873,9 @@ impl RustBoy {
             target: JumpTarget::Label("UpdateKeys".to_string()),
         });
 
-        // Add the input handling code
+        // Add the input handling code (the actions are the user's code)
         self.main_loop_code
-            .extend(inputs.generate_code(self.asm.labels()));
+            .extend(checked(inputs.generate_code(self.asm.labels())));
 
         self
     }
@@ -848,6 +904,8 @@ impl RustBoy {
         y: u8,
         flags: u8,
     ) -> super::sprites::SpriteId {
+        // The sprite name is checked before it names the tiles
+        check_name("sprite", name);
         let count = tile_source.tile_count();
         let id = self.tiles.add_sprite(name, tile_source);
         let tiles = SpriteTiles {
@@ -978,6 +1036,32 @@ impl RustBoy {
     }
 }
 
+/// `code`, after checking each instruction against its operands ([`Instr::check`])
+///
+/// Code built with the builders (`Block`, `Layout`) is checked as it is written; this
+/// checks code built by hand (`vec![Instr::..]`) where it enters the program, so a mistake
+/// panics at the call that gives it, not in `build()`.
+///
+/// # Panics
+/// On the first instruction `Instr::check` rejects.
+#[track_caller]
+fn checked(code: Vec<Instr>) -> Vec<Instr> {
+    for instr in &code {
+        if let Err(error) = instr.check() {
+            panic!("invalid instruction: {}", error);
+        }
+    }
+    code
+}
+
+/// [`checked`] for the code of `routine` and of every routine it depends on
+#[track_caller]
+fn check_routine(routine: &Routine) {
+    for routine in routine.with_deps() {
+        checked(routine.body().to_vec());
+    }
+}
+
 /// Panics unless `name` can be a function's label
 fn check_function_name(name: &str) {
     if !is_identifier(name) {
@@ -998,6 +1082,7 @@ impl Default for RustBoy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rust_boy::{Definition, MemoryRegion, VarType};
 
     #[test]
     fn test_new_rustboy() {
@@ -1022,16 +1107,16 @@ mod tests {
         gb.define_const("BRICK_LEFT", "0x05");
         gb.define_const_hex("SCORE_ADDR", 0x9870);
 
-        let output = gb.build();
+        let output = gb.build().unwrap();
         assert!(output.contains("DEF BRICK_LEFT EQU 0x05"));
         assert!(output.contains("DEF SCORE_ADDR EQU $9870"));
     }
 
     #[test]
     fn test_basic_build() {
-        let mut gb = RustBoy::new();
+        let gb = RustBoy::new();
 
-        let output = gb.build();
+        let output = gb.build().unwrap();
 
         // Should contain basic structure
         assert!(output.contains("INCLUDE \"hardware.inc\""));
@@ -1083,7 +1168,7 @@ mod tests {
     }
 
     fn sample_game() -> String {
-        sample_rustboy().build()
+        sample_rustboy().build().unwrap()
     }
 
     #[test]
@@ -1171,16 +1256,247 @@ mod tests {
         inputs.on_press(PadButton::A, Vec::new());
         gb.add_inputs(inputs);
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(out.matches("wCurKeys: db").count(), 1);
         assert_eq!(out.matches("wNewKeys: db").count(), 1);
     }
 
     #[test]
     fn test_build_twice_gives_the_same_output() {
-        let mut gb = sample_rustboy();
-        let first = gb.build();
-        assert!(gb.build() == first, "a second build() changed the output");
+        let gb = sample_rustboy();
+        let first = gb.build().unwrap();
+        assert!(
+            gb.build().unwrap() == first,
+            "a second build() changed the output"
+        );
+    }
+
+    #[test]
+    fn test_build_changes_nothing() {
+        // build(&self): the program can be built through a shared reference, any number of
+        // times, and changed afterwards; the result is the program built once at the end.
+        // The labels handed out after a build go on from where the program was, not from
+        // the labels the build used (the build takes them from a copy of the allocator).
+        let build_then_extend = |builds: usize| {
+            let mut gb = sample_rustboy();
+            let shared: &RustBoy = &gb;
+            for _ in 0..builds {
+                shared.build().unwrap();
+            }
+            gb.add_to_main_loop(crate::gb_std::flow::IfA::eq(1, Vec::<Instr>::new()));
+            gb.vars.create_u8("wLate", 7);
+            gb.build().unwrap()
+        };
+        let once = build_then_extend(0);
+        assert_eq!(build_then_extend(1), once);
+        assert_eq!(build_then_extend(3), once);
+        assert_labels_ok(&once);
+
+        // The variables build() adds stay out of the program
+        let gb = sample_rustboy();
+        let before: Vec<String> = gb.vars.names().map(|(n, _)| n.to_string()).collect();
+        let out = gb.build().unwrap();
+        assert!(out.contains("wFrameCounter: db"), "{}", out);
+        let after: Vec<String> = gb.vars.names().map(|(n, _)| n.to_string()).collect();
+        assert_eq!(before, after);
+        assert!(!before.contains(&"wFrameCounter".to_string()));
+    }
+
+    #[test]
+    fn test_hand_built_code_is_checked_where_it_enters() {
+        // `ld a, 300` built by hand (the builders check it): it panicked in build(), from
+        // the layout; now at the call that gives it, so build() does not panic on it
+        let bad = || {
+            vec![Instr::Ld {
+                dst: crate::gb_asm::Dst::R8(R8::A),
+                src: crate::gb_asm::Operand::from(300),
+            }]
+        };
+        let uses: [fn(&mut RustBoy, Vec<Instr>); 4] = [
+            |gb, code| {
+                gb.init(code);
+            },
+            |gb, code| {
+                gb.add_to_main_loop(code);
+            },
+            |gb, code| {
+                gb.call_args("Delay", code);
+            },
+            |gb, mut code| {
+                code.insert(
+                    0,
+                    Instr::Label {
+                        name: "Bad".to_string(),
+                    },
+                );
+                gb.define_function("Bad", code);
+            },
+        ];
+        for (i, give) in uses.into_iter().enumerate() {
+            let message = panic_message(|| give(&mut RustBoy::new(), bad()));
+            assert!(
+                message.contains("invalid instruction: ld a, 300"),
+                "{}: {}",
+                i,
+                message
+            );
+        }
+        let mut body = bad();
+        body.insert(
+            0,
+            Instr::Label {
+                name: "BadRoutine".to_string(),
+            },
+        );
+        let routine = Routine::new("BadRoutine", body);
+        let message = panic_message(|| {
+            RustBoy::new().define_routine(routine.clone());
+        });
+        assert!(message.contains("invalid instruction"), "{}", message);
+        let uses_it = Routine::new("UsesIt", calling("UsesIt", &["BadRoutine"])).with_dep(routine);
+        let message = panic_message(|| RustBoy::new().call_routine(&uses_it));
+        assert!(message.contains("invalid instruction"), "{}", message);
+    }
+
+    #[test]
+    fn test_a_tile_name_is_a_label() {
+        // The name is a label and a symbol of the copy (`ld de, name`): a register or
+        // keyword name panicked in build(), from the copy code (rgbasm rejected it before)
+        for (name, add) in [("a", 0), ("Low", 1), ("my tiles", 2), ("SECTION", 0)] {
+            let message = panic_message(|| {
+                let mut gb = RustBoy::new();
+                match add {
+                    0 => {
+                        gb.tiles.add_sprite(name, tiles(1));
+                    }
+                    1 => {
+                        gb.tiles.add_background(name, tiles(1));
+                    }
+                    _ => {
+                        gb.tiles.add_tilemap(name, &[[0u8; 32]]);
+                    }
+                }
+            });
+            assert!(
+                message.contains(&format!("invalid tile name \"{}\"", name)),
+                "{}",
+                message
+            );
+        }
+        // A sprite name is checked as a sprite name first
+        let message = panic_message(|| RustBoy::new().add_sprite("my sprite", tiles(1), 0, 0, 0));
+        assert!(message.contains("invalid sprite name"), "{}", message);
+        let message = panic_message(|| RustBoy::new().add_sprite("hl", tiles(1), 0, 0, 0));
+        assert!(message.contains("invalid tile name \"hl\""), "{}", message);
+    }
+
+    /// A program whose one sprite has an animation, so `build()` adds `wFrameCounter` and
+    /// `wAnim_Coin_Current`
+    fn animated() -> RustBoy {
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+        gb
+    }
+
+    #[test]
+    fn test_every_error_variant_is_reachable_through_build() {
+        // UnknownFunction: a name given to call / call_args / keep_function
+        let mut gb = RustBoy::new();
+        let call = gb.call("Nowhere");
+        gb.add_to_main_loop(call);
+        let error = gb.build().unwrap_err();
+        assert!(
+            matches!(&error, Error::UnknownFunction { name, .. } if name == "Nowhere"),
+            "{:?}",
+            error
+        );
+
+        // NameConflict: a function and a variable, and a variable build() needs that the
+        // program created with another type (it panicked in build(), in create_u8)
+        assert!(matches!(
+            jump_also_defined(|gb| {
+                gb.vars.create_u8("Jump", 0);
+            }),
+            Error::NameConflict { .. }
+        ));
+        let mut gb = animated();
+        gb.vars.create_u16("wFrameCounter", 0);
+        let error = gb.build().unwrap_err();
+        assert_eq!(
+            error,
+            Error::NameConflict {
+                name: "wFrameCounter".to_string(),
+                first: Definition::Variable(VarType::U16),
+                second: Definition::GeneratedVariable(VarType::U8),
+            }
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("is a U16 variable and also a U8 variable that build() needs"),
+            "{}",
+            error
+        );
+
+        // MemoryFull: the program's variables fill WRAM0, and build() adds its own (it
+        // panicked in build(), in create_u8)
+        let mut gb = animated();
+        for i in 0..4096 {
+            gb.vars.create_u8(&format!("wByte{}", i), 0);
+        }
+        let error = gb.build().unwrap_err();
+        assert_eq!(
+            error,
+            Error::MemoryFull {
+                region: MemoryRegion::Wram0,
+                what: "variable `wFrameCounter` (1 bytes)".to_string(),
+                needed: 1,
+                available: 0,
+            }
+        );
+        // So do the program's own variables alone
+        let mut gb = RustBoy::new();
+        for i in 0..4095 {
+            gb.vars.create_u8(&format!("wByte{}", i), 0);
+        }
+        gb.vars.create_in_section("wBig", VarType::U16, 0, "Big");
+        assert!(matches!(
+            gb.build(),
+            Err(Error::MemoryFull {
+                needed: 2,
+                available: 1,
+                ..
+            })
+        ));
+
+        // Section: code in a RAM section, a section name used twice
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wScore", 0);
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).ld_a(1);
+        });
+        let Err(Error::Section(message)) = gb.build() else {
+            panic!("code in WRAM0");
+        };
+        assert!(
+            message.contains("`ld a, 1` in the WRAM0 section \"Variables\""),
+            "{}",
+            message
+        );
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Tiles).section(Section::rom0("Header"));
+        });
+        let error = gb.build().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("invalid program: SECTION \"Header\", ROM0: the section \"Header\" is already opened"),
+            "{}",
+            error
+        );
     }
 
     // ==================== Sprite size (B4) ====================
@@ -1223,7 +1539,7 @@ mod tests {
         let paddle = gb.add_sprite("Paddle", tiles(1), 16, 128, 0);
         let ball = gb.add_sprite("Ball", tiles(1), 32, 100, 0);
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(
             lcdc_on(&out),
             "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8"
@@ -1242,7 +1558,7 @@ mod tests {
         gb.set_sprite_size(SpriteSize::Size8x16);
         assert_eq!(gb.sprite_size(), SpriteSize::Size8x16);
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(
             lcdc_on(&out),
             "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16"
@@ -1253,10 +1569,10 @@ mod tests {
     fn test_8x16_tile_indices_are_even() {
         let mut gb = RustBoy::new();
         gb.set_sprite_size(SpriteSize::Size8x16);
-        let a = gb.add_sprite("A", tiles(2), 0, 0, 0);
-        let b = gb.add_sprite("B", tiles(6), 0, 0, 0);
-        let c = gb.add_sprite_16x16("C", tiles(4), tiles(4), 0, 0, 0);
-        let d = gb.add_sprite("D", tiles(2), 0, 0, 0);
+        let a = gb.add_sprite("SpriteA", tiles(2), 0, 0, 0);
+        let b = gb.add_sprite("SpriteB", tiles(6), 0, 0, 0);
+        let c = gb.add_sprite_16x16("SpriteC", tiles(4), tiles(4), 0, 0, 0);
+        let d = gb.add_sprite("SpriteD", tiles(2), 0, 0, 0);
         let halves = gb.sprites.get_composite_sprites(c).unwrap().clone();
 
         assert_eq!(tile_of(&gb, a), (0, 0x8000));
@@ -1281,7 +1597,7 @@ mod tests {
         // The start-up code writes that tile index to Ball's OAM entry (entry 1)
         let cpu = run_startup(&mut gb);
         assert_mem(&cpu, &oam(4 + 2), 4);
-        assert_links(&gb.build());
+        assert_links(&gb.build().unwrap());
     }
 
     // ==================== Memory limits (B17) ====================
@@ -1293,13 +1609,13 @@ mod tests {
         // B17: sprite tiles past $8FFF ran into the background tiles; the tile count was
         // cut to a u8 (257 tiles counted as 1) and the u8 tile index wrapped at 256
         let mut gb = RustBoy::new();
-        let a = gb.add_sprite("A", tiles(128), 0, 0, 0);
-        let b = gb.add_sprite("B", tiles(128), 0, 0, 0);
+        let a = gb.add_sprite("SpriteA", tiles(128), 0, 0, 0);
+        let b = gb.add_sprite("SpriteB", tiles(128), 0, 0, 0);
         assert_eq!(tile_of(&gb, a), (0, 0x8000));
         assert_eq!(tile_of(&gb, b), (128, 0x8800));
-        let message = panic_message(|| gb.add_sprite("C", tiles(1), 0, 0, 0));
+        let message = panic_message(|| gb.add_sprite("SpriteC", tiles(1), 0, 0, 0));
         assert!(
-            message.contains("no room for sprite tiles \"C\" (1 tiles)")
+            message.contains("no room for sprite tiles \"SpriteC\" (1 tiles)")
                 && message.contains("0 bytes left"),
             "{}",
             message
@@ -1345,7 +1661,7 @@ mod tests {
             .sprites
             .add_animation(player, "Walk", 0, 3, AnimationType::Loop);
         gb.sprites.set_initial_animation(player, walk);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_links(&out);
         assert!(out.contains("PlayerMore:"), "the tiles are copied: {}", out);
 
@@ -1430,7 +1746,7 @@ mod tests {
     fn test_sprite_position_must_fit_in_oam() {
         // B17: y + 16 and x + 8 overflowed a u8 when the start-up code was generated
         let mut gb = RustBoy::new();
-        gb.add_sprite("Low", tiles(1), 247, 239, 0);
+        gb.add_sprite("Bottom", tiles(1), 247, 239, 0);
         let message = panic_message(|| gb.add_sprite("Lower", tiles(1), 0, 240, 0));
         assert!(
             message.contains("y = 240") && message.contains("at most 239"),
@@ -1491,7 +1807,7 @@ mod tests {
         assert_eq!(gb.tiles.get_address(level), Some(0x9800));
         assert_eq!(gb.tiles.get_address(hud), Some(0x9C00));
         // By default the background shows $9800: LCDC as before
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_links(&out);
         assert_eq!(
             lcdc_on(&out),
@@ -1517,7 +1833,7 @@ mod tests {
         // The background can show the $9C00 map instead
         gb.set_background_tilemap(TilemapArea::Map9C00);
         assert_eq!(gb.background_tilemap(), TilemapArea::Map9C00);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_links(&out);
         assert_eq!(
             lcdc_on(&out),
@@ -1545,7 +1861,7 @@ mod tests {
         gb.sprites
             .add_animation(walker, "Walk", 1, 3, AnimationType::Loop);
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         // Walker starts at tile 2; frames 1..=3 are tiles 4, 6 and 8, two apart
         let walk = function(&out, "Anim_Walker_Walk");
         assert!(walk.contains("add a, 2"), "{}", walk);
@@ -1562,7 +1878,7 @@ mod tests {
         gb.sprites
             .add_animation(coin, "Spin", 0, 6, AnimationType::Loop);
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         let spin = function(&out, "Anim_Coin_Spin");
         assert!(spin.contains("inc a"), "{}", spin);
         assert!(spin.contains("cp a, 6"), "{}", spin);
@@ -1642,7 +1958,7 @@ mod tests {
         more.on_press(PadButton::Left, gb.sprites.move_up_limit(ball, 1, 16));
         gb.add_inputs(more);
 
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 
     #[test]
@@ -1657,7 +1973,7 @@ mod tests {
         }
         gb.add_inputs(inputs);
 
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 
     #[test]
@@ -1674,7 +1990,7 @@ mod tests {
         inputs.on_press(PadButton::A, gb.sprites.move_left_limit(left_half, 1, 8));
         gb.add_inputs(inputs);
 
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 
     #[test]
@@ -1703,7 +2019,7 @@ mod tests {
         gb.define_function_from("FollowPaddle", else_move);
         gb.add_to_main_loop(Call::new("FollowPaddle"));
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert!(out.contains("FollowPaddle:"));
         assert_labels_ok(&out);
     }
@@ -1726,7 +2042,7 @@ mod tests {
         let body = oam_0.move_left_limit(gb.labels(), 1, 16);
         gb.add_to_main_loop(check_key(gb.labels(), PadButton::Left, body));
 
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 
     #[test]
@@ -1741,7 +2057,7 @@ mod tests {
         );
         gb.add_to_main_loop(move_left);
 
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 
     #[test]
@@ -1754,7 +2070,7 @@ mod tests {
                 .add_animation(sprite, "Spin", 0, 3, AnimationType::Loop);
         }
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_labels_ok(&out);
         // Each sprite runs its own animation, on its own tiles
         assert!(out.contains("call Anim_Coin_Spin"), "{}", out);
@@ -1776,7 +2092,7 @@ mod tests {
                 .add_composite_animation(composite, "Run", 0, 1, AnimationType::Loop);
         }
 
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 
     #[test]
@@ -1880,7 +2196,7 @@ mod tests {
             "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
             gb.sprite_size().lcdc_flag().name
         );
-        let asm = gb.build_asm();
+        let asm = gb.build_layout().unwrap();
         let mut code = asm
             .get_chunk(Chunk::Init)
             .cloned()
@@ -1985,7 +2301,8 @@ mod tests {
 
     /// The text of chunk `chunk` of `gb`'s program
     fn chunk_text(gb: &mut RustBoy, chunk: Chunk) -> String {
-        gb.build_asm()
+        gb.build_layout()
+            .unwrap()
             .get_chunk(chunk)
             .map(|code| code.iter().map(|instr| format!("{}\n", instr)).collect())
             .unwrap_or_default()
@@ -2034,7 +2351,7 @@ mod tests {
             );
         }
         // UpdateKeys, which only the raw function calls, is emitted, with its variables
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert!(
             out.contains("UpdateKeys:") && out.contains("wCurKeys: db"),
             "{}",
@@ -2059,7 +2376,7 @@ mod tests {
             "a WRAM0 section first:\n{}",
             data
         );
-        assert_links(&gb.build());
+        assert_links(&gb.build().unwrap());
 
         // Raw data that opens its own section (typed or in a raw line) gets none
         for open in [
@@ -2078,7 +2395,7 @@ mod tests {
             });
             let data = data_text(&mut gb);
             assert!(!data.contains("Raw Data"), "{}", data);
-            assert_links(&gb.build());
+            assert_links(&gb.build().unwrap());
         }
 
         // A label that starts with "Section" is not the keyword: the default section is
@@ -2093,7 +2410,7 @@ mod tests {
             "a WRAM0 section first:\n{}",
             data
         );
-        assert_links(&gb.build());
+        assert_links(&gb.build().unwrap());
 
         // After the variables, the raw data goes in their last section, as documented
         let mut gb = RustBoy::new();
@@ -2104,7 +2421,7 @@ mod tests {
         let data = data_text(&mut gb);
         assert!(!data.contains("Raw Data"), "{}", data);
         assert!(data.contains("wScore: db\nwMore: db"), "{}", data);
-        assert_links(&gb.build());
+        assert_links(&gb.build().unwrap());
     }
 
     #[test]
@@ -2115,7 +2432,7 @@ mod tests {
         gb.raw(|asm| {
             asm.chunk(Chunk::Data).label("wBuffer").ds("16");
         });
-        assert_links(&gb.build());
+        assert_links(&gb.build().unwrap());
 
         // Code or initialised data there is rejected when the program is built (rgbasm
         // rejected it: "cannot contain code or data")
@@ -2132,7 +2449,9 @@ mod tests {
         ] {
             let mut gb = RustBoy::new();
             gb.raw(|asm| write(asm.chunk(Chunk::Data)));
-            let message = crate::rust_boy::panic_message(|| gb.build());
+            let Err(Error::Section(message)) = gb.build() else {
+                panic!("code or data in a RAM section");
+            };
             assert!(
                 message.contains("in the WRAM0 section \"Raw Data\": a RAM section holds no code"),
                 "{}",
@@ -2178,7 +2497,7 @@ mod tests {
         let raw = main_loop.find("ld [wRawLoop], a").expect("raw code");
         let jp = main_loop.find("jp Main").expect("jp Main");
         assert!(user < raw && raw < jp, "{}", main_loop);
-        assert_links(&gb.build());
+        assert_links(&gb.build().unwrap());
     }
 
     #[test]
@@ -2193,7 +2512,7 @@ mod tests {
         for i in 0..160 {
             assert_mem(&cpu, &oam(i), 0);
         }
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 
     #[test]
@@ -2300,7 +2619,7 @@ mod tests {
         for (path, builtin, program) in paths {
             let mut gb = RustBoy::new();
             program(&mut gb);
-            let out = gb.build();
+            let out = gb.build().unwrap();
             assert_eq!(
                 definitions(&out, builtin),
                 1,
@@ -2364,7 +2683,7 @@ mod tests {
             gb.init(call);
             gb
         };
-        let out = program().build();
+        let out = program().build().unwrap();
         assert_eq!(
             emitted_functions(&out),
             [
@@ -2380,7 +2699,7 @@ mod tests {
         );
         assert_links(&out);
         // The same program always gives the same output
-        assert_eq!(program().build(), out);
+        assert_eq!(program().build().unwrap(), out);
 
         // define_routine, then a typed call anywhere: the same
         let clear_map = routine_calling("ClearMap", vec![delay(), memcopy()]);
@@ -2389,7 +2708,7 @@ mod tests {
         gb.define_routine(load_level.clone());
         gb.define_function_from("Level1", load_level.call());
         gb.add_to_main_loop(Call::new("Level1"));
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(
             emitted_functions(&out),
             [
@@ -2418,7 +2737,7 @@ mod tests {
         let mut gb = RustBoy::new();
         let call = gb.call_routine(&dispatch);
         gb.add_to_main_loop(call);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "Handler"), 1, "{}", out);
         crate::gb_asm::label_check::assert_links_with(&out, &[("table.inc", "dw Handler")]);
     }
@@ -2433,7 +2752,7 @@ mod tests {
         gb.define_routine(wall.clone());
         let call = gb.call_routine(&wall);
         gb.add_to_main_loop(call);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "IsWallTile"), 1);
         assert_links(&out);
 
@@ -2463,7 +2782,7 @@ mod tests {
         let mut gb = RustBoy::new();
         gb.define_routine(own);
         gb.add_to_main_loop(Call::new("UpdateKeys"));
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "UpdateKeys"), 1, "{}", out);
         assert!(out.contains("wMyKeys: db"), "{}", out);
         assert!(!out.contains("wCurKeys"), "{}", out);
@@ -2480,7 +2799,7 @@ mod tests {
         gb.init(IfCall::is_true("GetTileByPixel", Vec::<Instr>::new()));
         gb.use_function(BuiltinFunction::GetTileByPixel);
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "GetTileByPixel"), 1);
         assert_links(&out);
     }
@@ -2518,7 +2837,7 @@ mod tests {
                 .raw("Pointers: db \"a;b\"\n    dw InTable");
         });
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_links(&out);
         let user_functions: Vec<&str> = [
             "Unused",
@@ -2564,13 +2883,13 @@ mod tests {
         let mut gb = RustBoy::new();
         gb.define_function("FromOutside", calling("FromOutside", &["Delay"]));
         gb.define_function("Unused", calling("Unused", &[]));
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "FromOutside"), 0);
 
         // Kept: emitted with what it calls; a builtin can be kept by name too
         gb.keep_function("FromOutside")
             .keep_function("GetTileByPixel");
-        let out = gb.build();
+        let out = gb.build().unwrap();
         for name in ["FromOutside", "Delay", "GetTileByPixel"] {
             assert_eq!(definitions(&out, name), 1, "{}", name);
         }
@@ -2579,9 +2898,58 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Unknown function 'Missing'")]
     fn test_keep_function_needs_a_function() {
-        RustBoy::new().keep_function("Missing");
+        // It panicked at the call; the function may be defined after it, so it is checked
+        // when the program is built
+        let mut gb = RustBoy::new();
+        gb.keep_function("Missing");
+        let Err(Error::UnknownFunction { name, available }) = gb.build() else {
+            panic!("`Missing` is no function");
+        };
+        assert_eq!(name, "Missing");
+        assert!(
+            available.contains(&"Memcopy".to_string()),
+            "{:?}",
+            available
+        );
+        gb.define_function("Missing", calling("Missing", &[]));
+        assert_eq!(definitions(&gb.build().unwrap(), "Missing"), 1);
+    }
+
+    #[test]
+    fn test_call_needs_a_function_when_the_program_is_built() {
+        for use_name in [
+            |gb: &mut RustBoy| {
+                let call = gb.call("Later");
+                gb.add_to_main_loop(call);
+            },
+            |gb: &mut RustBoy| {
+                gb.call_args("Later", Vec::new());
+            },
+        ] {
+            let mut gb = RustBoy::new();
+            use_name(&mut gb);
+            let error = gb.build().expect_err("`Later` is not defined yet");
+            assert!(
+                error.to_string().starts_with("unknown function 'Later'"),
+                "{}",
+                error
+            );
+            // Defined after the call (it panicked before): the program builds
+            gb.define_function("Later", calling("Later", &[]));
+            let out = gb.build().unwrap();
+            assert_eq!(definitions(&out, "Later"), 1);
+            assert_links(&out);
+        }
+        // An animation function is a function too, before and after a first build
+        let mut gb = RustBoy::new();
+        let coin = gb.add_sprite("Coin", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+        assert!(gb.function_exists("Anim_Coin_Spin"));
+        let call = gb.call("Anim_Coin_Spin");
+        gb.init(call);
+        assert_links(&gb.build().unwrap());
     }
 
     #[test]
@@ -2593,7 +2961,7 @@ mod tests {
         gb.define_function("Delay", calling("Delay", &[]));
         let call = gb.call("Delay");
         gb.add_to_main_loop(call);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "Delay"), 1);
         assert!(!out.contains("Delay loop using BC"), "the builtin Delay");
 
@@ -2604,7 +2972,7 @@ mod tests {
         gb.raw(|asm| {
             asm.emit_all(memcopy());
         });
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "Memcopy"), 1);
         assert_links(&out);
     }
@@ -2643,7 +3011,7 @@ mod tests {
             ],
         );
         gb.add_to_main_loop(Call::new("CheckAndHandleBrick"));
-        let asm = gb.build_asm();
+        let asm = gb.build_layout().unwrap();
         assert_links(&asm.program().to_asm());
         let mut code = Block::new();
         code.call("CheckAndHandleBrick").ret();
@@ -2700,14 +3068,14 @@ mod tests {
         let mut gb = RustBoy::new();
         gb.define_const("Delay", 5);
         gb.add_to_main_loop(Block::new().ld(R8::A, "Delay").to_vec());
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
         assert_links(&out);
 
         let mut gb = RustBoy::new();
         gb.vars.create_u8("Delay", 0);
         gb.add_to_main_loop(read_delay());
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
         assert_eq!(out.matches("Delay: db").count(), 1);
         assert_links(&out);
@@ -2720,7 +3088,7 @@ mod tests {
         gb.raw(|asm| {
             asm.raw("wCurKeys: db\n    wNewKeys: db");
         });
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "UpdateKeys"), 1);
         assert_eq!(out.matches("wCurKeys:").count(), 1, "{}", out);
         assert_eq!(out.matches("wNewKeys:").count(), 1, "{}", out);
@@ -2731,7 +3099,7 @@ mod tests {
         gb.raw(|asm| {
             asm.raw("Commented: /* call Delay */ ret");
         });
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "Delay"), 0, "{}", out);
         assert_links(&out);
 
@@ -2739,7 +3107,7 @@ mod tests {
         gb.vars.create_u16("wCurKeys", 0);
         gb.vars.create_u8("wNewKeys", 0);
         gb.use_function(BuiltinFunction::UpdateKeys);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(out.matches("wCurKeys: dw").count(), 1, "{}", out);
         assert_eq!(out.matches("wNewKeys: db").count(), 1, "{}", out);
         assert_links(&out);
@@ -2774,7 +3142,7 @@ mod tests {
         gb.vars.create_u8("wTile", 0);
         gb.define_function("Blank", body.into_instrs());
         gb.add_to_main_loop(Call::new("BlankWithA"));
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "BlankWithA"), 1, "{}", out);
         assert_links(&out);
     }
@@ -2800,7 +3168,7 @@ mod tests {
             gb.raw(move |asm| {
                 asm.raw(&format!("{}\n    db Delay", def));
             });
-            let out = gb.build();
+            let out = gb.build().unwrap();
             assert_eq!(definitions(&out, "Delay"), 0, "{}:\n{}", def, out);
             assert_links(&out);
         }
@@ -2810,7 +3178,7 @@ mod tests {
         gb.raw(|asm| {
             asm.raw("DEF Memcopy EQU 3\n    db Memcopy");
         });
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "Memcopy"), 0, "{}", out);
         assert_links(&out);
 
@@ -2820,7 +3188,7 @@ mod tests {
         gb.raw(|asm| {
             asm.raw("DEF wCurKeys EQU $C100\n    DEF wNewKeys EQU $C101");
         });
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "UpdateKeys"), 1);
         assert!(!out.contains("wCurKeys: db"), "{}", out);
         assert_links(&out);
@@ -2842,7 +3210,7 @@ mod tests {
             gb.add_to_main_loop(Call::new(name));
             gb.external_symbol(name);
         }
-        let out = gb.build();
+        let out = gb.build().unwrap();
         for name in ["UpdateKeys", "Delay", "Memcopy"] {
             assert_eq!(definitions(&out, name), 0, "{}:\n{}", name, out);
         }
@@ -2850,53 +3218,80 @@ mod tests {
         assert_links_with(&out, &[("my_routines.inc", included)]);
     }
 
-    /// A program with a user function `Jump`, called, and `other` defining `Jump` too
-    fn jump_also_defined(other: fn(&mut RustBoy)) -> String {
+    /// A program with a user function `Jump`, called, and `other` defining `Jump` too: the
+    /// error `build()` returns
+    fn jump_also_defined(other: fn(&mut RustBoy)) -> Error {
         let mut gb = RustBoy::new();
         other(&mut gb);
         gb.define_function("Jump", calling("Jump", &[]));
         let call = gb.call("Jump");
         gb.add_to_main_loop(call);
-        gb.build()
+        gb.build().expect_err("`Jump` is defined twice")
+    }
+
+    /// `Error::NameConflict` for `Jump`, a function and `other`
+    fn jump_conflict(other: Definition) -> Error {
+        Error::NameConflict {
+            name: "Jump".to_string(),
+            first: Definition::Function,
+            second: other,
+        }
     }
 
     #[test]
-    #[should_panic(expected = "function `Jump` is also a constant or a label of the program")]
-    fn test_a_function_named_like_a_constant_panics() {
+    fn test_a_function_named_like_a_constant_is_an_error() {
         // The function was dropped and `call Jump` went to address 1 (on refactor,
-        // rgbasm: `Jump` already defined)
-        jump_also_defined(|gb| {
+        // rgbasm: `Jump` already defined); then build() panicked, now it returns an error
+        let error = jump_also_defined(|gb| {
             gb.define_const("Jump", 1);
         });
+        assert_eq!(error, jump_conflict(Definition::CodeSymbol));
+        assert!(
+            error
+                .to_string()
+                .contains("`Jump` is a function and also a constant or a label of the program"),
+            "{}",
+            error
+        );
     }
 
     #[test]
-    #[should_panic(expected = "function `Jump` is also a variable")]
-    fn test_a_function_named_like_a_variable_panics() {
+    fn test_a_function_named_like_a_variable_is_an_error() {
         // `call Jump` went into WRAM
-        jump_also_defined(|gb| {
-            gb.vars.create_u8("Jump", 0);
+        let error = jump_also_defined(|gb| {
+            gb.vars.create_u16("Jump", 0);
         });
+        assert_eq!(error, jump_conflict(Definition::Variable(VarType::U16)));
+        assert!(
+            error.to_string().contains("and also a U16 variable"),
+            "{}",
+            error
+        );
     }
 
     #[test]
-    #[should_panic(expected = "function `Jump` is also a constant or a label of the program")]
-    fn test_a_function_named_like_a_raw_label_or_def_panics() {
-        jump_also_defined(|gb| {
+    fn test_a_function_named_like_a_raw_label_or_def_is_an_error() {
+        let error = jump_also_defined(|gb| {
             gb.raw(|asm| {
                 asm.raw("DEF Jump EQU 2");
             });
         });
+        assert_eq!(error, jump_conflict(Definition::CodeSymbol));
     }
 
     #[test]
-    #[should_panic(expected = "function `Jump` is also an external symbol")]
     fn test_a_function_cannot_be_external() {
         // A function is defined either here (define_function) or outside the generated
         // code (external_symbol), not both
-        jump_also_defined(|gb| {
+        let error = jump_also_defined(|gb| {
             gb.external_symbol("Jump");
         });
+        assert_eq!(error, jump_conflict(Definition::ExternalSymbol));
+        assert!(
+            error.to_string().contains("and also an external symbol"),
+            "{}",
+            error
+        );
     }
 
     #[test]
@@ -2910,7 +3305,7 @@ mod tests {
             let mut gb = RustBoy::new();
             gb.use_function(builtin);
             gb.define_function(name, own.into_instrs());
-            let out = gb.build();
+            let out = gb.build().unwrap();
             assert_eq!(definitions(&out, name), 1, "{}:\n{}", name, out);
             let body = function(&out, name);
             assert!(
@@ -2946,7 +3341,7 @@ mod tests {
             let mut gb = RustBoy::new();
             gb.define_function("MyLib", bundle());
             reach(&mut gb);
-            let out = gb.build();
+            let out = gb.build().unwrap();
             assert_eq!(definitions(&out, "MyLib"), 1, "{}:\n{}", how, out);
             assert_eq!(definitions(&out, "UpdateKeys"), 1, "{}:\n{}", how, out);
             assert!(
@@ -2973,9 +3368,9 @@ mod tests {
         let coin = gb.add_sprite("Coin", tiles(2), 80, 72, 0);
         gb.sprites
             .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
-        let first = gb.build();
+        let first = gb.build().unwrap();
         gb.keep_function("Anim_Coin_Spin");
-        let second = gb.build();
+        let second = gb.build().unwrap();
         assert_eq!(definitions(&second, "Anim_Coin_Spin"), 1);
         assert_eq!(first, second);
     }
@@ -2993,12 +3388,12 @@ mod tests {
         gb.define_function("First", with_entry("First", 1));
         gb.define_function("Second", with_entry("Second", 2));
         gb.add_to_main_loop(Call::new("Entry"));
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "First"), 1, "{}", out);
         assert_eq!(definitions(&out, "Second"), 0, "{}", out);
 
         gb.define_function("First", calling("First", &[]));
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_eq!(definitions(&out, "First"), 0, "{}", out);
         assert_eq!(definitions(&out, "Second"), 1, "{}", out);
         assert_links(&out);
@@ -3057,7 +3452,7 @@ mod tests {
             gb.add_to_main_loop(call);
         }
 
-        let out = gb.build();
+        let out = gb.build().unwrap();
         let elapsed = start.elapsed();
         assert_eq!(definitions(&out, "Func99"), 1);
         assert!(
@@ -3078,7 +3473,7 @@ mod tests {
         gb.tiles
             .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
         gb.tiles.add_tilemap("NoMap", &[]);
-        assert_links(&gb.build());
+        assert_links(&gb.build().unwrap());
 
         // Memcopy runs for real: only BgTiles is copied, to $9000
         let (code, mut cpu) = startup(&mut gb);
@@ -3112,7 +3507,7 @@ mod tests {
         gb.tiles
             .add_background("NoTiles", TileSource::from_raw(&[]));
         gb.tiles.add_tilemap("NoMap", &[]);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_links(&out);
         assert!(!out.contains("Memcopy"), "{}", out);
         assert!(
@@ -3153,7 +3548,7 @@ mod tests {
     /// Panics if a `jr` of the program `gb` builds does not reach its target, as RGBDS
     /// would (the relaxed program, as `build()` prints it)
     fn assert_jumps_in_range(gb: &mut RustBoy) {
-        let program = gb.build_asm().program().program();
+        let program = gb.build_layout().unwrap().program().program();
         assert_eq!(jr_range_errors(&program), Vec::<String>::new());
     }
 
@@ -3219,7 +3614,7 @@ mod tests {
     #[test]
     fn test_every_generated_label_is_unique() {
         let mut gb = labelled_program();
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert_labels_ok(&out);
         assert_links(&out);
         // Unique in the whole program, not only in their scope: one sequence for all
@@ -3268,7 +3663,7 @@ mod tests {
         let mut body = Block::new();
         body.label(&mine).jr(&mine);
         gb.add_to_main_loop(body);
-        let out = gb.build();
+        let out = gb.build().unwrap();
         assert!(out.contains(".end_if_1:"), "{}", out);
         assert!(
             out.contains(".clear_oam_3:"),
@@ -3339,7 +3734,7 @@ mod tests {
     fn test_out_of_range_jumps_become_jp() {
         let mut gb = far_jumps_program();
         // As written, two jumps are out of range (rgbasm would reject the program)
-        let asm = gb.build_asm();
+        let asm = gb.build_layout().unwrap();
         let written: Vec<Instr> = [Chunk::MainLoop, Chunk::Functions]
             .iter()
             .flat_map(|chunk| asm.get_chunk(*chunk).cloned().unwrap_or_default())
@@ -3355,7 +3750,7 @@ mod tests {
             "{:?}",
             errors
         );
-        let out = gb.build();
+        let out = gb.build().unwrap();
         // The jr over the If and the loop are out of range: jp; the near one stays jr
         assert!(out.contains("jp z, .skip_0\n"), "{}", out);
         assert!(out.contains("jp nz, .loop\n"), "{}", out);
@@ -3387,13 +3782,17 @@ mod tests {
         // twice in a row, it prints the same text
         for make in [labelled_program, far_jumps_program] {
             let mut first = make();
-            let out = first.build();
-            assert_eq!(out, make().build(), "two programs built the same way");
-            assert_eq!(out, first.build(), "a second build()");
+            let out = first.build().unwrap();
+            assert_eq!(
+                out,
+                make().build().unwrap(),
+                "two programs built the same way"
+            );
+            assert_eq!(out, first.build().unwrap(), "a second build()");
             // Code added after a build takes new numbers: the next build is still unique
             let score = first.vars.create_u8("wScore", 0);
             first.add_to_main_loop(If::eq(score.get(), score.get(), score.set(9)));
-            let again = first.build();
+            let again = first.build().unwrap();
             assert_ne!(again, out);
             generated_labels(&again);
             assert_links_with(&again, &[EXTERNAL_INC]);

@@ -2,8 +2,13 @@
 //!
 //! This module provides a complete abstraction over assembly generation,
 //! hiding all low-level details from the developer.
+//!
+//! [`RustBoy::build`] returns the program's assembly, or an [`Error`] for a problem of the
+//! program as a whole; a method panics when the call itself is wrong (the rule is on
+//! [`Error`]).
 
 mod animations;
+mod error;
 mod functions;
 mod inputs;
 mod layout;
@@ -14,6 +19,7 @@ mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
+pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};

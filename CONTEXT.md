@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 279 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 281 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -196,9 +196,12 @@ rgbfix -v -p 0xFF main.gb
   too: `define_function(name, body)` / `define_function_from` build one from its body, and **`RustBoy::define_routine`**
   registers a `Routine` with its dependencies (each before the routines that need it, so it is emitted first), and
   **`RustBoy::call_routine(&routine)`** returns `call Name` and registers the routine the same way. A dependency is
-  shared, not replaced: a `gb_std` routine of a builtin is that builtin (or the user function that replaces it), and a
-  dependency with the name and code of a function the program has is that function; other code under a taken name
-  panics. What a function needs is its dependencies and, for a user function, what its body refers to. A builtin's
+  shared, never replaced: a `gb_std` routine of a builtin is that builtin (or the user function the program replaced it
+  with, by registering the replacement itself), and a dependency equal to a function the program has (the whole
+  `Routine`: code, dependencies, variables, convention) is that function. Another routine under a taken name panics,
+  also under a builtin's name (it would replace the builtin for the whole program, also where the real one is needed;
+  `test_a_dependency_cannot_replace_a_builtin`, `test_a_dependency_is_shared_only_when_it_is_the_same_routine`, from the
+  independent review). What a function needs is its dependencies and, for a user function, what its body refers to. A builtin's
   dependencies are given in full, so its body is not read (`test_builtin_dependencies_are_complete` checks every
   symbol of each builtin's body against its dependencies, its variables, its own labels and the `hardware.inc` names).
   The symbols of code are read by `gb_asm::labels::symbols`: typed operands by their type (a jump or call target, the

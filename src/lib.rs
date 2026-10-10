@@ -3,6 +3,7 @@
 pub mod asm;
 pub mod engine;
 pub mod hw;
+pub mod prelude;
 pub mod stdlib;
 
 #[cfg(test)]

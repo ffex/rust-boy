@@ -20,7 +20,10 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix�
 
 Each level is built on the one below it, and you can mix them. Beside them, `rust_boy::hw` holds the hardware facts
 as plain data: the registers, their flags, the memory map, the OAM layout and the screen sizes, each with its
-`hardware.inc` name (`hw::LCDC` is `rLCDC`, `$FF40`).
+`hardware.inc` name (`hw::LCDC` is `rLCDC`, `$FF40`). `use rust_boy::prelude::*` brings the types most programs use
+from every level, and `hw`.
+
+The [changelog](CHANGELOG.md) lists every breaking change of the refactoring, with how to migrate.
 
 ## Requirements
 
@@ -39,14 +42,11 @@ rust-boy = { git = "https://github.com/ffex/rust-boy" }
 A sprite that moves with the D-pad:
 
 ```rust
-use rust_boy::stdlib::inputs::PadButton;
-use rust_boy::engine::{Error, InputManager, RustBoy, SpriteSize, TileSource};
+use rust_boy::prelude::*;
 
 fn main() -> Result<(), Error> {
-    let mut gb = RustBoy::new();
-
-    // Sprites are 8x8 by default; choose 8x16 before adding any sprite
-    gb.set_sprite_size(SpriteSize::Size8x16);
+    // Sprites are 8x8 by default; this program uses 8x16 ones
+    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
 
     // An 8x16 sprite (two tiles from a .2bpp file) at screen position (80, 72)
     let player = gb.add_sprite("Player", TileSource::from_file("player.2bpp", 2), 80, 72, 0);
@@ -295,10 +295,11 @@ Open them in any Game Boy emulator.
 
 ```text
 src/
-├── asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
+├── asm/           # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
 ├── stdlib/        # routines as values (Routine: dependencies, calling convention), graphics, inputs, variables, flow control (If, …)
 ├── engine/        # RustBoy: sprites, tiles, variables, functions, animations, inputs, the program layout (chunks)
 ├── hw.rs          # hardware facts as data: registers, flags, memory map, OAM layout, screen sizes (hardware.inc names and values)
+├── prelude.rs     # the common types of every layer, for `use rust_boy::prelude::*`
 ├── bin/           # the example programs
 └── lib.rs
 include/hardware.inc          # hardware definitions for RGBDS (v4.x)

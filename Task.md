@@ -183,8 +183,12 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
   - [x] Decided by the maintainer (2026-10-10): `src/bin/basic_usage.rs`, the minimal raw-`gb_asm` example, keeps its own
         `WaitVBlank` (another routine: it waits for `rLY` = 144, `jr nz`; the README's `gb_asm` example does the same). It
         is a stated exception next to `unbricked.rs` (CLAUDE.md)
-- [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s (the sprite manager panics since
-      [B20](CONTEXT.md#b20) instead of returning empty `Vec`s; a `Result` API is left)
+- [x] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s (the sprite manager panics since
+      [B20](CONTEXT.md#b20) instead of returning empty `Vec`s) (branch `refactor-p2-engine-api-errors`: `rust_boy::Error`
+      with `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`; the rule, on `Error`: a method panics when the call
+      itself is wrong, `build()` returns an `Err` for what only the whole program shows and does not panic itself;
+      `call` / `call_args` / `keep_function` names are checked by `build()`, variables are laid out by `build()`; building
+      changes nothing. The 6 example ROMs, their asm, `.map` and `.sym` are byte-identical)
 - [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
       as `RustBoy::set_sprite_size`
 - [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since

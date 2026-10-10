@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 290 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 298 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `rust_boy::Error`, `RustBoy::build`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -59,6 +59,7 @@ rgbfix -v -p 0xFF main.gb
 | API safety | ✅ unknown sprite / composite ids, animation names and indices panic with a clear message (they gave no code, fixed — [B20](#b20)); VRAM tiles, WRAM0 variables and OAM entries are allocated through `MemoryAllocator` and panic when full, sprite positions and animation frames are checked (fixed — [B17](#b17)); a sprite's tile index comes from its VRAM address (fixed — [B18](#b18)); `Var::set`/`get` handle 16-bit variables (fixed — [B16](#b16)); `get_pivot` wraps around the map (fixed — [B22](#b22)); a tilemap can go to `$9C00` (fixed — [B19](#b19)) |
 | Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`). Typed operands since `refactor-p2-typed-operands`: no register or expression is a string any more (`Dst`, `Operand`, `Mem`, `AluOperand`, `IncDec`, and `Expr` for values), a value cannot be a destination, and `Instr::check` accepts exactly the `ld`/`ldh` operand pairs of the opcode table (`isa_tests`: all 91 load opcodes, `Expr` operands assembled by RGBDS, 554 instructions) |
 | Hardware facts | ✅ since Phase 2 (`refactor-p2-hw`) every register, flag, address, OAM offset and screen size that `gb_std`, `rust_boy` and the examples write comes from `hw` (see [Key concepts](#key-concepts)): 110 `hw::Symbol`s, each a `hardware.inc` name and its value, plus the facts `hardware.inc` has no name for. Tests: every symbol is a name `include/hardware.inc` defines, and with `RGBDS_LINK_CHECK` a file that includes it `ASSERT`s every value (a wrong value fails); `test_no_hardware_strings_outside_hw` fails on a `hardware.inc` name or an address from `$8000` on written as a string (or a hex integer) in `gb_std`, `rust_boy` or the examples, outside their tests and the hand-written `unbricked.rs`. The 6 example ROMs, their asm, `.map` and `.sym`, are byte-identical |
+| Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -70,7 +71,7 @@ rgbfix -v -p 0xFF main.gb
 |---|---|---|---|
 | **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3300 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), `Sprite` and the sprite snippets the engine uses too (`draw_sprites`, moves, `get_pivot`; its own `SpriteManager` is gone since `refactor-p2-routines-sprites`), `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
-| **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2800 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` |
+| **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`, `error.rs`) | ~2900 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` and its `Error` (since `refactor-p2-engine-api-errors`) |
 | **`hw`** (data) | `src/hw.rs` | ~390 | Hardware facts as pure data (since [B22](#b22); complete since Phase 2 `refactor-p2-hw`): `hw::Symbol`s, each a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM layout and the screen sizes (`hw::SYMBOLS` lists them), the facts with no `hardware.inc` name as plain numbers, and `oam_offset`; depends on nothing, used by `gb_std` (which turns a `Symbol` into an `Expr`, `src/gb_std/hw_symbols.rs`), `rust_boy` and the examples, not by `gb_asm` |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
 
@@ -136,8 +137,9 @@ rgbfix -v -p 0xFF main.gb
   with the builder methods of `Asm` to its current chunk (`Layout::chunk`; `Chunk::Main` at first), and owns the
   program's label allocator; `Layout::program()` puts the chunks that have code together in an `Asm`, in
   `Chunk::ORDER`, each followed by a blank line (`Asm::blank_line`), and that `Asm` checks the sections. `RustBoy`
-  keeps its `raw()` code in a `Layout` (the closure gets `&mut Layout`), `build_asm` returns the `Layout` it fills,
-  and `build()` prints `build_asm().program().to_asm()`. The asm layer knows instructions, sections and programs
+  keeps its `raw()` code in a `Layout` (the closure gets `&mut Layout`), `build_layout` returns the `Layout` it fills,
+  and `build()` prints `build_layout()?.try_program()?.to_asm()` (since `refactor-p2-engine-api-errors`; a section error
+  is `Error::Section`). The asm layer knows instructions, sections and programs
   only: an `Asm` is one list of instructions, printed in the order they were emitted.
 - **`hw`** (since `refactor-p2-hw`, `src/hw.rs`; tests in `src/hw/tests.rs`): pure data, depending on nothing. A
   `hw::Symbol<T>` is a `hardware.inc` name and its value (`T` = `u16` for an address, `u8` for a flag or a count):
@@ -212,7 +214,7 @@ rgbfix -v -p 0xFF main.gb
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:575-766`, `build` prints the program of the `Layout` `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:611-817`, `build` prints the program of the `Layout` `build_layout` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -405,6 +407,39 @@ The problems are where each layer reaches across the line:
    | a `jr` that rgbasm rejected as out of range, or to an external symbol | assembles: printed as `jp`, one byte longer and one cycle slower when taken (4 M-cycles, `jr` 3): code of fixed size or timing (an `rst` vector, a raw fixed-size section, a cycle-counted loop) must write jumps that reach |
    | `LabelAllocator::local("check left")` (any text) | panics: a stem is made of identifier characters (letters, digits, `_`, `#`, `$`, `@`); `locals` also panics on a stem given twice |
    | a jump target `@+n` with a jump that grows in between | its offset is written again (`jp nz, @+5`); a target `Label + 2` (any other expression), or `@` anywhere else (a raw line, data, an operand; not `ds N - @`), leaves the whole program unrelaxed, so a far `jr` fails in rgbasm as before |
+
+6. **The engine's API.** `build(&mut self) -> String` panicked on what only the whole program shows (a function also
+   defined as a variable, a full WRAM, code in a RAM section), registered state on every call, and the settings of a
+   program were separate setters. *Since Phase 2 (`refactor-p2-engine-api-errors`):* `build(&self) -> Result<String,
+   Error>`. `rust_boy::Error` lists what can go wrong at build time: `UnknownFunction` (a name given to `call`,
+   `call_args` or `keep_function` that is no function when the program is built), `NameConflict` (a name with two
+   `Definition`s: a function and a variable, a constant or raw label, an external symbol; a variable `build()` needs,
+   `wFrameCounter` or `wAnim_*`, created by the program with another type), `MemoryFull` (the variables, laid out by
+   `build()` with the ones it adds, do not fit in WRAM0), `Section` (code or data in a RAM section, a section name used
+   twice; the asm layer's message, from `Asm::try_emit` / `Layout::try_program`). **The rule** (documented on `Error`):
+   a method panics when the call itself is wrong (an invalid argument, an unknown id, a contradiction with an earlier
+   call on the same object; VRAM tiles and OAM entries, which the call needs at once, are allocated there and panic when
+   full), and `build()` returns an `Err` for what only the whole program shows; `build()` itself does not panic on what a
+   program contains. For that, what used to panic inside `build()` is checked where it enters: a variable name and a
+   tile name must be symbols (not a register or keyword name), and an instruction built by hand is checked by `init`,
+   `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` and `add_inputs`. Building changes
+   nothing, so building twice gives the same text (`test_build_changes_nothing`). Every variant is reached through
+   `build()` in `test_every_error_variant_is_reachable_through_build`. The 6 example ROMs, their asm, `.map` and `.sym`
+   are byte-identical. **Breaking**, with the migration:
+
+   | Before | After |
+   |---|---|
+   | `let out = gb.build();` (`String`; `build(&mut self)`) | `let out = gb.build()?;` (`Result<String, rust_boy::Error>`; `build(&self)`); in a `main`: `fn main() -> Result<(), Error>` and `println!("{}", gb.build()?)` |
+   | `build()` panicked: a user function also a variable, a constant / `DEF` / raw label, or an external symbol | `Err(Error::NameConflict { name, first: Definition::Function, second })` |
+   | `build()` panicked: `wFrameCounter` (or `wAnim_{sprite}_Current` / `_Dir`) created by the program as another type than `u8` | `Err(Error::NameConflict { .., second: Definition::GeneratedVariable(VarType::U8) })` |
+   | code or data in a RAM section, a section name used twice (through `raw()`): `build()` panicked | `Err(Error::Section(message))` |
+   | `create_u8` (any `create_*`) panicked when WRAM0 was full | creating does not check the size; `build()` returns `Err(Error::MemoryFull { region, what, needed, available })`; `get_address` is `None` for a variable that does not fit |
+   | `get_address`: creation order across sections | section by section, in their first-use order, as the program lists them (the same for one section) |
+   | `gb.call("X")`, `call_args("X", ..)`, `keep_function("X")` panicked when `X` was not (yet) a function | no panic: `X` may be defined after the call; `build()` returns `Err(Error::UnknownFunction { name, available })` if it is still no function |
+   | `call` / `keep_function` of an animation function (`Anim_{sprite}_{animation}`) worked only after a first `build()` | works at any time; `function_exists` knows them |
+   | a variable named like a register or keyword (`"a"`, `"LOW"`), or not an identifier (`"w Score"`), panicked in `build()` | panics in `create_*` ("invalid variable name") |
+   | a tile name that is not a symbol (`tiles.add_background("my tiles", ..)`, a sprite `"A"` or `"Low"`) panicked in `build()` (rgbasm rejected it before) | panics in `tiles.add_*` / `add_sprite` ("invalid tile name") |
+   | an `Instr` built by hand that `Instr::check` rejects (`ld a, 300`), given to `init`, `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` or an `InputManager` action, panicked in `build()` | panics at that call |
 
 ### Proposed target
 
@@ -633,7 +668,7 @@ One difference from the fix above: **`rLCDC` stays after the user code**, becaus
 the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
 `rLCDC` value written in `init()` is still replaced (documented on `RustBoy::init`; LCDC flags belong to the
 Phase 2 `RustBoyConfig`). Also documented there, and not new: `init()` code must not wait for VBlank, because with
-the LCD off `rLY` stays 0 and the wait never ends. Tests run the start-up code (`RustBoy::build_asm`, the `Init` chunk) on
+the LCD off `rLY` stays 0 and the wait never ends. Tests run the start-up code (`RustBoy::build_layout`, `build_asm` then, the `Init` chunk) on
 `gb_asm::test_cpu`, which now models the register pairs `bc`/`de`/`hl` as symbolic addresses
 (`ld hl, _OAMRAM` + `ld [hli], a`; one address has one name, `_OAMRAM+4+1` is `_OAMRAM+5`), stubbed routines
 (`Memcopy`) and an ordered trace of writes and calls; what it cannot know panics when read (the 8-bit halves of a
@@ -670,7 +705,11 @@ and the `wAnim_*_Current` variables on every call (`:368-375`) → a second `bui
 *Fix:* `build(&self)`, all registration done up front.
 **Status: fixed** on `refactor-p1-duplicate-vars`: with B3 fixed, the variables created again by a second
 `build()` are the existing ones, so two builds give the same output (tested). Making `build` take `&self`
-stays in Phase 2.
+stays in Phase 2. *Done in Phase 2 (`refactor-p2-engine-api-errors`):* `build(&self) -> Result<String, Error>`; the
+variables `build()` adds (`wFrameCounter`, `wAnim_*`, a routine's) go to a copy of the variable manager, and the
+animation functions are no longer registered by a build (`call` and `keep_function` know them from the sprites), so a
+build changes nothing: `test_build_twice_gives_the_same_output` (through a shared reference) and
+`test_build_changes_nothing` (built 0, 1 or 3 times, then extended: the same text; the program's variables unchanged).
 
 #### B15
 **`RustBoy::raw()` silently drops code.** The closure runs on `self.asm` (`src/rust_boy/rustboy.rs:196-202`)
@@ -735,7 +774,10 @@ but {region} (…) has M bytes left":
   address ([B18](#b18)), so the `u8` counter that overflowed at 256 tiles is gone (two FOSDEM characters, 2 × 128 tiles,
   now fit exactly, tested).
 - `VariableManager`: `MemoryRegion::Wram0` ($C000-$CFFF): every variable section is a `WRAM0` section, so all of them
-  share its 4 KiB (rgblink rejected a bigger section; the counter could also wrap).
+  share its 4 KiB (rgblink rejected a bigger section; the counter could also wrap). *Since Phase 2
+  (`refactor-p2-engine-api-errors`)* the variables are laid out when the program is built, section by section with the
+  ones `build()` adds, and `build()` returns `Error::MemoryFull` when they do not fit (creating one panicked);
+  `get_address` follows the sections.
 - `SpriteManager`: `MemoryRegion::Oam`, 40 entries; a 41st sprite panics (it was written past `$FE9F`). `x` above 247
   or `y` above 239 panics (OAM X = x + 8 and OAM Y = y + 16 are bytes); `add_sprite_16x16` checks its right half,
   x + 8, first (x at most 239). `oam_index * 4` cannot overflow any more (at most 159).
@@ -804,7 +846,8 @@ the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCD
 nothing on a typo; `add_animation_with_step` returns 0 for an unknown id. *Fix:* `Result` or panic with a
 clear message.
 **Status: fixed** on `refactor-p1-api-safety` with panics (like the other API checks; a `Result` API is the Phase 2
-`build(&self) -> Result` item). In `SpriteManager` (`src/rust_boy/sprites.rs`), every method that takes a `SpriteId` or a
+`build(&self) -> Result` item: done in `refactor-p2-engine-api-errors`, where these stay panics, by the rule on
+`rust_boy::Error`: an unknown id is wrong at the call). In `SpriteManager` (`src/rust_boy/sprites.rs`), every method that takes a `SpriteId` or a
 `CompositeSpriteId` (moves, `move_*_var`, `get_x`/`get_y`/`get_pivot`, the animation methods) looks it up with
 `sprite()` / `composite()`, which panic with "unknown sprite id N" / "unknown composite sprite id N". The animation methods
 also panic, naming the sprite and listing what it has, on: an unknown name (`enable_animation_by_name`,
@@ -879,26 +922,27 @@ the main loop, `raw()` code or the animation functions, then from those function
 order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
 nothing. To emit one that only code `build()` does not
 see calls (asm appended to its output, an `INCLUDE`d file), **`RustBoy::keep_function(name)`**
-(`src/rust_boy/rustboy.rs:318`; it takes a builtin name too, and panics on an unknown name, like `call`);
+(`src/rust_boy/rustboy.rs:326`; it takes a builtin name too; it panicked on an unknown name, like `call`: since
+`refactor-p2-engine-api-errors` the name is looked up by `build()`, which returns `Error::UnknownFunction`);
 `use_function(BuiltinFunction)` still forces a builtin. `used_user_functions` is gone. A function is found by
 its label, so `define_function(name, body)` panics if `body` does not define the label `name` (a body labelled
 otherwise used to be emitted anyway and could be called by its own label); another global label in a body (a
 second entry point) also finds the function. `define_function` and `define_function_from` panic on a name that
-is not an RGBDS identifier. `build()` panics if a user function's name is also defined elsewhere in the
-program: a variable, a constant or label of its code (`define_const`, a `DEF`, a label in raw code), or an external
+is not an RGBDS identifier. `build()` panics (since `refactor-p2-engine-api-errors`, returns
+`Error::NameConflict`) if a user function's name is also defined elsewhere in the program: a variable, a constant or label of its code (`define_const`, a `DEF`, a label in raw code), or an external
 symbol (a function is defined either with `define_function`, or outside with `external_symbol`, not both); such a
 function used to be dropped silently, and `call Jump` reached the constant or the variable (on `refactor`, rgbasm
 reported the name defined twice). A user function that defines a builtin's name, as its own name or as a second
 entry point (a routine bundle with an `UpdateKeys:` inside), always replaces the builtin, also when `use_function`
 forces the builtin; the builtin's variables are then not created. `keep_function` on a function `build()`
-generates (an animation) does nothing once a first `build()` has registered it, since it is always emitted (before
-that its name is unknown, as for `call`). No example changes (every example function is used, under its own name). Tests:
+generates (an animation) does nothing, since it is always emitted (before `refactor-p2-engine-api-errors`, its name was
+unknown until a first `build()` had registered it). No example changes (every example function is used, under its own name). Tests:
 `test_only_used_user_functions_are_emitted` (unused, an unused cycle, recursive, through another function, by
 address, by `jp`, from raw code, from a raw line after a comment and after a `;` in a string),
 `test_keep_function_emits_a_function_nothing_calls`, `test_keep_function_needs_a_function`,
 `test_define_function_needs_its_label`, `test_function_name_must_be_an_identifier`,
-`test_a_second_entry_point_of_a_function_is_found`, `test_a_function_named_like_a_constant_panics` (and
-`_a_variable_`, `_a_raw_label_or_def_`, `test_a_function_cannot_be_external`),
+`test_a_second_entry_point_of_a_function_is_found`, `test_a_function_named_like_a_constant_is_an_error` (and
+`_a_variable_`, `_a_raw_label_or_def_`, `test_a_function_cannot_be_external`; they were `…_panics`),
 `test_a_user_function_replaces_a_forced_builtin`, `test_a_second_entry_point_replaces_a_builtin`,
 `test_keep_function_accepts_a_generated_function`, `test_redefining_a_function_moves_its_second_entry_point`.
 
@@ -930,7 +974,7 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:707-741`): the global
+Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:748-784` since `refactor-p2-engine-api-errors`): the global
 symbols of every other chunk and of the animation functions are looked up (`symbols`, since `refactor-p2-routines`
 `src/gb_asm/labels.rs:440`; it read the text of every instruction, it now reads typed operands by their type and
 reads the text of each raw instruction line by line as RGBDS does, with
@@ -946,7 +990,7 @@ the code `build()` generates is not taken for a builtin (for a user function it 
 before, each of these also emitted the builtin `Delay:`, which rgbasm rejected as defined twice. Names defined
 where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path depends on the assembler's
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
-**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:353`): a function of that name is never emitted,
+**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:361`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
 (`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation

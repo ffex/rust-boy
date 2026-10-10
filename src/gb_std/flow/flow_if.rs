@@ -1,6 +1,7 @@
 use crate::gb_asm::{
-    Block, Condition as AsmCondition, Expr, Instr, JumpTarget, LabelAllocator, R8,
+    Block, Condition as AsmCondition, Expr, Instr, JumpTarget, LabelAllocator, R8, R16Stack,
 };
+use crate::gb_std::routine::Regs;
 
 use super::emittable::Emittable;
 
@@ -48,9 +49,24 @@ impl ComparisonOp {
 ///
 /// The If statement automatically handles:
 /// - Loading right value into A, saving to B
-/// - Loading left value into A (the left code must not change B)
+/// - Loading left value into A
 /// - Comparing A (left) with B (right)
 /// - Conditional jumps and label generation
+///
+/// # Registers
+/// The `If` uses `a`, `b` and the flags ([`If::clobbers`]): the right code runs first and
+/// leaves its value in `a`, which the `If` copies to `b`; then the left code leaves its
+/// value in `a`, and `cp a, b` sets the flags. So the bodies start with `a` = left,
+/// `b` = right, and every other register as the operand code left it; the `If` itself
+/// changes nothing else. Its two operands load `a`; what else they and the bodies change
+/// is up to their code.
+///
+/// The left code may change `b` (or `c`) too: a `call` (`Call::with_args("GetTileByPixel",
+/// ..)`), raw code, or an instruction that writes `b`. Then the `If` saves `bc` around it
+/// (`push bc` before, `pop bc` after: 2 bytes, 7 M-cycles), so the compare still reads
+/// the right value; the left code's changes to `b` and `c` are undone. Left code that
+/// cannot change `b` ([`Regs::written_by`]), such as a load of a variable or of a sprite
+/// coordinate, gets no `push` / `pop`.
 ///
 /// # Example
 /// ```ignore
@@ -186,6 +202,13 @@ impl If {
         self
     }
 
+    /// The registers an `If` changes itself: `a` (the operands' values), `b` (the right
+    /// value) and the flags (the compare). Its operand code and bodies change what their
+    /// own code changes (see [`If`], Registers).
+    pub fn clobbers(&self) -> Regs {
+        Regs::A | Regs::B | Regs::F
+    }
+
     /// Generate assembly for simple conditions (E, NE, LT, GE)
     fn emit_simple(
         &mut self,
@@ -284,7 +307,9 @@ impl Emittable for If {
     /// ```asm
     /// ; right instructions (result in A)
     /// ld B, A              ; save right to B
+    /// ; (push bc, if the left instructions may change B)
     /// ; left instructions (result in A)
+    /// ; (pop bc)
     /// cp B                 ; compare A (left) with B (right)
     /// jp <condition>, .end_if_N
     /// ; then branch
@@ -302,8 +327,17 @@ impl Emittable for If {
         // Step 2: Save right value to B
         asm.ld(R8::B, R8::A);
 
-        // Step 3: Execute left instructions (result in A)
-        asm.emit_all(self.left.emit(labels));
+        // Step 3: Execute left instructions (result in A); if they may change B, save BC
+        // around them, so B still holds the right value for the compare
+        let left = self.left.emit(labels);
+        let saves_b = Regs::written_by(&left).is_none_or(|written| written.intersects(Regs::B));
+        if saves_b {
+            asm.push(R16Stack::BC);
+        }
+        asm.emit_all(left);
+        if saves_b {
+            asm.pop(R16Stack::BC);
+        }
 
         // Step 4: Compare A (left) with B (right): the flags describe left - right
         asm.cp(R8::B);
@@ -458,6 +492,13 @@ impl IfConst {
     pub fn or_else(mut self, else_branch: impl Emittable + 'static) -> Self {
         self.else_branch = Some(Box::new(else_branch));
         self
+    }
+
+    /// The registers an `IfConst` changes itself: `a` (the value its code loads) and the
+    /// flags (`cp a, constant`). The bodies start with `a` = the value; the value code and
+    /// the bodies change what their own code changes.
+    pub fn clobbers(&self) -> Regs {
+        Regs::A | Regs::F
     }
 
     /// Generate assembly for simple conditions (E, NE, LT, GE)
@@ -661,6 +702,12 @@ impl IfA {
             then_branch: Box::new(then_branch),
             else_branch: None,
         }
+    }
+
+    /// The registers an `IfA` changes itself: the flags only (`cp a, constant` reads `a`
+    /// and keeps it). The bodies change what their own code changes.
+    pub fn clobbers(&self) -> Regs {
+        Regs::F
     }
 
     /// Add an else branch to the if statement
@@ -890,6 +937,15 @@ impl IfCall {
     pub fn or_else(mut self, else_branch: impl Emittable + 'static) -> Self {
         self.else_branch = Some(Box::new(else_branch));
         self
+    }
+
+    /// The registers an `IfCall` changes: the flags, the result of the routine it calls (the
+    /// `IfCall`'s own instructions, `call` and the jumps, change nothing). The routine
+    /// changes what its calling convention says besides
+    /// ([`Routine::changes`](crate::gb_std::routine::Routine::changes)), and the setup code
+    /// and the bodies what their own code changes.
+    pub fn clobbers(&self) -> Regs {
+        Regs::F
     }
 
     /// Get the inverted condition for jumping AWAY from the then branch.
@@ -1161,5 +1217,288 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ==================== Registers (B5, Phase 2) ====================
+
+    use crate::gb_asm::{Mem, R16};
+    use crate::gb_std::routine::tests::{run_and_compare, seeded_cpus};
+
+    /// A body that marks that it ran: `ld [var], a`, which changes no register
+    fn mark(var: &str) -> Vec<Instr> {
+        let mut code = Block::new();
+        code.ld(Mem::addr(var), R8::A);
+        code.into_instrs()
+    }
+
+    /// Run `code` (an If and its bodies, then `ret`, then `routines`) on each seeded CPU,
+    /// with `wThen` / `wElse` in memory; return the registers it changed, and whether the
+    /// then body ran, per CPU
+    fn run_if(
+        code: Vec<Instr>,
+        routines: &[Instr],
+        setup: &dyn Fn(&mut TestCpu),
+    ) -> Vec<(Regs, bool)> {
+        let mut all = Block::new();
+        all.emit_all(code).ret().emit_all(routines.to_vec());
+        let all = all.into_instrs();
+        seeded_cpus()
+            .into_iter()
+            .map(|mut cpu| {
+                setup(&mut cpu);
+                cpu.mem.insert("wThen".to_string(), 0);
+                cpu.mem.insert("wElse".to_string(), 0);
+                let changes = run_and_compare(&mut cpu, &all);
+                (changes, wrote(&cpu, "wThen"))
+            })
+            .collect()
+    }
+
+    /// Whether the code that ran on `cpu` wrote `var`
+    fn wrote(cpu: &TestCpu, var: &str) -> bool {
+        cpu.trace.iter().any(
+            |event| matches!(event, crate::gb_asm::test_cpu::Event::Write(name, _) if name == var),
+        )
+    }
+
+    type MakeIfConst = fn(Vec<Instr>, u8, Vec<Instr>) -> IfConst;
+    type MakeIfA = fn(u8, Vec<Instr>) -> IfA;
+
+    #[test]
+    fn test_each_if_kind_changes_only_what_it_lists() {
+        // The registers each If kind uses, on the test CPU: every other register keeps its
+        // value, whichever branch runs, with or without else
+        let ifs: [(&str, MakeIf); 6] = [
+            ("eq", |l, r, t| If::eq(l, r, t)),
+            ("ne", |l, r, t| If::ne(l, r, t)),
+            ("lt", |l, r, t| If::lt(l, r, t)),
+            ("ge", |l, r, t| If::ge(l, r, t)),
+            ("le", |l, r, t| If::le(l, r, t)),
+            ("gt", |l, r, t| If::gt(l, r, t)),
+        ];
+        let if_consts: [MakeIfConst; 6] = [
+            |v, c, t| IfConst::eq(v, c, t),
+            |v, c, t| IfConst::ne(v, c, t),
+            |v, c, t| IfConst::lt(v, c, t),
+            |v, c, t| IfConst::ge(v, c, t),
+            |v, c, t| IfConst::le(v, c, t),
+            |v, c, t| IfConst::gt(v, c, t),
+        ];
+        let if_as: [MakeIfA; 6] = [
+            |c, t| IfA::eq(c, t),
+            |c, t| IfA::ne(c, t),
+            |c, t| IfA::lt(c, t),
+            |c, t| IfA::ge(c, t),
+            |c, t| IfA::le(c, t),
+            |c, t| IfA::gt(c, t),
+        ];
+        let mut seen = [Regs::NONE; 3];
+        for (index, (name, make)) in ifs.into_iter().enumerate() {
+            for (l, r) in [(1u8, 2u8), (2, 2), (3, 2)] {
+                for with_else in [false, true] {
+                    let mut stmt = make(load_a(l), load_a(r), mark("wThen"));
+                    if with_else {
+                        stmt = stmt.or_else(mark("wElse"));
+                    }
+                    let clobbers = stmt.clobbers();
+                    for (changes, _) in run_if(stmt.emit(&LabelAllocator::new()), &[], &|_| {}) {
+                        assert!(
+                            clobbers.contains(changes),
+                            "If::{}({}, {}) changes {}",
+                            name,
+                            l,
+                            r,
+                            changes
+                        );
+                        seen[0] |= changes;
+                    }
+
+                    let mut stmt = if_consts[index](load_a(l), r, mark("wThen"));
+                    if with_else {
+                        stmt = stmt.or_else(mark("wElse"));
+                    }
+                    let clobbers = stmt.clobbers();
+                    for (changes, _) in run_if(stmt.emit(&LabelAllocator::new()), &[], &|_| {}) {
+                        assert!(
+                            clobbers.contains(changes),
+                            "IfConst::{} changes {}",
+                            name,
+                            changes
+                        );
+                        seen[1] |= changes;
+                    }
+
+                    let mut stmt = if_as[index](r, mark("wThen"));
+                    if with_else {
+                        stmt = stmt.or_else(mark("wElse"));
+                    }
+                    let clobbers = stmt.clobbers();
+                    let set_a = move |cpu: &mut TestCpu| cpu.a = l;
+                    for (changes, _) in run_if(stmt.emit(&LabelAllocator::new()), &[], &set_a) {
+                        assert!(
+                            clobbers.contains(changes),
+                            "IfA::{} changes {}",
+                            name,
+                            changes
+                        );
+                        seen[2] |= changes;
+                    }
+                }
+            }
+        }
+        // And the lists are exact: each register listed changed in some case
+        assert_eq!(
+            seen,
+            [Regs::A | Regs::B | Regs::F, Regs::A | Regs::F, Regs::F]
+        );
+
+        // IfCall: the flags, the routine's result; the routine here changes nothing else
+        let mut is_five = Block::new();
+        is_five.label("IsFive").cp(5).ret();
+        let routine = is_five.into_instrs();
+        for value in [5u8, 6] {
+            for with_else in [false, true] {
+                let mut stmt = IfCall::is_true("IsFive", mark("wThen"));
+                if with_else {
+                    stmt = stmt.or_else(mark("wElse"));
+                }
+                assert_eq!(stmt.clobbers(), Regs::F);
+                let set_a = move |cpu: &mut TestCpu| cpu.a = value;
+                for (changes, then_ran) in
+                    run_if(stmt.emit(&LabelAllocator::new()), &routine, &set_a)
+                {
+                    assert!(
+                        Regs::F.contains(changes),
+                        "IfCall with a = {}: {}",
+                        value,
+                        changes
+                    );
+                    assert_eq!(then_ran, value == 5);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_if_left_code_that_changes_b() {
+        // B5 (latent): the left code ran after the right value was put in b, so left code
+        // that changed b (here: writes b and c, as a get_pivot does) made the If compare
+        // with something else than the right value. Now the If saves bc around it.
+        let cases: [Case; 6] = [
+            ("eq", |l, r, t| If::eq(l, r, t), |l, r| l == r),
+            ("ne", |l, r, t| If::ne(l, r, t), |l, r| l != r),
+            ("lt", |l, r, t| If::lt(l, r, t), |l, r| l < r),
+            ("ge", |l, r, t| If::ge(l, r, t), |l, r| l >= r),
+            ("le", |l, r, t| If::le(l, r, t), |l, r| l <= r),
+            ("gt", |l, r, t| If::gt(l, r, t), |l, r| l > r),
+        ];
+        let left_writing_bc = |value: u8| {
+            let mut code = Block::new();
+            code.ld(R8::B, 0x99).ld(R8::C, 0x77).ld_a(value);
+            code.into_instrs()
+        };
+        for (name, make, expected) in cases {
+            for l in [0u8, 5, 10, 0x99, 255] {
+                for r in [0u8, 5, 10, 0x99, 255] {
+                    let mut stmt = make(left_writing_bc(l), load_a(r), mark("wThen"));
+                    let code = stmt.emit(&LabelAllocator::new());
+                    let text: Vec<String> = code.iter().map(|i| i.to_string()).collect();
+                    assert!(text.contains(&"push bc".to_string()), "{:?}", text);
+                    for mut cpu in seeded_cpus() {
+                        cpu.mem.insert("wThen".to_string(), 0);
+                        let c = cpu.c;
+                        cpu.run(&code);
+                        assert_eq!(
+                            wrote(&cpu, "wThen"),
+                            expected(l, r),
+                            "If::{}({}, {})",
+                            name,
+                            l,
+                            r
+                        );
+                        // The left code's change to c is undone, b holds the right value
+                        assert_eq!((cpu.known(R8::B), cpu.known(R8::C)), (Some(r), Some(c)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_if_left_code_that_calls_a_routine() {
+        // A left operand that calls GetTileByPixel (which changes bc): the tile under the
+        // pixel is compared with the right value
+        use crate::gb_std::flow::Call;
+        use crate::gb_std::graphics::utility::get_tile_by_pixel;
+        let tile_at = |addr: u16| (addr % 251) as u8;
+        let routine = get_tile_by_pixel();
+        for (x, y) in [(0u8, 0u8), (100, 57), (255, 143)] {
+            let addr = crate::hw::SCRN0.value + u16::from(y / 8) * 32 + u16::from(x / 8);
+            for right in [tile_at(addr), tile_at(addr).wrapping_add(1)] {
+                let mut pivot = Block::new();
+                pivot.ld(R8::B, x).ld(R8::C, y);
+                let mut stmt = If::eq(
+                    Call::with_args("GetTileByPixel", pivot.into_instrs()),
+                    load_a(right),
+                    mark("wThen"),
+                );
+                let mut code = Block::new();
+                code.emit_all(stmt.emit(&LabelAllocator::new()))
+                    .ret()
+                    .emit_all(routine.clone());
+                let mut cpu = TestCpu::default();
+                for a in crate::hw::SCRN0.value..crate::hw::SCRN1.value {
+                    cpu.mem.insert(format!("${:04X}", a), tile_at(a));
+                }
+                cpu.mem.insert("wThen".to_string(), 0);
+                cpu.run(&code.into_instrs());
+                assert_eq!(
+                    wrote(&cpu, "wThen"),
+                    right == tile_at(addr),
+                    "pixel ({}, {}), right {}",
+                    x,
+                    y,
+                    right
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_if_left_code_that_keeps_b_is_emitted_as_before() {
+        // No push / pop when the left code cannot change b: the examples' Ifs (a variable or
+        // a sprite coordinate, plus or minus a constant) are the same code as before
+        let mut left = Block::new();
+        left.ld(R8::A, Mem::addr("wBallY")).add(5);
+        let mut stmt = If::eq(left.into_instrs(), load_a(3), set_c(1));
+        let text: Vec<String> = stmt
+            .emit(&LabelAllocator::new())
+            .iter()
+            .map(|i| i.to_string())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "ld a, 3",
+                "ld b, a",
+                "ld a, [wBallY]",
+                "add a, 5",
+                "cp a, b",
+                "jp nz, .end_if_0",
+                "ld c, 1",
+                ".end_if_0:"
+            ]
+        );
+        // Left code that changes other pairs (de, hl) keeps b too
+        let mut left = Block::new();
+        left.ld(R16::HL, "Table")
+            .ld(R8::A, Mem::Hli)
+            .ld(R8::D, R8::A);
+        let mut stmt = If::eq(left.into_instrs(), load_a(3), set_c(1));
+        assert!(
+            !stmt
+                .emit(&LabelAllocator::new())
+                .contains(&Instr::Push { pair: R16Stack::BC })
+        );
     }
 }

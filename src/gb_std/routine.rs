@@ -150,6 +150,125 @@ impl Regs {
         }
     }
 
+    /// The registers `code` may write, read from its instructions; `None` when that cannot be
+    /// told from them: a `call`, `rst` or `jp hl` (to code it does not see), a raw line or an
+    /// `INCLUDE` (code it does not read), a change of `sp`
+    ///
+    /// It is an upper bound: a register a `push` saved and a `pop` restored counts as
+    /// written, and so does one an instruction would write on a path that is never taken.
+    /// Labels, comments, data and the other directives write nothing; a jump stays in
+    /// `code`, and `ret` leaves it.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::gb_asm::{Block, Mem, R8, R16};
+    /// use rust_boy::gb_std::routine::Regs;
+    ///
+    /// let mut code = Block::new();
+    /// code.ld(R8::A, Mem::addr("wScore")).add(R8::B).ld(R16::HL, "Table");
+    /// assert_eq!(Regs::written_by(&code), Some(Regs::A | Regs::HL | Regs::F));
+    /// code.call("Somewhere");
+    /// assert_eq!(Regs::written_by(&code), None);
+    /// ```
+    pub fn written_by(code: &[Instr]) -> Option<Regs> {
+        use crate::gb_asm::labels::code_lines;
+        use crate::gb_asm::{Dst, IncDec, Mem, Operand, R16Stack};
+
+        // The register an 8-bit operand names (`[hl]` is memory)
+        let r8 = |reg: &R8| match reg {
+            R8::AtHl => Regs::NONE,
+            reg => Regs::r8(*reg),
+        };
+        // `[hli]` / `[hld]` move `hl`
+        let mem = |mem: &Mem| match mem {
+            Mem::Hli | Mem::Hld => Regs::HL,
+            _ => Regs::NONE,
+        };
+        let mut written = Regs::NONE;
+        for instr in code {
+            written |= match instr {
+                Instr::Ld { dst, src } | Instr::Ldh { dst, src } => {
+                    let to = match dst {
+                        Dst::R8(reg) => r8(reg),
+                        Dst::R16(R16::SP) => return None,
+                        Dst::R16(pair) => Regs::r16(*pair),
+                        Dst::Mem(address) => mem(address),
+                    };
+                    let from = match src {
+                        Operand::Mem(address) => mem(address),
+                        _ => Regs::NONE,
+                    };
+                    to | from
+                }
+                Instr::LdHlSp { .. } => Regs::HL | Regs::F,
+                Instr::Push { .. } => Regs::NONE,
+                Instr::Pop { pair } => match pair {
+                    R16Stack::AF => Regs::AF,
+                    R16Stack::BC => Regs::BC,
+                    R16Stack::DE => Regs::DE,
+                    R16Stack::HL => Regs::HL,
+                },
+                Instr::Add { .. }
+                | Instr::Adc { .. }
+                | Instr::Sub { .. }
+                | Instr::Sbc { .. }
+                | Instr::And { .. }
+                | Instr::Xor { .. }
+                | Instr::Or { .. } => Regs::AF,
+                Instr::Cp { .. } => Regs::F,
+                Instr::Inc { operand } | Instr::Dec { operand } => match operand {
+                    IncDec::R8(reg) => r8(reg) | Regs::F,
+                    IncDec::R16(R16::SP) => return None,
+                    IncDec::R16(pair) => Regs::r16(*pair),
+                },
+                Instr::AddHl { .. } => Regs::HL | Regs::F,
+                Instr::AddSp { .. } => return None,
+                Instr::Rlca | Instr::Rrca | Instr::Rla | Instr::Rra => Regs::AF,
+                Instr::Rlc { operand }
+                | Instr::Rrc { operand }
+                | Instr::Rl { operand }
+                | Instr::Rr { operand }
+                | Instr::Sla { operand }
+                | Instr::Sra { operand }
+                | Instr::Swap { operand }
+                | Instr::Srl { operand } => r8(operand) | Regs::F,
+                Instr::Bit { .. } => Regs::F,
+                Instr::Set { operand, .. } | Instr::Res { operand, .. } => r8(operand),
+                Instr::Daa | Instr::Cpl => Regs::AF,
+                Instr::Scf | Instr::Ccf => Regs::F,
+                Instr::Nop | Instr::Halt | Instr::Stop | Instr::Di | Instr::Ei => Regs::NONE,
+                Instr::Jp { .. }
+                | Instr::JpCond { .. }
+                | Instr::Jr { .. }
+                | Instr::JrCond { .. }
+                | Instr::Ret
+                | Instr::RetCond { .. }
+                | Instr::Reti => Regs::NONE,
+                Instr::JpHl | Instr::Call { .. } | Instr::CallCond { .. } | Instr::Rst { .. } => {
+                    return None;
+                }
+                Instr::Include { .. } => return None,
+                // A raw line of comments only writes nothing
+                Instr::Raw { line } => {
+                    if code_lines(line).iter().all(|code| code.trim().is_empty()) {
+                        Regs::NONE
+                    } else {
+                        return None;
+                    }
+                }
+                Instr::Label { .. }
+                | Instr::Comment { .. }
+                | Instr::Def { .. }
+                | Instr::Section(_)
+                | Instr::Incbin { .. }
+                | Instr::Db { .. }
+                | Instr::Dw { .. }
+                | Instr::Ds { .. } => Regs::NONE,
+            };
+        }
+        Some(written)
+    }
+
     /// Each 8-bit register of the set, and the flags last
     pub fn iter(self) -> impl Iterator<Item = Regs> {
         Self::NAMES

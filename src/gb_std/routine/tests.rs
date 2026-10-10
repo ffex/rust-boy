@@ -332,3 +332,133 @@ fn test_routine_errors() {
         message
     );
 }
+
+#[test]
+fn test_written_by_covers_what_each_instruction_changes() {
+    // Regs::written_by is an upper bound: run each instruction on the test CPU (hl and de
+    // point at memory), and every register it changed must be in what written_by says
+    use crate::gb_asm::{Condition, Mem, R16Stack};
+
+    let cases: Vec<Block> = {
+        let mut cases = Vec::new();
+        let mut add = |f: &dyn Fn(&mut Block)| {
+            let mut code = Block::new();
+            f(&mut code);
+            cases.push(code);
+        };
+        add(&|c| {
+            c.ld(R8::B, R8::A);
+        });
+        add(&|c| {
+            c.ld(R8::L, 7);
+        });
+        add(&|c| {
+            c.ld(R16::DE, 0x1234);
+        });
+        add(&|c| {
+            c.ld(R8::A, Mem::Hli);
+        });
+        add(&|c| {
+            c.ld(Mem::Hld, R8::A);
+        });
+        add(&|c| {
+            c.ld(R8::A, Mem::De);
+        });
+        add(&|c| {
+            c.ld(R8::AtHl, R8::C);
+        });
+        add(&|c| {
+            c.ldh(R8::A, Mem::addr(hw::P1));
+        });
+        add(&|c| {
+            c.push(R16Stack::BC).pop(R16Stack::DE);
+        });
+        add(&|c| {
+            c.push(R16Stack::AF).pop(R16Stack::HL);
+        });
+        add(&|c| {
+            c.add(R8::B)
+                .adc(3)
+                .sub(R8::C)
+                .sbc(1)
+                .and(R8::D)
+                .xor(R8::E)
+                .or(9);
+        });
+        add(&|c| {
+            c.cp(R8::H);
+        });
+        add(&|c| {
+            c.inc(R8::C).dec(R8::B).inc(R8::AtHl);
+        });
+        add(&|c| {
+            c.inc(R16::BC).dec(R16::DE);
+        });
+        add(&|c| {
+            c.add_hl(R16::BC);
+        });
+        add(&|c| {
+            c.rlca().rrca().rla().rra();
+        });
+        add(&|c| {
+            c.rlc(R8::B)
+                .rrc(R8::C)
+                .rl(R8::D)
+                .rr(R8::E)
+                .sla(R8::A)
+                .sra(R8::B)
+                .swap(R8::C)
+                .srl(R8::D);
+        });
+        add(&|c| {
+            c.bit(3, R8::E).set(1, R8::B).res(7, R8::AtHl);
+        });
+        add(&|c| {
+            c.cpl().scf().ccf().nop();
+        });
+        add(&|c| {
+            c.jr_cond(Condition::Z, ".skip").ld(R8::C, 1).label(".skip");
+        });
+        cases
+    };
+    for code in cases {
+        let written = Regs::written_by(&code).expect("plain code");
+        for mut cpu in seeded_cpus() {
+            cpu.mem.insert(hw::P1.name.to_string(), 0x0F);
+            // hl and de point at WRAM, as numbers (their registers stay known)
+            let ram = hw::RAM.value;
+            for i in 0..4 {
+                cpu.mem.insert(format!("${:04X}", ram + i), i as u8);
+            }
+            let mut pointers = Block::new();
+            pointers
+                .ld(R16::HL, Expr::hex(ram + 1))
+                .ld(R16::DE, Expr::hex(ram));
+            cpu.run(&pointers.into_instrs());
+            let mut all = Block::new();
+            all.label("Code").emit_all(code.iter().cloned());
+            let changes = run_and_compare(&mut cpu, &all.into_instrs());
+            assert!(
+                written.contains(changes),
+                "{:?}: changes {}, written_by says {}",
+                code.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+                changes,
+                written
+            );
+        }
+    }
+
+    // What it cannot see
+    let mut call = Block::new();
+    call.call("Elsewhere");
+    assert_eq!(Regs::written_by(&call), None);
+    let mut raw = Block::new();
+    raw.raw("ld b, 1");
+    assert_eq!(Regs::written_by(&raw), None);
+    let mut comment = Block::new();
+    comment.raw("; only a comment").comment("and another");
+    assert_eq!(Regs::written_by(&comment), Some(Regs::NONE));
+    let mut sp = Block::new();
+    sp.inc(R16::SP);
+    assert_eq!(Regs::written_by(&sp), None);
+}

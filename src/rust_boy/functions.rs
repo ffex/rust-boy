@@ -143,11 +143,10 @@ impl UserFunction {
 }
 
 /// The builtin and user functions of a program, and the ones that must be emitted even
-/// if no code calls them
+/// if no code calls them (the builtins forced with `RustBoy::use_function` are in the
+/// program's `RustBoyConfig`, given to [`generate_used`](Self::generate_used))
 #[derive(Default)]
 pub struct FunctionRegistry {
-    /// Builtins emitted even if no code calls them (`RustBoy::use_function`)
-    forced_builtins: BTreeSet<BuiltinFunction>,
     /// User-defined functions, in registration order
     user_functions: Vec<UserFunction>,
     /// The index of each user function, by name
@@ -169,12 +168,6 @@ pub struct FunctionRegistry {
 impl FunctionRegistry {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Emit a builtin function even if no code calls it (a user function of that name
-    /// replaces it, and is emitted instead)
-    pub fn use_function(&mut self, func: BuiltinFunction) {
-        self.forced_builtins.insert(func);
     }
 
     /// Emit the function `name` (a user function, or else a builtin) even if no code
@@ -347,10 +340,11 @@ impl FunctionRegistry {
     }
 
     /// The functions a program needs, given its code outside the functions (`code`), its
-    /// variables (`variables`) and the functions `build()` generates and emits itself
-    /// (`generated`, the animations): every function that code refers to, then every
-    /// function those need, and so on, plus the forced builtins and kept functions
-    /// (B24, B26)
+    /// variables (`variables`), the functions `build()` generates and emits itself
+    /// (`generated`, the animations) and the builtins it emits even if no code calls them
+    /// (`forced`; a user function of that name replaces one, and is emitted instead):
+    /// every function that code refers to, then every function those need, and so on,
+    /// plus the forced builtins and kept functions (B24, B26)
     ///
     /// A function is found by its name anywhere in an instruction (`call`, `jp`, `jr`,
     /// `ld hl, Name`, `dw Name`, a raw line; see [`symbols`]), so a call made through
@@ -377,6 +371,7 @@ impl FunctionRegistry {
         code: &[&[Instr]],
         variables: impl IntoIterator<Item = (&'a str, VarType)>,
         generated: &[String],
+        forced: &BTreeSet<BuiltinFunction>,
     ) -> Result<UsedFunctions, Error> {
         for name in self.called.iter().chain(&self.kept) {
             if !self.function_exists(name) && !generated.contains(name) {
@@ -447,7 +442,7 @@ impl FunctionRegistry {
                 }
             }
         };
-        for &func in &self.forced_builtins {
+        for &func in forced {
             if defined.contains(func.label()) {
                 continue;
             }
@@ -541,7 +536,7 @@ mod tests {
         assert_eq!(
             labels(
                 &registry
-                    .generate_used(&[&calls.into_instrs()], [], &[])
+                    .generate_used(&[&calls.into_instrs()], [], &[], &BTreeSet::new())
                     .unwrap()
                     .code
             ),
@@ -661,7 +656,7 @@ mod tests {
         let mut main = Block::new();
         main.call("Top").call("Top");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         assert_eq!(
             global_labels(&used.code),
@@ -685,7 +680,7 @@ mod tests {
         let mut main = Block::new();
         main.call("Dispatch");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         assert_eq!(global_labels(&used.code), ["Delay:", "Leaf:", "Dispatch:"]);
 
@@ -696,7 +691,7 @@ mod tests {
         let mut main = Block::new();
         main.call("Poll");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
     }
@@ -714,14 +709,19 @@ mod tests {
         let mut main = Block::new();
         main.call("ReadKeys");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
         // Not the ones the program defines
         let mut main = Block::new();
         main.call("ReadKeys");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [("wNewKeys", VarType::U8)], &[])
+            .generate_used(
+                &[&main.into_instrs()],
+                [("wNewKeys", VarType::U8)],
+                &[],
+                &BTreeSet::new(),
+            )
             .unwrap();
         assert_eq!(used.variables, ["wCurKeys"]);
     }
@@ -738,7 +738,7 @@ mod tests {
         let mut main = Block::new();
         main.call("Second").call("First");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         assert_eq!(global_labels(&used.code), ["Helper:", "First:", "Second:"]);
 
@@ -753,7 +753,7 @@ mod tests {
         main.call("Wait");
         let out = text(
             &registry
-                .generate_used(&[&main.into_instrs()], [], &[])
+                .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
                 .unwrap()
                 .code,
         );
@@ -797,7 +797,7 @@ mod tests {
         main.label("Main").call("First").jp("Main");
 
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         let out = text(&used.code);
         // The global labels (Memcopy has a local `.copy:` too)
@@ -817,7 +817,7 @@ mod tests {
         let mut main = Block::new();
         main.call("Poll");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
     }
@@ -867,7 +867,7 @@ mod tests {
         let mut main = Block::new();
         main.call("UsesReal").call("UsesCustom");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         let out = text(&used.code);
         assert_eq!(out.matches("Memcopy:").count(), 1, "{}", out);
@@ -906,7 +906,7 @@ mod tests {
         let mut main = Block::new();
         main.call("Second");
         let used = registry
-            .generate_used(&[&main.into_instrs()], [], &[])
+            .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
         assert_eq!(global_labels(&used.code), ["Delay:", "Helper:", "Second:"]);
         assert_eq!(used.variables, ["wHelper"]);

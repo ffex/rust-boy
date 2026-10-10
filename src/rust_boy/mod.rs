@@ -8,6 +8,7 @@
 //! [`Error`]).
 
 mod animations;
+mod config;
 mod error;
 mod functions;
 mod inputs;
@@ -19,6 +20,7 @@ mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
+pub use config::{Lcdc, Palettes, RustBoyConfig};
 pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;

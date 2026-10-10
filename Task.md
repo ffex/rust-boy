@@ -139,10 +139,13 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       `nop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, `rl`/`rr`/`rlc`/`rrc`/`sla`/`sra` (+ `rla`…),
       `cpl`, `scf`/`ccf`, `ld [hl-]`, `ld hl, sp+e`, `jp hl`, `add sp, e` (branch `refactor-p2-isa`, plus `call cc`;
       every family, with all the operands of the regular families, checked with rgbasm against the SM83 opcode table in `gb_asm::isa_tests`)
-- [ ] First-class sections (type, bank, `ALIGN`, `ds n` without fill for RAM); move `Chunk` and the game
-      layout out of `gb_asm` into the engine (started, branch `refactor-p2-sections`: typed `gb_asm::Section` for every
-      memory type, with fixed address, bank, `ALIGN`, `UNION`, `FRAGMENT`, checked against RGBDS 1.0.4; `ds n` without
-      fill; code or data in a RAM section panics; the relaxation splits on typed sections. Moving `Chunk` is left)
+- [x] First-class sections (type, bank, `ALIGN`, `ds n` without fill for RAM); move `Chunk` and the game
+      layout out of `gb_asm` into the engine (branch `refactor-p2-sections`: typed `gb_asm::Section` for every memory
+      type, with fixed address, bank, `ALIGN`, `UNION`, `FRAGMENT`, checked against RGBDS 1.0.4; `ds n` without fill;
+      code or data in a RAM section, or a section name used twice, panics; the relaxation splits on typed sections.
+      Branch `refactor-p2-sections-layout`: `Chunk` and its order are the engine's, `rust_boy::{Chunk, Layout}`; an
+      `Asm` is one program printed in the order it is written, and checks its sections in `emit`. The 6 example
+      ROMs, and their asm, are byte-identical)
 - [x] Label allocator owned by the asm layer; automatic `jr` → `jp` when out of range
       (branch `refactor-p2-labels`: the program's `Asm` owns its `LabelAllocator` (`Asm::labels`, `Asm::emit_code`),
       `Emittable::emit` takes it instead of the `If` counter, and every generated label (`If*`, key checks, moves, the OAM

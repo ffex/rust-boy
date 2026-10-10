@@ -7,7 +7,7 @@ pub mod rust_boy;
 
 #[cfg(test)]
 mod tests {
-    use super::gb_asm::{Asm, Chunk, Condition, Section};
+    use super::gb_asm::{Asm, Condition, Section};
 
     #[test]
     fn test_basic_assembly_generation() {
@@ -45,17 +45,18 @@ mod tests {
     }
 
     #[test]
-    fn test_chunks() {
+    fn test_code_is_printed_in_order() {
         let mut asm = Asm::new();
 
-        asm.chunk(Chunk::Main).label("Main").call("Function");
+        asm.label("Main").call("Function").blank_line();
 
-        asm.chunk(Chunk::Functions).label("Function").ret();
+        asm.label("Function").ret();
 
         let output = asm.to_asm();
 
-        assert!(output.contains("Main:"));
-        assert!(output.contains("Function:"));
-        assert!(output.contains("call Function"));
+        assert_eq!(
+            output,
+            "    Main:\n    call Function\n\n    Function:\n    ret\n\n"
+        );
     }
 }

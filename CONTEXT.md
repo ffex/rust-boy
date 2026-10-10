@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 243 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the `gb_asm::section` module, the builders' `section`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 248 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -52,7 +52,7 @@ rgbfix -v -p 0xFF main.gb
 | Output determinism | ✅ every bin prints the same `.asm` on every run (was random, fixed — [B13](#b13)) |
 | Generated labels | ✅ a key check or move can be used any number of times and inside an `If`, and two sprites can share an animation name (fixed — [B7](#b7), [B25](#b25)); since Phase 2 (`refactor-p2-labels`) every label generated code makes up (`If`, snippets, the OAM clear loop, the animation dispatcher) comes from one `LabelAllocator` per program, owned by its `Asm`, so it is unique in the whole program by construction; unit tests check the labels with the RGBDS scope rules (`gb_asm::label_check`) |
 | Jumps | ✅ since Phase 2 (`refactor-p2-labels`) `Asm::to_asm` turns each `jr` that does not reach its target (out of -128..=127, another section, a symbol the program does not define, or behind a line of unknown size) into a `jp`, iterating until every `jr` left is in range, and writes `@`-relative targets again so they keep their instruction (`gb_asm::relax`). The `relax` test programs are assembled with RGBDS (`-Werror`) and every jump's opcode and landing address is checked in the ROM; the `RustBoy` test programs are checked with `jr_range_errors` (no `jr` out of range) and `assert_links` (linked with RGBDS under `RGBDS_LINK_CHECK`); the examples are assembled by CI |
-| Sections | ✅ since Phase 2 (`refactor-p2-sections`) `SECTION` is a typed `gb_asm::Section`: a name, a memory type (`ROM0`, `ROMX`, `VRAM`, `SRAM`, `WRAM0`, `WRAMX`, `OAM`, `HRAM`), and optionally a fixed address, a bank, `ALIGN[n, offset]`, `UNION` or `FRAGMENT`; what RGBDS rejects panics when it is built, and code or data in a RAM section (which only reserves space, with `ds n` and no fill), or a section name used twice, panics when the program is printed. Tests (`gb_asm::section`): every form prints the expected line and, with `RGBDS_LINK_CHECK`, RGBDS places it where it says (checked in the `.sym` file); every rejected form is rejected by RGBDS too |
+| Sections | ✅ since Phase 2 (`refactor-p2-sections`) `SECTION` is a typed `gb_asm::Section`: a name, a memory type (`ROM0`, `ROMX`, `VRAM`, `SRAM`, `WRAM0`, `WRAMX`, `OAM`, `HRAM`), and optionally a fixed address, a bank, `ALIGN[n, offset]`, `UNION` or `FRAGMENT`; what RGBDS rejects panics when it is built, and code or data in a RAM section (which only reserves space, with `ds n` and no fill), or a section name used twice, panics when it is emitted (`Asm::emit`; since `refactor-p2-sections-layout`, before when the program was printed). Tests (`gb_asm::section`): every form prints the expected line and, with `RGBDS_LINK_CHECK`, RGBDS places it where it says (checked in the `.sym` file); every rejected form is rejected by RGBDS too |
 | Start-up code | ✅ `gb.init()` code runs after the variables (animation variables included) and palettes are set, so what it sets survives (was overwritten, fixed — [B11](#b11)); the OAM is always cleared and `rOBP1` is set (fixed — [B28](#b28)); unit tests run the start-up code on `gb_asm::test_cpu` |
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
 | Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
@@ -67,9 +67,9 @@ rgbfix -v -p 0xFF main.gb
 
 | Layer | Path | LOC | Role |
 |---|---|---|---|
-| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Chunk` buckets, `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
+| **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
 | **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef` |
-| **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2550 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, `build()` |
+| **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2800 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` |
 | **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`, and since `refactor-p2-typed-operands` `rLCDC`, `rLY`, `rP1`, the palettes, `LCDCF_*`, `P1F_*`), `oam_offset`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
 
@@ -96,7 +96,7 @@ rgbfix -v -p 0xFF main.gb
   `.copy`, live in their scope), and to `EntryPoint` and `Main`. `gb_std` callers pass the allocator to
   `check_key`, `Sprite::move_*_limit` and `clear_objects_screen` (`asm.labels()`, or `gb.labels()`).
 - **Jump relaxation** (since `refactor-p2-labels`, `src/gb_asm/relax.rs`): `Asm::to_asm` / `Asm::program`
-  print the chunks as one program, and each `jr` / `jr cc` that cannot be shown to reach its target becomes
+  print the whole program, and each `jr` / `jr cc` that cannot be shown to reach its target becomes
   `jp` / `jp cc`: the target must be a label of the program defined once (RGBDS scope rules), in the same
   section, with only instructions of known size in between (`Instr::size`: every instruction, and `db` / `dw` /
   `ds` / `INCBIN` written with plain numbers), at -128..=127 from the end of the `jr`. Otherwise (another
@@ -118,8 +118,8 @@ rgbfix -v -p 0xFF main.gb
   1-65535, `VRAM` 0-1, `SRAM` 0-255, `WRAMX` 1-7), an address outside the memory type (RGBDS's default ranges, no
   `rgblink -t`/`-w`), an alignment above 16 bits or that the fixed address, or no address of the type, has, `UNION`
   in ROM, a name with `"`, `\`, `{` or a control character other than a tab. It prints `SECTION [UNION|FRAGMENT] "name",
-  TYPE[$addr], BANK[n], ALIGN[n, offset]`. `SectionTracker` follows a program in its printed order (`Asm::to_asm`,
-  `Asm::program`) and panics on code or data in a RAM section (an instruction, `ds n, fill`, `db`/`dw` with values,
+  TYPE[$addr], BANK[n], ALIGN[n, offset]`. `SectionTracker` follows a program as it is emitted (`Asm::emit`, since
+  `refactor-p2-sections-layout`; before, in its printed order, in `Asm::to_asm`) and panics on code or data in a RAM section (an instruction, `ds n, fill`, `db`/`dw` with values,
   `INCBIN`; labels, `ds n`, `db`/`dw` without values, comments and `DEF`s are fine) and on a section name used twice
   (only `UNION`s, or `FRAGMENT`s, of one memory type and bank share one; this check is partial, it compares a new
   piece with the first one by kind, memory type and bank, and leaves the rest, such as two `UNION`s at different
@@ -129,15 +129,22 @@ rgbfix -v -p 0xFF main.gb
   check for the rest of the program (RGBDS may skip or repeat what follows: the same section in both branches of an
   `IF`, code in an `IF 0`). An instruction whose text has a line break is checked as itself, then the lines after
   the break are read as a raw line. `ds n` reserves (`Asm::ds`), `ds n, fill` fills (`Asm::ds_fill`).
-- **Chunks** (`src/gb_asm/asm.rs:23-43`): `Header, Constants, Init, MainLoop, Main(legacy), Functions,
-  Tiles, Tilemap, Data`, printed in that fixed order by `Asm::to_asm` (`CHUNK_ORDER`, `src/gb_asm/codegen.rs:7-17`).
+- **Chunks and `Layout`** (the engine's since `refactor-p2-sections-layout`, `src/rust_boy/layout.rs`; they were
+  `gb_asm::Chunk` and the chunks of `Asm`, printed in `CHUNK_ORDER`): `Chunk::{Header, Constants, Init, MainLoop,
+  Main, Functions, Tiles, Tilemap, Data}`, in that order (`Chunk::ORDER`). A `Layout` holds code by chunk, written
+  with the builder methods of `Asm` to its current chunk (`Layout::chunk`; `Chunk::Main` at first), and owns the
+  program's label allocator; `Layout::program()` puts the chunks that have code together in an `Asm`, in
+  `Chunk::ORDER`, each followed by a blank line (`Asm::blank_line`), and that `Asm` checks the sections. `RustBoy`
+  keeps its `raw()` code in a `Layout` (the closure gets `&mut Layout`), `build_asm` returns the `Layout` it fills,
+  and `build()` prints `build_asm().program().to_asm()`. The asm layer knows instructions, sections and programs
+  only: an `Asm` is one list of instructions, printed in the order they were emitted.
 - **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and
   snippet is built in a `Block` (a checked list of instructions with the same builder methods as `Asm`, expanded from
   one `instruction_builders!` in `src/gb_asm/builders.rs`) and returned with `into_instrs()`. They used to create a
   fresh `Asm`, emit into its default `Chunk::Main` and return `asm.get_main_instrs()` (the scratch-`Asm` idiom). An
-  `Asm` is now only a whole program: `RustBoy`'s `raw()` chunks and `build_asm`, and the `gb_asm` example programs.
+  `Asm` is now only a whole program: the one `Layout::program` makes for `RustBoy`, and the `gb_asm` example programs.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:486-676`, `build` prints what `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:488-679`, `build` prints the program of the `Layout` `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -169,8 +176,10 @@ rgbfix -v -p 0xFF main.gb
 The problems are where each layer reaches across the line:
 
 1. **The assembler layer knows the game layout.** `Chunk::{Init, MainLoop, Tiles, Tilemap, Data}`
-   (`src/gb_asm/asm.rs:23-43`) and their fixed order (`src/gb_asm/codegen.rs:7-17`) are engine
-   concepts. `include_hardware()` hardcodes `hardware.inc` (`src/gb_asm/builders.rs:490-494`, since `refactor-p2-typed-operands-2b`).
+   (`src/gb_asm/asm.rs:23-43` at `4601a5c`) and their fixed order (`src/gb_asm/codegen.rs:7-17` at `4601a5c`) are engine
+   concepts. *Fixed since `refactor-p2-sections-layout`:* both are the engine's, `Chunk` and `Chunk::ORDER` in
+   `src/rust_boy/layout.rs:24-60` (see below). `include_hardware()` hardcodes `hardware.inc`
+   (`src/gb_asm/builders.rs:544-549`, since `refactor-p2-typed-operands-2b`).
    Sections were strings (`section("Header", "ROM0[$100]")`, any text), and `ds` always had a fill value, so RAM
    could not be reserved with it. *Since `refactor-p2-sections`:* sections are typed (`gb_asm::Section`, see
    [Key concepts](#key-concepts)), checked against what RGBDS 1.0.4 accepts, and a program panics on code or data in
@@ -184,7 +193,20 @@ The problems are where each layer reaches across the line:
    | `Instr::Section { name, mem_type }` | `Instr::Section(Section)` |
    | `asm.ds("$150 - @", "0")` (`Instr::Ds { num_bytes, starter_point }`) | `asm.ds_fill("$150 - @", "0")` (`Instr::Ds { count, fill: Some(..) }`); `asm.ds("4")` reserves (`fill: None`) |
    | `VariableSection::new("Vars", "WRAM0")` (`gb_std`; fields `name`, `memory`) | `VariableSection::new(Section::wram0("Vars"))` (field `section`) |
-   | a section text RGBDS rejects (`"ROM0, BANK[1]"`, `"HRAM[$FFFF]"`), code or data in a RAM section, a section name used twice | panics when the `Section` is built, or when the program is printed (`Asm::to_asm`, `RustBoy::build`), with what is wrong; before, rgbasm/rgblink failed |
+   | a section text RGBDS rejects (`"ROM0, BANK[1]"`, `"HRAM[$FFFF]"`), code or data in a RAM section, a section name used twice | panics when the `Section` is built, or when the instruction is emitted (`Asm::emit`; in a `RustBoy` program, in `build()`), with what is wrong; before, rgbasm/rgblink failed |
+
+   *Since `refactor-p2-sections-layout`:* `Chunk` and the fixed chunk order are the engine's (`rust_boy::{Chunk,
+   Layout}`, see [Key concepts](#key-concepts)); `Asm` is one program, printed in the order it is written. The
+   output of `RustBoy` and of the examples is byte-identical. **Breaking**, with the migration:
+
+   | Before | After |
+   |---|---|
+   | `use rust_boy::gb_asm::Chunk` | `use rust_boy::rust_boy::Chunk` |
+   | `gb.raw(\|asm: &mut Asm\| …)` | `gb.raw(\|asm: &mut Layout\| …)` (the same builder methods, `chunk`, `labels`, `emit_code`; a closure without a type annotation compiles as before) |
+   | `asm.chunk(Chunk::Functions)` on a `gb_asm` `Asm` program | write the parts in the order they are printed (build a part early in a `Block` and emit it later, as `unbricked_std` does), `asm.blank_line()` between them for the same text; or use a `rust_boy::Layout` and `layout.program()` |
+   | `asm.get_chunk(chunk)` | `layout.get_chunk(chunk)` (engine); an `Asm` has `asm.instrs()` |
+   | `asm.get_main_instrs()` | `asm.instrs()` (`&[Instr]`, every instruction as written) |
+   | code or data in a RAM section panics in `Asm::to_asm` | panics in `Asm::emit` (or `emit_all`, a builder method); every builder method is `#[track_caller]`, so the panic points at the call that writes it |
 2. **L1 is not really typed.** Registers and expressions are passed as strings:
    `ld_hli_label("a")`, `inc_label("de")`, `or_label("a", "c")` (`src/gb_asm/asm.rs:162-167, 382-384, 356-359`).
    `Operand::Imm`/`Label` are accepted as destinations, so `ld 1, 2` or `inc 5` compile in Rust and
@@ -500,7 +522,8 @@ No behavioural impact today, but it makes diffs and snapshot tests impossible (m
 **Status: fixed** on `refactor-p0-deterministic-output`: id-keyed managers use `BTreeMap` (ids are
 sequential, so creation order), name-keyed lists (user functions, variable sections, `gb_std`
 `VariableSection`) use a `Vec` in declaration order, builtins come in enum order. `Asm.chunks` stays a
-`HashMap` because `to_asm` reads it in a fixed order.
+`HashMap` because `to_asm` reads it in a fixed order (since `refactor-p2-sections-layout` an `Asm` is one ordered
+list, and the engine's `Layout` keeps its chunks in a `BTreeMap`, read in `Chunk::ORDER`).
 
 #### B14
 **`build()` is not idempotent.** `build(&mut self)` (`src/rust_boy/rustboy.rs:315`, through `build_asm`) creates `wFrameCounter`

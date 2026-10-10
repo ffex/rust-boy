@@ -1,15 +1,14 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
 use crate::gb_asm::labels::code_lines;
-use crate::gb_asm::{
-    Asm, Block, Chunk, Expr, Instr, JumpTarget, LabelAllocator, R8, Section, is_identifier,
-};
+use crate::gb_asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, Section, is_identifier};
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
 use crate::hw;
 
 use super::functions::{BuiltinFunction, FunctionRegistry, defines};
 use super::inputs::InputManager;
+use super::layout::{Chunk, Layout};
 use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
 use super::tiles::{TileManager, TilemapArea};
 use super::variables::VariableManager;
@@ -68,7 +67,7 @@ pub struct RustBoy {
     /// The code written with [`RustBoy::raw`], in chunks; it owns the program's label
     /// allocator ([`RustBoy::labels`]), shared with the sprite manager, so every
     /// generated label comes from one sequence
-    asm: Asm,
+    asm: Layout,
 
     /// Tile manager with automatic VRAM allocation
     pub tiles: TileManager,
@@ -101,7 +100,7 @@ pub struct RustBoy {
 impl RustBoy {
     /// Create a new RustBoy instance
     pub fn new() -> Self {
-        let asm = Asm::new();
+        let asm = Layout::new();
         Self {
             sprites: SpriteManager::new(asm.labels().clone()),
             asm,
@@ -223,9 +222,10 @@ impl RustBoy {
 
     /// Escape hatch: execute raw assembly operations
     ///
-    /// This allows advanced users to mix high-level and low-level code. The closure
-    /// writes to `Chunk::Main` unless it switches with `asm.chunk(..)`; every call starts
-    /// in `Chunk::Main` again. `build()` keeps every chunk (B15), each one after the code
+    /// This allows advanced users to mix high-level and low-level code. The closure gets
+    /// the program's [`Layout`] (the builder methods of an `Asm`, by [`Chunk`]) and writes
+    /// to [`Chunk::Main`] unless it switches with `asm.chunk(..)`; every call starts in
+    /// `Chunk::Main` again. `build()` keeps every chunk (B15), each one after the code
     /// it generates for that chunk:
     /// - `Main` (the default): after the main loop's `jp Main`, so it runs only if it is
     ///   called or jumped to: start it with a label.
@@ -239,11 +239,13 @@ impl RustBoy {
     /// - `Data`: after the variable sections, so inside the last of them (a `WRAM0`
     ///   section) unless the raw code opens its own `SECTION`. In a program without
     ///   variables, raw `Data` code that does not start with a `SECTION` gets a `WRAM0`
-    ///   section of its own, `SECTION "Raw Data", WRAM0` (it would land in ROM).
+    ///   section of its own, `SECTION "Raw Data", WRAM0` (it would land in ROM). A RAM
+    ///   section only reserves space (labels, `ds n`): code or data there makes `build()`
+    ///   panic.
     ///
     /// # Example
     /// ```
-    /// use rust_boy::gb_asm::Chunk;
+    /// use rust_boy::rust_boy::Chunk;
     /// use rust_boy::gb_std::flow::Call;
     /// use rust_boy::rust_boy::RustBoy;
     ///
@@ -260,7 +262,7 @@ impl RustBoy {
     /// ```
     pub fn raw<F>(&mut self, f: F) -> &mut Self
     where
-        F: FnOnce(&mut Asm),
+        F: FnOnce(&mut Layout),
     {
         self.asm.chunk(Chunk::Main);
         f(&mut self.asm);
@@ -288,7 +290,7 @@ impl RustBoy {
     /// the main loop, the code passed to [`RustBoy::raw`] or the animations refer to, and
     /// the ones those functions refer to, and so on. A function is found by its name
     /// anywhere in an instruction's code: `call`, `jp`, `IfCall`, `Call`, `ld hl, Name`,
-    /// `dw Name`, raw lines (`Asm::raw`, one or several lines); not in comments or strings.
+    /// `dw Name`, raw lines (`raw`, one or several lines); not in comments or strings.
     /// The variables a builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are created
     /// with it. So keep only a function that is called from code `build()` does not see:
     /// asm added to its output afterwards, or an `INCLUDE`d file. For the opposite, a
@@ -484,15 +486,16 @@ impl RustBoy {
 
     /// Build the final assembly output
     pub fn build(&mut self) -> String {
-        self.build_asm().to_asm()
+        self.build_asm().program().to_asm()
     }
 
-    /// The program [`build`](Self::build) prints, as instructions in chunks
-    pub(crate) fn build_asm(&mut self) -> Asm {
+    /// The program [`build`](Self::build) prints, as instructions in chunks (its
+    /// [`Layout::program`] is the whole program)
+    pub(crate) fn build_asm(&mut self) -> Layout {
         // Start fresh assembly. The code generated here takes its labels after every
         // label handed out so far, from a fork of the program's allocator, so a second
         // build gives the same labels (B14)
-        let mut asm = Asm::with_labels(self.labels().fork());
+        let mut asm = Layout::with_labels(self.labels().fork());
         let labels = asm.labels().clone();
 
         // === HEADER CHUNK ===
@@ -1970,10 +1973,10 @@ mod tests {
 
         // Raw data that opens its own section (typed or in a raw line) gets none
         for open in [
-            |asm: &mut Asm| {
+            |asm: &mut Layout| {
                 asm.section(Section::wram0("Mine"));
             },
-            |asm: &mut Asm| {
+            |asm: &mut Layout| {
                 asm.raw("  ; mine\n  section \"Mine\", HRAM");
             },
         ] {
@@ -2027,13 +2030,13 @@ mod tests {
         // Code or initialised data there is rejected when the program is built (rgbasm
         // rejected it: "cannot contain code or data")
         for write in [
-            |asm: &mut Asm| {
+            |asm: &mut Layout| {
                 asm.ld_a(1);
             },
-            |asm: &mut Asm| {
+            |asm: &mut Layout| {
                 asm.db("1, 2");
             },
-            |asm: &mut Asm| {
+            |asm: &mut Layout| {
                 asm.ds_fill("4", "0");
             },
         ] {
@@ -2393,7 +2396,7 @@ mod tests {
         );
         gb.add_to_main_loop(Call::new("CheckAndHandleBrick"));
         let asm = gb.build_asm();
-        assert_links(&asm.to_asm());
+        assert_links(&asm.program().to_asm());
         let mut code = Block::new();
         code.call("CheckAndHandleBrick").ret();
         let mut code = code.into_instrs();
@@ -2902,7 +2905,7 @@ mod tests {
     /// Panics if a `jr` of the program `gb` builds does not reach its target, as RGBDS
     /// would (the relaxed program, as `build()` prints it)
     fn assert_jumps_in_range(gb: &mut RustBoy) {
-        let program = gb.build_asm().program();
+        let program = gb.build_asm().program().program();
         assert_eq!(jr_range_errors(&program), Vec::<String>::new());
     }
 
@@ -2956,7 +2959,7 @@ mod tests {
         gb.define_function_from("Bump", IfA::eq(5, score.set(2)).or_else(score.set(3)));
         gb.add_to_main_loop(IfCall::is_true("Bump", score.set(4)).or_else(score.set(5)));
 
-        // raw() code takes the same allocator, through its Asm
+        // raw() code takes the same allocator, through its Layout
         let (get, set) = (score.get(), score.set(6));
         gb.raw(move |asm| {
             asm.chunk(Chunk::MainLoop)

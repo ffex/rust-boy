@@ -33,13 +33,12 @@ fn main() {
     asm.call("WaitVBlank");
     asm.emit_all(turn_off_screen());
 
-    // Tile management
-    asm.chunk(rust_boy::gb_asm::Chunk::Tiles);
-    asm.emit_all(add_tiles("Tiles", tiles::TILES));
-    asm.emit_all(add_tiles("Ball", tiles::BALL));
-    asm.emit_all(add_tiles("Paddle", tiles::PADDLE));
+    // Tile management: the tile data goes after the functions, below
+    let mut tile_data = Block::new();
+    tile_data.emit_all(add_tiles("Tiles", tiles::TILES));
+    tile_data.emit_all(add_tiles("Ball", tiles::BALL));
+    tile_data.emit_all(add_tiles("Paddle", tiles::PADDLE));
 
-    asm.chunk(rust_boy::gb_asm::Chunk::Main);
     asm.emit_all(cp_in_memory("Tiles", "$9000"));
     asm.emit_all(cp_in_memory("Ball", "$8010"));
     asm.emit_all(cp_in_memory("Paddle", "$8000"));
@@ -208,9 +207,9 @@ fn main() {
     ));
 
     asm.jp("Main");
+    asm.blank_line();
 
-    // Variables management
-    asm.chunk(rust_boy::gb_asm::Chunk::Data);
+    // Variables management: their WRAM0 sections go last, below
     let mut counter_sec = VariableSection::new(Section::wram0("Counter"));
     let mut input_vars_sec = VariableSection::new(Section::wram0("Input Variables"));
     let mut ball_data_sec = VariableSection::new(Section::wram0("Ball Data"));
@@ -223,13 +222,13 @@ fn main() {
     ball_data_sec.add_data("wBallMomentumY", "db");
     score_sec.add_data("wScore", "db");
 
-    asm.emit_all(counter_sec.generate());
-    asm.emit_all(input_vars_sec.generate());
-    asm.emit_all(ball_data_sec.generate());
-    asm.emit_all(score_sec.generate());
+    let mut variables = Block::new();
+    variables.emit_all(counter_sec.generate());
+    variables.emit_all(input_vars_sec.generate());
+    variables.emit_all(ball_data_sec.generate());
+    variables.emit_all(score_sec.generate());
 
     // Function Management
-    asm.chunk(rust_boy::gb_asm::Chunk::Functions);
     asm.emit_all(memcopy());
     asm.emit_all(update_keys());
     asm.emit_all(wait_vblank());
@@ -240,9 +239,13 @@ fn main() {
         &["$00", "$01", "$02", "$04", "$05", "$06", "$07"],
     ));
 
-    // Tilemap Management
-    asm.chunk(rust_boy::gb_asm::Chunk::Tilemap);
+    asm.blank_line();
+
+    // Then the tile data, the tilemap and the variables, still in that order
+    asm.emit_all(tile_data).blank_line();
     asm.emit_all(add_tilemap("Tilemap", tilemap::TILEMAP));
+    asm.blank_line();
+    asm.emit_all(variables);
 
     println!("{}", asm.to_asm());
 }

@@ -2,8 +2,9 @@
 //!
 //! A routine or snippet is built in a `Block`, with the same methods as [`Asm`](super::Asm)
 //! (`ld`, `call`, `label`, ...), and handed on as a `Vec<Instr>` ([`Block::into_instrs`])
-//! or as an [`Emittable`]. An `Asm` is a whole program, in chunks; a `Block` has no chunks
-//! (code used to be built in a scratch `Asm` and read back with `get_main_instrs()`).
+//! or as an [`Emittable`]. An `Asm` is a whole program, checked against its sections and
+//! printed with its jumps relaxed; a `Block` is a piece of one (code used to be built in a
+//! scratch `Asm` and read back with `get_main_instrs()`).
 
 use std::ops::Deref;
 
@@ -191,7 +192,7 @@ mod tests {
     #[test]
     fn test_a_block_builds_like_an_asm() {
         // The same builder calls give the same instructions, in a Block and in the
-        // default chunk of an Asm: the methods are one definition
+        // an Asm: the methods are one definition
         let mut block = Block::new();
         let mut asm = Asm::new();
         block
@@ -205,7 +206,7 @@ mod tests {
             .cp("BRICK_LEFT")
             .jr_cond(Condition::NZ, "Start")
             .ret();
-        assert_eq!(&block[..], asm.get_main_instrs().as_slice());
+        assert_eq!(&block[..], asm.instrs());
         assert_eq!(block.len(), 5);
     }
 

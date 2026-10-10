@@ -65,10 +65,12 @@ fn main() {
 
 ## Low level (`gb_asm`)
 
-The same building blocks the engine uses, one instruction at a time:
+The same building blocks the engine uses, one instruction at a time. An `Asm` is a program: it is printed in the
+order it is written, and knows instructions and sections, not how a game is laid out (the engine puts its parts in
+order with `rust_boy::Layout`, by `Chunk`):
 
 ```rust
-use rust_boy::gb_asm::{Asm, Chunk, Condition, Section};
+use rust_boy::gb_asm::{Asm, Condition, Section};
 
 fn main() {
     let mut asm = Asm::new();
@@ -84,10 +86,10 @@ fn main() {
         .label("EntryPoint")
         .label("MainLoop")
         .call("WaitVBlank")
-        .jp("MainLoop");
+        .jp("MainLoop")
+        .blank_line(); // a blank line in the output
 
-    asm.chunk(Chunk::Functions)
-        .label("WaitVBlank")
+    asm.label("WaitVBlank")
         .ld_a_addr_def("rLY")
         .cp_imm(144)
         .jr_cond(Condition::NZ, "WaitVBlank")
@@ -130,7 +132,7 @@ RGBDS would reject panics when the section is built: a bank on a memory type wit
 `HRAM`) or out of its range, an address outside the memory type, an alignment no address of it has, `UNION` in ROM.
 A RAM section (every type but `ROM0` and `ROMX`) holds no code or data, it only reserves space: labels and `ds n`
 (`asm.ds("2")`; `ds_fill(n, fill)` fills ROM). Code or data in a RAM section, or a section name used twice (except by
-`UNION`s or `FRAGMENT`s of one memory type), panics when the program is printed.
+`UNION`s or `FRAGMENT`s of one memory type), panics where it is written (`Asm::emit`; in a `RustBoy` program, in `build()`).
 
 ```rust
 use rust_boy::gb_asm::{Asm, MemoryType, Section};
@@ -244,7 +246,7 @@ Open them in any Game Boy emulator.
 src/
 ├── gb_asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
-├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs
+├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs, the program layout (chunks)
 ├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)
 ├── bin/           # the example programs
 └── lib.rs

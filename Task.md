@@ -189,8 +189,11 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       itself is wrong, `build()` returns an `Err` for what only the whole program shows and does not panic itself;
       `call` / `call_args` / `keep_function` names are checked by `build()`, variables are laid out by `build()`; building
       changes nothing. The 6 example ROMs, their asm, `.map` and `.sym` are byte-identical)
-- [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
-      as `RustBoy::set_sprite_size`
+- [x] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4
+      as `RustBoy::set_sprite_size` (branch `refactor-p2-engine-api-config`: `RustBoy::with_config(RustBoyConfig)` with
+      `sprite_size`, `background_tilemap`, `palettes` (`Palettes`: `rBGP`, `rOBP0`, `rOBP1`), `lcdc` (`Lcdc`: background,
+      objects), `builtins` (forced, as `use_function`), `animation_delay`; builder methods, and the setters kept
+      (`set_palettes` new); the defaults give byte-identical output, and so do the 6 example ROMs)
 - [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since
       [B17](CONTEXT.md#b17); HRAM, and real addresses for the variables (rgblink places the sections), are left)
 - [x] `If` that never clobbers user registers (or documents what it uses) (branch `refactor-p2-routines-if`: documented,

@@ -123,6 +123,11 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 
 See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the reasoning.
 
+**Phase 2 is complete** (branch `refactor-p2-engine-api-prelude`, the last of the engine API group). The layers were
+renamed there: `gb_asm` → `asm`, `gb_std` → `stdlib`, `rust_boy` → `engine` (`src/asm/`, `src/stdlib/`,
+`src/engine/`); the items below keep the names of their time. Three follow-ups stay open below (marked *Follow-up*);
+the next step is Phase 3, and the `refactor` → `main` PR, whose release notes are [CHANGELOG.md](CHANGELOG.md).
+
 - [x] `hw` module: pure data (registers, flags, OAM layout, VRAM map) emitted as `hardware.inc` symbol
       names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine` (branch `refactor-p2-hw`:
       `hw::Symbol`, a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM
@@ -208,8 +213,15 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       an `If`. The B5 hole is closed: left code that may change `b` (a
       call, raw code, a write to `b`; `Regs::written_by`) is wrapped in `push bc` / `pop bc`, which no example needs, so
       the 6 example ROMs, their asm, `.map` and `.sym` are byte-identical)
-- [ ] `prelude` module; avoid the `rust_boy::rust_boy` stutter (optional rename: `asm` / `std` / `engine`)
-- [ ] Ship all breaking API changes together in one release
+- [x] `prelude` module; avoid the `rust_boy::rust_boy` stutter (optional rename: `asm` / `std` / `engine`)
+      (branch `refactor-p2-engine-api-prelude`: the layers are `rust_boy::asm`, `rust_boy::stdlib` (not `std`: a module
+      named `std` makes `std::` ambiguous in the crate and in a glob import) and `rust_boy::engine`, the inner
+      `gb_asm::asm` module is `asm::program`; `rust_boy::prelude` re-exports the common types of every layer and `hw`,
+      with a whole program as its doctest. Only paths changed: the 6 example ROMs, asm, `.map` and `.sym` are
+      byte-identical to the branch before)
+- [x] Ship all breaking API changes together in one release (branch `refactor-p2-engine-api-prelude`: the release
+      notes and one migration guide for every breaking change of Phases 1 and 2 are [CHANGELOG.md](CHANGELOG.md), for
+      the `refactor` → `main` PR, which ships them together; that PR is not opened yet)
 
 ## Phase 3 — Missing features
 
@@ -288,7 +300,7 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Calling-convention document (registers each routine uses/clobbers)
 - [ ] Tutorial: "your first game" step by step with `RustBoy`
 - [ ] Hardware notes: VBlank & OAM timing, 8×16 rules, coordinate offsets (+8 / +16)
-- [ ] `CHANGELOG.md`
+- [x] `CHANGELOG.md` (the release notes of the refactoring, branch `refactor-p2-engine-api-prelude`; keep it up to date)
 - [ ] Keep `CLAUDE.md` and `CONTEXT.md` up to date as phases land
 
 ## Future

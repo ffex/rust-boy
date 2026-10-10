@@ -1,4 +1,5 @@
 use crate::gb_asm::{Block, Expr, Instr, Mem, R8, R16};
+use crate::hw;
 
 /// A reference to a tile position in the tilemap.
 ///
@@ -28,7 +29,7 @@ impl TileRef {
     /// * `y` - Y position (0-31)
     /// * `tilemap_base` - Base address of tilemap (default $9800)
     pub fn from_coords(x: u8, y: u8, tilemap_base: u16) -> Self {
-        let offset = (y as u16 * 32) + x as u16;
+        let offset = (y as u16 * u16::from(hw::SCRN_VX_B.value)) + x as u16;
         TileRef {
             tilemap_addr: tilemap_base + offset,
         }
@@ -36,7 +37,7 @@ impl TileRef {
 
     /// Create a TileRef from X,Y coordinates using the default tilemap ($9800).
     pub fn from_xy(x: u8, y: u8) -> Self {
-        Self::from_coords(x, y, 0x9800)
+        Self::from_coords(x, y, hw::SCRN0.value)
     }
 
     /// Load the tilemap address into HL register.
@@ -133,17 +134,18 @@ impl TileRef {
         let mut asm = Block::new();
         // ld de, 32
         // add hl, de
-        asm.ld_de(32).add_hl(R16::DE);
+        asm.ld_de(hw::SCRN_VX_B.value.into()).add_hl(R16::DE);
         asm.into_instrs()
     }
 
     /// Move up one row in the tilemap (subtract 32 from HL).
     pub fn prev_row() -> Vec<Instr> {
         let mut asm = Block::new();
-        // To subtract 32, we add -32 (0xFFE0 in 16-bit two's complement)
+        // To subtract 32, we add -32 ($FFE0 in 16-bit two's complement)
         // ld de, -32 (which is $FFE0)
         // add hl, de
-        asm.ld_de(0xFFE0).add_hl(R16::DE);
+        let minus_row = u16::from(hw::SCRN_VX_B.value).wrapping_neg();
+        asm.ld_de(minus_row).add_hl(R16::DE);
         asm.into_instrs()
     }
 }

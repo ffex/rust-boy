@@ -3,8 +3,13 @@ use crate::hw;
 
 /// The address of byte `byte` (`hw::OAMA_Y`, `hw::OAMA_X`, ...) of OAM entry `index`:
 /// `_OAMRAM+5` for entry 1, X
-pub(crate) fn oam_address(index: u8, byte: u8) -> Expr {
-    Expr::sym(hw::OAMRAM) + hw::oam_offset(index, byte)
+///
+/// # Panics
+/// If `index` is past OAM (40 entries) or `byte` is not one of the `OAMA_*` bytes
+/// ([`hw::oam_offset`]).
+#[track_caller]
+pub(crate) fn oam_address(index: u8, byte: hw::Symbol<u8>) -> Expr {
+    Expr::from(hw::OAMRAM) + hw::oam_offset(index, byte)
 }
 
 /// Clear the OAM loop: write `a` to `b` bytes from `[hl]` on. Set the registers with
@@ -28,7 +33,7 @@ pub fn clear_objects_screen(labels: &LabelAllocator) -> Vec<Instr> {
 /// `b = 160` (40 sprites of 4 bytes), `hl = _OAMRAM`
 pub fn initialize_objects_screen() -> Vec<Instr> {
     let mut asm = Block::new();
-    asm.ld_a(0).ld_b(160).ld(R16::HL, hw::OAMRAM);
+    asm.ld_a(0).ld_b(hw::OAM_SIZE).ld(R16::HL, hw::OAMRAM);
     asm.into_instrs()
 }
 
@@ -207,9 +212,9 @@ impl Sprite {
     pub fn draw(&self) -> Vec<Instr> {
         let mut asm = Block::new();
 
-        asm.ld_a(self.y + 16)
+        asm.ld_a(self.y + hw::OAM_Y_OFFSET)
             .ld(Mem::Hli, R8::A)
-            .ld_a(self.x + 8)
+            .ld_a(self.x + hw::OAM_X_OFFSET)
             .ld(Mem::Hli, R8::A)
             .ld_a(self.tile)
             .ld(Mem::Hli, R8::A)
@@ -269,7 +274,14 @@ impl Sprite {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_limit(labels, "left", 1, MoveDir::Decrease, distance, limit)
+        self.move_limit(
+            labels,
+            "left",
+            hw::OAMA_X,
+            MoveDir::Decrease,
+            distance,
+            limit,
+        )
     }
 
     /// Move the sprite right by `distance` pixels, but never right of `limit` (an OAM
@@ -280,7 +292,14 @@ impl Sprite {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_limit(labels, "right", 1, MoveDir::Increase, distance, limit)
+        self.move_limit(
+            labels,
+            "right",
+            hw::OAMA_X,
+            MoveDir::Increase,
+            distance,
+            limit,
+        )
     }
 
     /// Move the sprite up by `distance` pixels, but never above `limit` (an OAM
@@ -291,7 +310,7 @@ impl Sprite {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_limit(labels, "up", 0, MoveDir::Decrease, distance, limit)
+        self.move_limit(labels, "up", hw::OAMA_Y, MoveDir::Decrease, distance, limit)
     }
 
     /// Move the sprite down by `distance` pixels, but never below `limit` (an OAM
@@ -302,15 +321,22 @@ impl Sprite {
         distance: u8,
         limit: u8,
     ) -> Vec<Instr> {
-        self.move_limit(labels, "down", 0, MoveDir::Increase, distance, limit)
+        self.move_limit(
+            labels,
+            "down",
+            hw::OAMA_Y,
+            MoveDir::Increase,
+            distance,
+            limit,
+        )
     }
 
-    /// Limited move of byte `byte` of the sprite's OAM entry (Y = 0, X = 1)
+    /// Limited move of byte `byte` of the sprite's OAM entry (`hw::OAMA_Y` or `hw::OAMA_X`)
     fn move_limit(
         &self,
         labels: &LabelAllocator,
         name: &str,
-        byte: u8,
+        byte: hw::Symbol<u8>,
         dir: MoveDir,
         distance: u8,
         limit: u8,
@@ -378,6 +404,33 @@ pub(crate) mod tests {
     use crate::gb_asm::label_check::assert_code_labels_ok;
     use crate::gb_asm::test_cpu::TestCpu;
     use crate::gb_std::flow::{Emittable, If};
+
+    /// The OAM clear (`hl` walking from `_OAMRAM`, `hw::OAM_SIZE` bytes) writes exactly the
+    /// bytes `oam_address` names: every byte of the 40 entries, and nothing past OAM
+    #[test]
+    fn test_oam_clear_writes_every_byte_oam_address_names() {
+        let labels = LabelAllocator::new();
+        let mut code = Block::new();
+        code.label("Main")
+            .emit_all(initialize_objects_screen())
+            .emit_all(clear_objects_screen(&labels));
+        let mut cpu = TestCpu::default();
+        cpu.run(&code.into_instrs());
+
+        let bytes = [hw::OAMA_Y, hw::OAMA_X, hw::OAMA_TILEID, hw::OAMA_FLAGS];
+        let mut named = Vec::new();
+        for index in 0..hw::OAM_COUNT.value {
+            for byte in bytes {
+                let address = oam_address(index, byte).to_string();
+                assert_eq!(cpu.mem.get(&address), Some(&0), "[{}]", address);
+                named.push(address);
+            }
+        }
+        assert_eq!(named.len(), usize::from(hw::OAM_SIZE));
+        assert_eq!(cpu.trace.len(), named.len(), "one write per OAM byte");
+        assert_eq!(oam_address(39, hw::OAMA_FLAGS).to_string(), "_OAMRAM+159");
+        assert_eq!(cpu.mem.get("_OAMRAM+160"), None, "past OAM");
+    }
 
     /// What a limited move must do to a coordinate at `pos`: move it by `distance`, but
     /// stop exactly on `limit` instead of passing it; a coordinate already beyond the

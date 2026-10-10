@@ -248,6 +248,7 @@ impl RustBoy {
     /// use rust_boy::rust_boy::Chunk;
     /// use rust_boy::gb_std::flow::Call;
     /// use rust_boy::rust_boy::RustBoy;
+    /// use rust_boy::hw;
     ///
     /// let mut gb = RustBoy::new();
     /// gb.add_to_main_loop(Call::new("LoadAnswer"));
@@ -255,7 +256,7 @@ impl RustBoy {
     ///     // A routine: labelled, and called from the main loop
     ///     asm.label("LoadAnswer").ld_a(0x42).ret();
     ///     // Code that runs every frame, after the main loop code
-    ///     asm.chunk(Chunk::MainLoop).ld_addr_def_a("rSCX");
+    ///     asm.chunk(Chunk::MainLoop).ld_addr_def_a(hw::SCX);
     /// });
     /// let out = gb.build();
     /// assert!(out.contains("LoadAnswer:") && out.contains("ld [rSCX], a"));
@@ -522,7 +523,7 @@ impl RustBoy {
         startup.call("WaitVBlank");
 
         // Turn off screen for safe VRAM access
-        startup.ld_a(0);
+        startup.ld_a(hw::LCDCF_OFF.value);
         startup.ld_addr_def_a(hw::LCDC);
 
         // Copy the tile data to VRAM (empty blobs are skipped, B27)
@@ -552,7 +553,7 @@ impl RustBoy {
         // Turn on screen, with the sprite size chosen by set_sprite_size, and the
         // background map chosen by set_background_tilemap (`LCDCF_BG9800` is 0, so it is
         // left out, as before B19)
-        let mut lcdc = Expr::sym(hw::LCDCF_ON)
+        let mut lcdc = Expr::from(hw::LCDCF_ON)
             | hw::LCDCF_BGON
             | hw::LCDCF_OBJON
             | self.sprites.size().lcdc_flag();
@@ -863,7 +864,7 @@ impl RustBoy {
 
         // The right half is 8 pixels to the right, and its OAM X, x + 16, is a byte (B17)
         let right_x = x
-            .checked_add(8)
+            .checked_add(hw::TILE_WIDTH)
             .filter(|right_x| right_x.checked_add(hw::OAM_X_OFFSET).is_some())
             .unwrap_or_else(|| {
                 panic!(
@@ -871,7 +872,7 @@ impl RustBoy {
                      and its OAM X, x + 16, must fit in a byte, so x is at most {}",
                     name,
                     x,
-                    u8::MAX - 8 - hw::OAM_X_OFFSET
+                    u8::MAX - hw::TILE_WIDTH - hw::OAM_X_OFFSET
                 )
             });
 
@@ -1788,7 +1789,7 @@ mod tests {
     fn startup(gb: &mut RustBoy) -> (Vec<Instr>, TestCpu) {
         let lcdc_on = format!(
             "LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | {}",
-            gb.sprite_size().lcdc_flag()
+            gb.sprite_size().lcdc_flag().name
         );
         let asm = gb.build_asm();
         let mut code = asm

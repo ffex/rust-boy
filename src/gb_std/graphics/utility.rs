@@ -46,8 +46,9 @@ pub fn add_tilemap(label: &str, tilemap: &[[u8; 32]]) -> Vec<Instr> {
 
 /// Copy the data between `label` and `{label}End` to `addr` with [`memcopy`]
 ///
-/// `addr` is an address: a number (`Expr::hex(0x9000)`, or `"$9000"`) or a symbol
-/// (`"_VRAM"`). Empty data (`{label}End` right after `label`) copies nothing.
+/// `addr` is an address: a number (`Expr::hex(hw::VRAM9000.value)`, written `$9000`) or
+/// a symbol (`hw::VRAM`, written `_VRAM`, or a label). Empty data (`{label}End` right after
+/// `label`) copies nothing.
 ///
 /// # Panics
 /// If `label` is not a symbol name, or `addr` is text that is neither a symbol nor a
@@ -97,14 +98,14 @@ pub fn memcopy() -> Vec<Instr> {
 pub fn turn_off_screen() -> Vec<Instr> {
     let mut asm = Block::new();
     // Turn off LCD
-    asm.ld_a(0).ld_addr_def_a(hw::LCDC);
+    asm.ld_a(hw::LCDCF_OFF.value).ld_addr_def_a(hw::LCDC);
     asm.into_instrs()
 }
 
 pub fn turn_on_screen() -> Vec<Instr> {
     let mut asm = Block::new();
     // Turn on LCD
-    let on = Expr::sym(hw::LCDCF_ON) | hw::LCDCF_BGON | hw::LCDCF_OBJON;
+    let on = Expr::from(hw::LCDCF_ON) | hw::LCDCF_BGON | hw::LCDCF_OBJON;
     asm.ld(R8::A, on).ld_addr_def_a(hw::LCDC);
     asm.into_instrs()
 }
@@ -113,7 +114,7 @@ pub fn wait_vblank() -> Vec<Instr> {
     let mut asm = Block::new();
     asm.label("WaitVBlank");
     asm.ld_a_addr_def(hw::LY);
-    asm.cp_imm(144);
+    asm.cp_imm(hw::SCRN_Y.value); // VBlank: LY from 144 to 153
     asm.jp_cond(Condition::C, "WaitVBlank");
     asm.ret();
     asm.into_instrs()
@@ -122,7 +123,7 @@ pub fn wait_not_vblank() -> Vec<Instr> {
     let mut asm = Block::new();
     asm.label("WaitNotVBlank");
     asm.ld_a_addr_def(hw::LY);
-    asm.cp_imm(144);
+    asm.cp_imm(hw::SCRN_Y.value);
     asm.jp_cond(Condition::NC, "WaitNotVBlank");
     asm.ret();
     asm.into_instrs()
@@ -145,7 +146,11 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     let mut asm = Block::new();
 
     asm.comment("Convert a pixel position to a tilemap address and read the tile there");
-    asm.comment("hl = $9800 + X / 8 + (Y / 8) * 32");
+    asm.comment(&format!(
+        "hl = ${:04X} + X / 8 + (Y / 8) * {}",
+        hw::SCRN0.value,
+        hw::SCRN_VX_B.value
+    ));
     asm.comment("@param b: X");
     asm.comment("@param c: Y");
     asm.comment("@return hl: tile address");
@@ -179,7 +184,7 @@ pub fn get_tile_by_pixel() -> Vec<Instr> {
     asm.ld(R8::H, R8::A);
 
     // Add the offset to the tilemap's base address
-    asm.ld(R16::BC, Expr::hex(hw::SCRN0));
+    asm.ld(R16::BC, Expr::hex(hw::SCRN0.value));
     asm.add_hl(R16::BC);
 
     // And read the tile there

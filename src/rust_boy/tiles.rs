@@ -120,13 +120,13 @@ impl TilemapArea {
     /// The VRAM address of the map's first tile
     pub fn address(self) -> u16 {
         match self {
-            TilemapArea::Map9800 => hw::SCRN0,
-            TilemapArea::Map9C00 => hw::SCRN1,
+            TilemapArea::Map9800 => hw::SCRN0.value,
+            TilemapArea::Map9C00 => hw::SCRN1.value,
         }
     }
 
     /// The `hardware.inc` LCDC flag that makes the background show this map
-    pub(crate) fn lcdc_bg_flag(self) -> &'static str {
+    pub(crate) fn lcdc_bg_flag(self) -> hw::Symbol<u8> {
         match self {
             TilemapArea::Map9800 => hw::LCDCF_BG9800,
             TilemapArea::Map9C00 => hw::LCDCF_BG9C00,
@@ -245,13 +245,13 @@ impl TileManager {
         area: TilemapArea,
         tilemap: &[[u8; 32]],
     ) -> TileId {
-        if tilemap.len() > hw::SCRN_ROWS {
+        if tilemap.len() > usize::from(hw::SCRN_VY_B.value) {
             panic!(
                 "tilemap \"{}\" has {} rows, but a map has {}: the rows past it would run \
                  past {}",
                 name,
                 tilemap.len(),
-                hw::SCRN_ROWS,
+                hw::SCRN_VY_B.value,
                 area
             );
         }

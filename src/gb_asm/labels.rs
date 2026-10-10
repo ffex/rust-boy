@@ -421,6 +421,132 @@ pub(crate) fn symbol_words(code: &str) -> impl Iterator<Item = &str> {
         .filter(|word| is_identifier(word))
 }
 
+/// Add to `refs` the global symbols `instr` refers to, and to `defs` the global labels and
+/// constants it defines
+///
+/// Typed operands are read by their type: a jump or call target, and the symbols of an
+/// [`Expr`] (`ld hl, Name`, `ld a, [Name]`, `cp LOW(Name)`); a local symbol (`.end_if_0`)
+/// is skipped, and `Scope.local` refers to `Scope`. A [`Label`](Instr::Label) defines its
+/// name when it is global. Registers, numbers and mnemonics refer to nothing. Sections,
+/// comments and file names (`INCLUDE`, `INCBIN`) refer to nothing either.
+///
+/// What is only text, the instructions RGBDS reads as written (a raw line, `db`, `dw`,
+/// `ds`, the value of a `DEF`, an [`Expr::raw`] operand, a jump target that is not a plain
+/// name), is read as RGBDS reads it, line by line ([`code_lines`]): comments (`;`,
+/// `/* … */`) and the contents of strings are skipped, a line that starts with `Name:`
+/// defines `Name`, as does `DEF Name …` (any form, [`split_def`]), and every other word
+/// that is an identifier is a reference (mnemonics and registers too, which never name a
+/// function). So a raw line of one or several lines counts like typed code.
+pub(crate) fn symbols(
+    instr: &super::Instr,
+    refs: &mut Vec<String>,
+    defs: &mut std::collections::BTreeSet<String>,
+) {
+    use super::{AluOperand, Dst, Instr, JumpTarget, Mem, Operand};
+
+    let mem = |mem: &Mem, refs: &mut Vec<String>| {
+        if let Mem::Addr(address) = mem {
+            expr_symbols(address, refs);
+        }
+    };
+    match instr {
+        Instr::Label { name } => {
+            if !name.starts_with('.') {
+                defs.insert(name.clone());
+            }
+        }
+        Instr::Def { label, value } => {
+            defs.insert(label.clone());
+            text_symbols(value, refs, defs);
+        }
+        Instr::Raw { .. } | Instr::Db { .. } | Instr::Dw { .. } | Instr::Ds { .. } => {
+            text_symbols(&instr.to_string(), refs, defs);
+        }
+        Instr::Jp { target }
+        | Instr::JpCond { target, .. }
+        | Instr::Jr { target }
+        | Instr::JrCond { target, .. }
+        | Instr::Call { target }
+        | Instr::CallCond { target, .. } => match target {
+            JumpTarget::Label(name) => text_symbols(name, refs, defs),
+            JumpTarget::Addr(_) => {}
+        },
+        Instr::Ld { dst, src } | Instr::Ldh { dst, src } => {
+            if let Dst::Mem(address) = dst {
+                mem(address, refs);
+            }
+            match src {
+                Operand::Imm(value) => expr_symbols(value, refs),
+                Operand::Mem(address) => mem(address, refs),
+                Operand::R8(_) | Operand::R16(_) => {}
+            }
+        }
+        Instr::Add { src }
+        | Instr::Adc { src }
+        | Instr::Sub { src }
+        | Instr::Sbc { src }
+        | Instr::And { src }
+        | Instr::Xor { src }
+        | Instr::Or { src }
+        | Instr::Cp { src } => {
+            if let AluOperand::Imm(value) = src {
+                expr_symbols(value, refs);
+            }
+        }
+        // No symbol in the operands: registers, bit numbers, `rst` vectors, offsets;
+        // sections, comments and file names name no symbol of the program
+        _ => {}
+    }
+}
+
+/// The global symbols of the expression `e` (the text of an [`Expr::raw`] as RGBDS reads it)
+fn expr_symbols(e: &super::Expr, refs: &mut Vec<String>) {
+    use super::Expr;
+    match e {
+        Expr::Num(..) => {}
+        Expr::Sym(name) => refs.extend(symbol_words(name).map(str::to_string)),
+        Expr::Raw(text) => {
+            for code in code_lines(text) {
+                refs.extend(symbol_words(&code).map(str::to_string));
+            }
+        }
+        Expr::Neg(e) | Expr::Not(e) | Expr::Low(e) | Expr::High(e) => expr_symbols(e, refs),
+        Expr::Binary(_, left, right) => {
+            expr_symbols(left, refs);
+            expr_symbols(right, refs);
+        }
+    }
+}
+
+/// The symbols of RGBDS text, read line by line as RGBDS reads it (see [`symbols`])
+fn text_symbols(text: &str, refs: &mut Vec<String>, defs: &mut std::collections::BTreeSet<String>) {
+    for code in code_lines(text) {
+        let (label, rest) = split_label(&code);
+        if let Some(label) = label {
+            defs.insert(label.to_string());
+        }
+        // `DEF Name EQU value` (also in raw text): defines `Name`, refers to the value
+        let rest = match split_def(rest) {
+            Some((name, value)) => {
+                defs.insert(name.to_string());
+                value
+            }
+            None => rest,
+        };
+        refs.extend(symbol_words(rest).map(str::to_string));
+    }
+}
+
+/// Whether `code` defines the global symbol `name`: a label (`Name:`, also in a raw line)
+/// or a `DEF`
+pub(crate) fn defines(code: &[super::Instr], name: &str) -> bool {
+    let mut defs = std::collections::BTreeSet::new();
+    for instr in code {
+        symbols(instr, &mut Vec::new(), &mut defs);
+    }
+    defs.contains(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,5 +660,99 @@ mod tests {
         ] {
             assert!(!is_identifier(name), "{:?} should be invalid", name);
         }
+    }
+
+    #[test]
+    fn test_symbols_of_an_instruction() {
+        use crate::gb_asm::{Block, Condition, Expr, Mem, R8, R16};
+        use std::collections::BTreeSet;
+
+        let mut asm = Block::new();
+        asm.label("Start")
+            .label(".loop")
+            .call("Func")
+            .jp_cond(Condition::NZ, ".loop")
+            .jr("Other.local")
+            .jr_cond(Condition::Z, "@+4")
+            .ld(R16::HL, Expr::sym("Table") + 2)
+            .ld(R16::BC, Expr::sym("TilesEnd") - "Tiles")
+            // Typed operands: an address either way, an ALU value, LOW / HIGH, raw text
+            .ld(R8::A, Mem::addr("Source"))
+            .ld(Mem::addr(Expr::sym("Dest") + 1), R8::A)
+            .cp(Expr::low("LowByte") | Expr::high("HighByte"))
+            .ld(R8::A, Expr::raw("BANK(Banked) ; NotAReference"))
+            .ld_a(5)
+            .comment("call NotAReference")
+            .raw("Raw: dw Target ; NotAReference either")
+            .raw("ld [hl], BLANK_TILE")
+            // Several lines in one raw instruction: each read on its own (a comment ends
+            // at its line), a `;` in a string is not a comment, strings are not code
+            .raw("ld a, 1 ; one\n    call Helper\nSecond: jp Third")
+            .raw("db \"a;b\", LOW(Fourth), \"NotAReference\"")
+            // Block comments, also over several lines
+            .raw("Blocked: /* call NotAReference */ ret /* and\n call NotAReference */")
+            .def("CONSTANT", "Fifth + 1");
+        let mut refs = Vec::new();
+        let mut defs = BTreeSet::new();
+        for instr in asm.into_instrs() {
+            symbols(&instr, &mut refs, &mut defs);
+        }
+        for name in [
+            "Func",
+            "Other",
+            "Table",
+            "TilesEnd",
+            "Tiles",
+            "Source",
+            "Dest",
+            "LowByte",
+            "HighByte",
+            "Banked",
+            "Target",
+            "BLANK_TILE",
+            "Helper",
+            "Third",
+            "Fourth",
+            "Fifth",
+        ] {
+            assert!(refs.iter().any(|r| r == name), "{} not in {:?}", name, refs);
+        }
+        for name in [
+            "Start",
+            "Raw",
+            "Second",
+            "loop",
+            "local",
+            "NotAReference",
+            "5",
+            "4",
+        ] {
+            assert!(!refs.iter().any(|r| r == name), "{} in {:?}", name, refs);
+        }
+        assert_eq!(
+            defs.into_iter().collect::<Vec<_>>(),
+            ["Blocked", "CONSTANT", "Raw", "Second", "Start"]
+        );
+
+        // Typed instructions refer to their symbols only, not to their mnemonic, registers or
+        // functions (raw text has those words too: they never name a function)
+        let mut typed = Block::new();
+        typed
+            .call("Func")
+            .jr_cond(Condition::Z, "Main.loop")
+            .ld(R16::HL, Expr::sym("Table") + 2)
+            .ld(Mem::addr("Dest"), R8::A)
+            .cp(Expr::low("LowByte") | Expr::high("HighByte"))
+            .push(crate::gb_asm::R16Stack::BC)
+            .add_hl(R16::DE)
+            .ld(R8::B, 5);
+        let mut refs = Vec::new();
+        for instr in typed.into_instrs() {
+            symbols(&instr, &mut refs, &mut BTreeSet::new());
+        }
+        assert_eq!(
+            refs,
+            ["Func", "Main", "Table", "Dest", "LowByte", "HighByte"]
+        );
     }
 }

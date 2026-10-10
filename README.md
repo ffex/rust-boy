@@ -15,7 +15,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix�
 | Module | Level | What it gives you |
 |---|---|---|
 | `rust_boy::rust_boy` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
-| `rust_boy::gb_std` | routines | Ready-made routines (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
+| `rust_boy::gb_std` | routines | Ready-made routines as values (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …, each a `Routine` with its dependencies and calling convention) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
 | `rust_boy::gb_asm` | assembly | `Asm` (a whole program) and `Block` (a piece of code): one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
 
 Each level is built on the one below it, and you can mix them. Beside them, `rust_boy::hw` holds the hardware facts
@@ -63,6 +63,44 @@ fn main() {
 
     println!("{}", gb.build());
 }
+```
+
+## Routines
+
+A routine is a value, `gb_std::routine::Routine`: its name, its code, the routines it depends on, the WRAM variables
+it needs, and its calling convention, the registers it reads, returns and clobbers (every other register is kept).
+The `gb_std` routines are `Routine`s (`memcopy()`, `wait_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
+`delay()`, …), and so is a routine of your own. `RustBoy` emits a routine, with its dependencies and variables, when the
+program uses it:
+
+```rust
+use rust_boy::gb_asm::{Block, R16};
+use rust_boy::gb_std::graphics::utility::memcopy;
+use rust_boy::gb_std::routine::{Regs, Routine};
+use rust_boy::rust_boy::RustBoy;
+
+// Memcopy reads bc, de and hl, returns them moved past the copy, and clobbers a and the flags
+assert_eq!(memcopy().clobbers(), Regs::A | Regs::F);
+
+// A routine that needs Memcopy
+let mut body = Block::new();
+body.label("CopyScore")
+    .ld(R16::DE, "wScore")
+    .ld(R16::HL, "wSavedScore")
+    .ld(R16::BC, 2)
+    .call("Memcopy")
+    .ret();
+let copy_score = Routine::new("CopyScore", body)
+    .with_dep(memcopy())
+    .with_clobbers(Regs::ALL);
+
+let mut gb = RustBoy::new();
+gb.vars.create_u16("wScore", 0);
+gb.vars.create_u16("wSavedScore", 0);
+let call = gb.call_routine(&copy_score); // `call CopyScore`, and the program gets the routine
+gb.add_to_main_loop(call);
+let out = gb.build();
+assert!(out.contains("CopyScore:") && out.contains("Memcopy:"));
 ```
 
 ## Low level (`gb_asm`)
@@ -237,8 +275,8 @@ Open them in any Game Boy emulator.
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM variables
   (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
-  (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and builtin routines that are included only when
-  used. Memory is checked: too many tiles, sprites (40) or variables panic with a clear message, as do unknown
+  (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and routines (the builtins and
+  your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too many tiles, sprites (40) or variables panic with a clear message, as do unknown
   sprite ids and animation names. The output is deterministic: things appear in the order you created them.
 - **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
   there is no sound yet, and the engine puts everything in one ROM bank (`gb_asm` programs can open `ROMX` sections, but
@@ -250,7 +288,7 @@ Open them in any Game Boy emulator.
 ```text
 src/
 ├── gb_asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
-├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
+├── gb_std/        # routines as values (Routine: dependencies, calling convention), graphics, inputs, variables, flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs, the program layout (chunks)
 ├── hw.rs          # hardware facts as data: registers, flags, memory map, OAM layout, screen sizes (hardware.inc names and values)
 ├── bin/           # the example programs

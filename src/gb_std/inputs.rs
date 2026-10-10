@@ -1,4 +1,5 @@
 use crate::gb_asm::{Block, Condition, Instr, LabelAllocator, Mem, R8};
+use crate::gb_std::routine::{Regs, Routine};
 use crate::hw;
 
 /// Enum for joypad buttons that can return constant names and values
@@ -60,7 +61,12 @@ impl PadButton {
 /// # Key States
 /// - wCurKeys: Bitmap of currently pressed keys (1 = pressed, 0 = not pressed)
 /// - wNewKeys: Bitmap of keys that just transitioned to pressed this frame
-pub fn update_keys() -> Vec<Instr> {
+///
+/// # Calling convention
+/// - Reads and returns nothing in registers: the keys go to `wCurKeys` and `wNewKeys`,
+///   its two variables ([`Routine::variables`]).
+/// - Clobbers: `a`, `b` and the flags.
+pub fn update_keys() -> Routine {
     let mut asm = Block::new();
 
     asm.label("UpdateKeys");
@@ -96,7 +102,10 @@ pub fn update_keys() -> Vec<Instr> {
     asm.label(".knowret");
     asm.ret();
 
-    asm.into_instrs()
+    Routine::new("UpdateKeys", asm)
+        .with_variable("wCurKeys")
+        .with_variable("wNewKeys")
+        .with_clobbers(Regs::A | Regs::B | Regs::F)
 }
 /// Run `pressed_func` while `button` is held (its bit is set in `wCurKeys`)
 ///

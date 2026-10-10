@@ -163,11 +163,16 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       clear loop, the animation dispatcher) is a local `.{stem}_N` from it, unique by construction; `Asm::to_asm` turns
       each `jr` that does not provably reach its target into a `jp`, iterating until every `jr` left is in range
       (`gb_asm::relax`, sizes from `Instr::size`); the 6 example ROMs are byte-identical, only label names changed)
-- [ ] Routines as values: `Routine { name, body, deps, clobbers }` → automatic inclusion of dependencies
+- [x] Routines as values: `Routine { name, body, deps, clobbers }` → automatic inclusion of dependencies
       and a documented calling convention (which registers each routine clobbers). ([B26](CONTEXT.md#b26) is fixed
       since by scanning the generated code for function names in `build()`; `GetTileByPixel` documents its registers since [B23](CONTEXT.md#b23))
-- [ ] One source of truth for builtins: `rust_boy` reuses `gb_std` (done for the routines since [B23](CONTEXT.md#b23):
-      only `Delay` is `rust_boy`'s own); remove the duplicate `gb_std::graphics::sprites::SpriteManager`
+      (branch `refactor-p2-routines`: `gb_std::routine::Routine` with its dependencies, variables and calling convention
+      (`Regs` read, returned, clobbered), checked for every `gb_std` routine on the test CPU; every builtin is its `gb_std`
+      value (`Delay` moved to `gb_std`), whose dependencies are given in full; `RustBoy::define_routine` / `call_routine`
+      register a routine with its dependencies; the scan reads typed operands by type and raw text as before. The 6
+      example ROMs, their asm, `.map` and `.sym` are byte-identical)
+- [ ] One source of truth for builtins: `rust_boy` reuses `gb_std` (done for the routines since [B23](CONTEXT.md#b23);
+      `Delay` is `gb_std`'s too since `refactor-p2-routines`); remove the duplicate `gb_std::graphics::sprites::SpriteManager`
 - [ ] `build(&self) -> Result<String, Error>`; loud errors instead of empty `Vec`s (the sprite manager panics since
       [B20](CONTEXT.md#b20) instead of returning empty `Vec`s; a `Result` API is left)
 - [ ] `RustBoyConfig` (sprite size, palettes, LCDC flags, which builtins); the sprite size exists since B4

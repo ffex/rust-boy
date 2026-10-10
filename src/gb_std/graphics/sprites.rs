@@ -176,6 +176,9 @@ pub(crate) fn move_coord_var(coord: &Expr, var_name: &str) -> Vec<Instr> {
 /// nothing else (no flag). Both the `gb_std` programs and `RustBoy` (the sprites it
 /// writes at start-up) use it.
 ///
+/// # Panics
+/// If two sprites have the same id: the later one would overwrite the earlier one.
+///
 /// # Example
 /// ```
 /// use rust_boy::gb_std::graphics::sprites::{Sprite, draw_sprites};
@@ -187,10 +190,21 @@ pub(crate) fn move_coord_var(coord: &Expr, var_name: &str) -> Vec<Instr> {
 /// assert_eq!(text[1..3], ["ld a, 144", "ld [hli], a"]); // paddle Y: 128 + 16
 /// assert_eq!(text.len(), 1 + 2 * 8);
 /// ```
+#[track_caller]
 pub fn draw_sprites<'a>(sprites: impl IntoIterator<Item = &'a Sprite>) -> Vec<Instr> {
     let mut asm = Block::new();
     let mut next_entry = None;
+    let mut written = [false; hw::OAM_COUNT.value as usize];
     for sprite in sprites {
+        let entry = &mut written[usize::from(sprite.id)];
+        if *entry {
+            panic!(
+                "draw_sprites: two sprites are in OAM entry {}: the second would overwrite the \
+                 first",
+                sprite.id
+            );
+        }
+        *entry = true;
         if next_entry != Some(sprite.id) {
             let entry = match sprite.id {
                 0 => Expr::from(hw::OAMRAM),
@@ -474,6 +488,17 @@ pub(crate) mod tests {
             }
         }
         assert_eq!(cpu.trace.len(), 16, "four bytes per sprite, nothing else");
+    }
+
+    #[test]
+    #[should_panic(expected = "draw_sprites: two sprites are in OAM entry 1")]
+    fn test_draw_sprites_rejects_two_sprites_in_one_entry() {
+        // Review of #28: the later sprite silently overwrote the earlier one
+        draw_sprites(&[
+            Sprite::new(0, 0, 0, 0, 0),
+            Sprite::new(1, 8, 8, 1, 0),
+            Sprite::new(1, 16, 16, 2, 0),
+        ]);
     }
 
     #[test]

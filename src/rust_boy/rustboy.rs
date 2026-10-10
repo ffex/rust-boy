@@ -415,12 +415,14 @@ impl RustBoy {
     ///
     /// The routine replaces a user function of the same name, and one with the name of a
     /// builtin replaces that builtin, as with `define_function`. Its dependencies are
-    /// shared, not replaced: a `gb_std` routine of a builtin is that builtin, and a
-    /// dependency with the name and code of a function the program has is that function.
+    /// shared, never replaced: a `gb_std` routine of a builtin is that builtin (or what the
+    /// program replaced it with), and a dependency equal to a function the program has (the
+    /// whole routine: code, dependencies, variables, convention) is that function.
     ///
     /// # Panics
-    /// If a dependency has the name of a function the program already has, but other code
-    /// (a call to that name could reach only one of them). `build()` panics if the
+    /// If a dependency has the name of a builtin or of a function the program already has,
+    /// but is another routine (a call to that name could reach only one of them). To replace
+    /// a builtin, define the replacement itself. `build()` panics if the
     /// routine's name is also a variable, a constant, a label of the program or an external
     /// symbol, as for `define_function`.
     ///
@@ -461,11 +463,12 @@ impl RustBoy {
     ///
     /// The routine is registered with its dependencies, as with [`RustBoy::define_routine`],
     /// unless the program already has it: a builtin (its `gb_std` routine), or a function
-    /// of that name with the same code. So a typed call brings what it calls, wherever
-    /// the call goes (main loop, `init`, an `If` body, a function).
+    /// equal to it. So a typed call brings what it calls, wherever the call goes (main loop,
+    /// `init`, an `If` body, a function).
     ///
     /// # Panics
-    /// If the program has a function with the routine's name but other code.
+    /// If the routine has the name of a builtin or of a function the program has, but is
+    /// another routine.
     ///
     /// # Example
     /// ```
@@ -741,9 +744,9 @@ impl RustBoy {
         asm.emit_all(raw_functions);
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
-        // The variables of the emitted builtins (`wCurKeys`, `wNewKeys` for UpdateKeys),
-        // however the program calls them, unless it defines them already (as variables or
-        // in raw code)
+        // The variables of the emitted routines (`wCurKeys`, `wNewKeys` for UpdateKeys, and
+        // those of the user's routines), however the program calls them, unless it defines
+        // them already (as variables or in raw code)
         for name in functions.variables {
             self.vars.create_u8(&name, 0);
         }
@@ -2440,7 +2443,7 @@ mod tests {
         assert!(
             message.contains(
                 "call_routine(\"IsWallTile\") needs a routine `IsWallTile`, but the program \
-                 already has a function with that name and other code"
+                 already has a function with that name and another routine"
             ),
             "{}",
             message

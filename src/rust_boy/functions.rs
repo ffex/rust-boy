@@ -211,14 +211,17 @@ impl FunctionRegistry {
     /// need it), as user functions
     ///
     /// The routine replaces a user function of the same name (keeping its position), as
-    /// [`register_user_function`](Self::register_user_function) does. A dependency is
-    /// shared, not replaced: a builtin's `gb_std` routine is the builtin (or the user
-    /// function that replaces it), and a dependency with the name and code of a user
-    /// function is that function.
+    /// [`register_user_function`](Self::register_user_function) does: that is how a program
+    /// replaces a builtin. A dependency is shared, never replaced: a builtin's `gb_std`
+    /// routine is the builtin (or the user function the program replaced it with), and a
+    /// dependency equal to a user function (the whole [`Routine`]: code, dependencies,
+    /// variables, convention) is that function.
     ///
     /// # Panics
-    /// If a dependency has the name of a user function, or of another global label of one
-    /// (a second entry point), but other code: a call to that name could reach only one.
+    /// If a dependency has the name of a builtin, of a user function, or of another global
+    /// label of one (a second entry point), but is another routine: a call to that name
+    /// could reach only one of them. To replace a builtin, register the replacement itself
+    /// (`define_function`, `define_routine`).
     pub fn register_routine(&mut self, routine: Routine) {
         let parent = format!("routine `{}`", routine.name());
         for dep in routine.deps() {
@@ -233,24 +236,32 @@ impl FunctionRegistry {
     /// [`register_routine`](Self::register_routine))
     pub fn register_dep(&mut self, routine: &Routine, needed_by: &str) {
         let name = routine.name();
-        if let Some(builtin) = BuiltinFunction::from_name(name) {
-            if builtin.routine().body() == routine.body() {
-                // The builtin, or the user function that replaces it
-                return;
-            }
-        }
-        let owner = self.user_function(name);
-        if let Some(index) = owner {
+        let builtin = BuiltinFunction::from_name(name).map(|builtin| builtin.routine());
+        // The builtin itself (or the user function the program replaced it with)
+        let is_builtin = builtin.as_ref() == Some(routine);
+        if let Some(index) = self.user_function(name) {
             let function = &self.user_functions[index];
-            if function.name() == name && function.routine.body() == routine.body() {
+            if is_builtin || (function.name() == name && function.routine == *routine) {
                 return;
             }
             panic!(
                 "{} needs a routine `{}`, but the program already has a function with that \
-                 name and other code (`{}`); rename one of them",
+                 name and another routine (`{}`); rename one of them",
                 needed_by,
                 name,
                 function.name()
+            );
+        }
+        if is_builtin {
+            return;
+        }
+        if builtin.is_some() {
+            // Registered here, it would replace the builtin for the whole program, also
+            // for the code that needs the builtin itself
+            panic!(
+                "{} needs a routine `{}` that is not the builtin `{}`; rename it, or replace \
+                 the builtin for the whole program with define_function / define_routine",
+                needed_by, name, name
             );
         }
         let parent = format!("routine `{}`", name);
@@ -716,7 +727,7 @@ mod tests {
     #[test]
     #[should_panic(
         expected = "routine `Second` needs a routine `Helper`, but the program \
-                               already has a function with that name and other code"
+                               already has a function with that name and another routine"
     )]
     fn test_two_routines_with_one_name_panic() {
         let mut registry = FunctionRegistry::new();
@@ -768,5 +779,91 @@ mod tests {
         main.call("Poll");
         let used = registry.generate_used(&[&main.into_instrs()], []);
         assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
+    }
+
+    /// A routine named like a builtin, with other code
+    fn custom_memcopy() -> Routine {
+        let mut body = Block::new();
+        body.label("Memcopy").ld_a(119).ret();
+        Routine::new("Memcopy", body).with_clobbers(Regs::A)
+    }
+
+    #[test]
+    fn test_a_dependency_cannot_replace_a_builtin() {
+        // Review of #27: a dependency named like a builtin, with other code, was registered
+        // as a user function and replaced the builtin for the whole program, also for a
+        // routine that needs the real Memcopy. Now it panics, in either order.
+        let custom = routine_calling("UsesCustom", vec![custom_memcopy()]);
+        let real = routine_calling("UsesReal", vec![memcopy()]);
+        for order in [[custom.clone(), real.clone()], [real, custom]] {
+            let message = crate::rust_boy::panic_message(|| {
+                let mut registry = FunctionRegistry::new();
+                for routine in order.clone() {
+                    registry.register_routine(routine);
+                }
+            });
+            assert!(
+                message.contains(
+                    "routine `UsesCustom` needs a routine `Memcopy` that is not the builtin \
+                     `Memcopy`"
+                ),
+                "{}",
+                message
+            );
+        }
+        // So does a typed call to it (RustBoy::call_routine)
+        let message = crate::rust_boy::panic_message(|| {
+            FunctionRegistry::new().register_dep(&custom_memcopy(), "call_routine(\"Memcopy\")")
+        });
+        assert!(message.contains("that is not the builtin"), "{}", message);
+
+        // Replaced explicitly, for the whole program: a dependency on the gb_std Memcopy
+        // reaches the replacement, and one on the replacement itself is shared
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(custom_memcopy());
+        registry.register_routine(routine_calling("UsesReal", vec![memcopy()]));
+        registry.register_routine(routine_calling("UsesCustom", vec![custom_memcopy()]));
+        let mut main = Block::new();
+        main.call("UsesReal").call("UsesCustom");
+        let used = registry.generate_used(&[&main.into_instrs()], []);
+        let out = text(&used.code);
+        assert_eq!(out.matches("Memcopy:").count(), 1, "{}", out);
+        assert!(out.contains("ld a, 119"), "{}", out);
+    }
+
+    #[test]
+    fn test_a_dependency_is_shared_only_when_it_is_the_same_routine() {
+        // Review of #27: only the bodies were compared, so a dependency with the same code but
+        // other dependencies, variables or convention was "shared" and lost them. Now the
+        // whole Routine is compared, as Routine::with_dep and with_deps do.
+        let helper = routine_calling("Helper", vec![]);
+        let others = [
+            helper.clone().with_dep(delay()),
+            helper.clone().with_variable("wHelper"),
+            helper.clone().with_clobbers(Regs::A),
+        ];
+        for other in others {
+            let message = crate::rust_boy::panic_message(|| {
+                let mut registry = FunctionRegistry::new();
+                registry.register_routine(routine_calling("First", vec![helper.clone()]));
+                registry.register_routine(routine_calling("Second", vec![other.clone()]));
+            });
+            assert!(
+                message.contains("routine `Second` needs a routine `Helper`"),
+                "{:?}: {}",
+                other,
+                message
+            );
+        }
+        // The same routine is shared: registered once, with its dependencies and variables
+        let helper = routine_calling("Helper", vec![delay()]).with_variable("wHelper");
+        let mut registry = FunctionRegistry::new();
+        registry.register_routine(routine_calling("First", vec![helper.clone()]));
+        registry.register_routine(routine_calling("Second", vec![helper]));
+        let mut main = Block::new();
+        main.call("Second");
+        let used = registry.generate_used(&[&main.into_instrs()], []);
+        assert_eq!(global_labels(&used.code), ["Delay:", "Helper:", "Second:"]);
+        assert_eq!(used.variables, ["wHelper"]);
     }
 }

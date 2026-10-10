@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 248 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 259 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -58,6 +58,7 @@ rgbfix -v -p 0xFF main.gb
 | Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
 | API safety | ✅ unknown sprite / composite ids, animation names and indices panic with a clear message (they gave no code, fixed — [B20](#b20)); VRAM tiles, WRAM0 variables and OAM entries are allocated through `MemoryAllocator` and panic when full, sprite positions and animation frames are checked (fixed — [B17](#b17)); a sprite's tile index comes from its VRAM address (fixed — [B18](#b18)); `Var::set`/`get` handle 16-bit variables (fixed — [B16](#b16)); `get_pivot` wraps around the map (fixed — [B22](#b22)); a tilemap can go to `$9C00` (fixed — [B19](#b19)) |
 | Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`). Typed operands since `refactor-p2-typed-operands`: no register or expression is a string any more (`Dst`, `Operand`, `Mem`, `AluOperand`, `IncDec`, and `Expr` for values), a value cannot be a destination, and `Instr::check` accepts exactly the `ld`/`ldh` operand pairs of the opcode table (`isa_tests`: all 91 load opcodes, `Expr` operands assembled by RGBDS, 554 instructions) |
+| Hardware facts | ✅ since Phase 2 (`refactor-p2-hw`) every register, flag, address, OAM offset and screen size that `gb_std`, `rust_boy` and the examples write comes from `hw` (see [Key concepts](#key-concepts)): 110 `hw::Symbol`s, each a `hardware.inc` name and its value, plus the facts `hardware.inc` has no name for. Tests: every symbol is a name `include/hardware.inc` defines, and with `RGBDS_LINK_CHECK` a file that includes it `ASSERT`s every value (a wrong value fails); `test_no_hardware_strings_outside_hw` fails on a `hardware.inc` name or an address from `$8000` on written as a string (or a hex integer) in `gb_std`, `rust_boy` or the examples, outside their tests and the hand-written `unbricked.rs`. The 6 example ROMs, their asm, `.map` and `.sym`, are byte-identical |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -68,9 +69,9 @@ rgbfix -v -p 0xFF main.gb
 | Layer | Path | LOC | Role |
 |---|---|---|---|
 | **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
-| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef` |
+| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`) | ~2800 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2800 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` |
-| **`hw`** (data) | `src/hw.rs` | ~100 | Hardware facts as data since [B22](#b22): VRAM, WRAM and OAM layout, `hardware.inc` names (`_OAMRAM`, `LCDCF_BG9C00`, and since `refactor-p2-typed-operands` `rLCDC`, `rLY`, `rP1`, the palettes, `LCDCF_*`, `P1F_*`), `oam_offset`; used by `gb_std` and `rust_boy`, not by `gb_asm` (the start of the Phase 2 `hw` module) |
+| **`hw`** (data) | `src/hw.rs` | ~390 | Hardware facts as pure data (since [B22](#b22); complete since Phase 2 `refactor-p2-hw`): `hw::Symbol`s, each a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM layout and the screen sizes (`hw::SYMBOLS` lists them), the facts with no `hardware.inc` name as plain numbers, and `oam_offset`; depends on nothing, used by `gb_std` (which turns a `Symbol` into an `Expr`, `src/gb_std/hw_symbols.rs`), `rust_boy` and the examples, not by `gb_asm` |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
 
 ### Key concepts
@@ -138,13 +139,36 @@ rgbfix -v -p 0xFF main.gb
   keeps its `raw()` code in a `Layout` (the closure gets `&mut Layout`), `build_asm` returns the `Layout` it fills,
   and `build()` prints `build_asm().program().to_asm()`. The asm layer knows instructions, sections and programs
   only: an `Asm` is one list of instructions, printed in the order they were emitted.
+- **`hw`** (since `refactor-p2-hw`, `src/hw.rs`; tests in `src/hw/tests.rs`): pure data, depending on nothing. A
+  `hw::Symbol<T>` is a `hardware.inc` name and its value (`T` = `u16` for an address, `u8` for a flag or a count):
+  `hw::LCDC` is `rLCDC` = `$FF40`. The Rust name is the `hardware.inc` name without its `r` / `_` prefix (`OAMRAM` is
+  `_OAMRAM`, flags keep their whole name), except `OAM_ENTRY_SIZE` (`sizeof_OAM_ATTRS`). It defines the I/O registers
+  (`rP1`, `rIF`, `rLCDC`, `rSTAT`, `rSCY`/`rSCX`, `rLY`, `rLYC`, `rDMA`, `rBGP`, `rOBP0`/`rOBP1`, `rWY`/`rWX`, `rIE`; not
+  the audio ones, which nothing uses yet), their flags (`P1F_*`, `LCDCF_*`, `STATF_*`, `IEF_*`, `PADF_*`/`PADB_*`), the
+  memory map (`_VRAM`, `_VRAM8000`/`8800`/`9000`, `_SCRN0`/`_SCRN1`, `_SRAM`, `_RAM`, `_RAMBANK`, `_OAMRAM`, `_IO`,
+  `_HRAM`), the OAM layout (`OAM_COUNT`, `sizeof_OAM_ATTRS`, `OAMA_*`, `OAMF_*`/`OAMB_*`) and the screen sizes
+  (`SCRN_X`, `SCRN_Y`, `SCRN_VX_B`, …), all listed in `hw::SYMBOLS`. What `hardware.inc` has no name for is a plain
+  number: the tile regions as `RustBoy` uses them (`VRAM_OBJ_TILES`, `VRAM_BG_TILES`, …), region ends (`WRAM0_END`,
+  `OAM_END`, `HRAM_END`, `VRAM_END`), `OAM_SIZE`, `OAM_X_OFFSET`/`OAM_Y_OFFSET`, `TILE_SIZE`/`TILE_WIDTH`,
+  `ROM_HEADER`/`ROM_HEADER_END`. `hw::oam_offset(index, hw::OAMA_X)` is the offset of a byte of an OAM entry, and panics
+  past OAM or on any symbol but the four `OAMA_*` (`hw::OAM_ENTRY_BYTES`; `OAMB_BANK1`, whose value is 3, panics too).
+  `gb_std` turns a `Symbol` into an `Expr`, `Operand` or `AluOperand` by its name (`src/gb_std/hw_symbols.rs`: the
+  first layer that sees both, so `hw` stays data and `gb_asm` does not know it); the 8-bit ALU (`AluOperand`) takes
+  only a `Symbol<u8>`, so `cp(hw::LCDC)` does not compile, while `Expr` and `Operand` take both widths (they hold 16-bit
+  immediates and addresses as well as flag expressions; an operand typed by width is a Task.md follow-up). A symbol
+  goes straight to the builders: `ld_addr_def_a(hw::LCDC)` writes `ld [rLCDC], a`,
+  `Expr::from(hw::LCDCF_ON) | hw::LCDCF_BGON` writes `LCDCF_ON | LCDCF_BGON`. Code that needs the number uses `.value`
+  (`cp_imm(hw::SCRN_Y.value)`, `Expr::hex(hw::SCRN0.value)`, the VRAM addresses the allocators compute). `Symbol` has no
+  `Display`, so a message must say `.name` or `.value`. The generated code writes a symbol where it wrote its name
+  before, and a number where it wrote a number (`ld bc, $9800` in `GetTileByPixel`, `cp a, 144`, `ld a, 0` for the LCD
+  off), so the output did not change.
 - **`Block`** (since `refactor-p2-typed-operands-2b`, `src/gb_asm/block.rs`): every `gb_std`/`rust_boy` routine and
   snippet is built in a `Block` (a checked list of instructions with the same builder methods as `Asm`, expanded from
   one `instruction_builders!` in `src/gb_asm/builders.rs`) and returned with `into_instrs()`. They used to create a
   fresh `Asm`, emit into its default `Chunk::Main` and return `asm.get_main_instrs()` (the scratch-`Asm` idiom). An
   `Asm` is now only a whole program: the one `Layout::program` makes for `RustBoy`, and the `gb_asm` example programs.
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:488-679`, `build` prints the program of the `Layout` `build_asm` returns)
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:489-680`, `build` prints the program of the `Layout` `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -260,6 +284,25 @@ The problems are where each layer reaches across the line:
 3. **Hardware facts are hardcoded in every layer.** `_OAMRAM+{id*4+1}` strings in both sprite managers,
    `$9800` in three places, VRAM bases in `tiles.rs`, LCDC flags written as strings in each layer
    (until [B4](#b4) they disagreed: OBJ16 forced in `rust_boy`, not in `gb_std`). `MemoryRegion`/`MemoryAllocator` (`src/rust_boy/memory.rs`) existed but were unused (used since [B17](#b17)); a first `hw` module (`src/hw.rs`, pure data) exists since [B22](#b22).
+   *Fixed since Phase 2 (`refactor-p2-hw`):* `hw` is complete, as `hw::Symbol`s (a `hardware.inc` name and its value,
+   see [Key concepts](#key-concepts)), and `gb_std`, `rust_boy` and the examples take every hardware fact from it: the
+   key flags (`PadButton::flag`), the OAM clear size, the header padding, VBlank's first line, the tilemap row width,
+   the LCD-off value, the score addresses of the Unbricked examples (`TileRef::from_xy`). A test fails on a new hardware
+   name or address written as a string in those layers (`test_no_hardware_strings_outside_hw`; the hand-written tutorial
+   `unbricked.rs` is the stated exception), and another asserts every value with RGBDS against `include/hardware.inc`.
+   The output is unchanged: the 6 example ROMs, their asm, `.map` and `.sym` are byte-identical. **Breaking** (the `hw`
+   API), with the migration:
+
+   | Before | After |
+   |---|---|
+   | `hw::LCDC`, `LY`, `P1`, `BGP`, `OBP0`, `OBP1`, `OAMRAM`, `LCDCF_*`, `P1F_*` were `&str` | `hw::Symbol`s: pass them as they are to the builders (`ld_addr_def_a(hw::LCDC)`, `Mem::addr(hw::P1)`, `ld(R8::A, hw::P1F_GET_BTN)`); `Expr::from(hw::LCDCF_ON)` for `Expr::sym(hw::LCDCF_ON)`; `.name` for the text |
+   | `hw::SCRN0`, `SCRN1` were `u16`; `OAM_COUNT`, `OAM_ENTRY_SIZE`, `OAMA_Y`, `OAMA_X`, `OAMA_TILEID` were `u8` | `hw::Symbol`s: `.value` for the number (`hw::SCRN0.value`) |
+   | `hw::OAM_START`, `hw::WRAM0` | `hw::OAMRAM.value`, `hw::RAM.value` |
+   | `hw::SCRN_ROW_TILES`, `hw::SCRN_ROWS` (`usize`) | `hw::SCRN_VX_B.value`, `hw::SCRN_VY_B.value` (`u8`) |
+   | `hw::oam_offset(index, 1)` (any `u8` byte, any index) | `hw::oam_offset(index, hw::OAMA_X)`; panics for an index past OAM (40 entries) or any symbol but the four `OAMA_*` (`hw::OAM_ENTRY_BYTES`) |
+   | `format!("{}", hw::LCDC)` | `hw::LCDC.name` (`Symbol` has no `Display`) |
+   | `asm.cp(hw::LCDC)` (any `&str` constant in an 8-bit ALU operand) | does not compile: the ALU takes a `Symbol<u8>` (a flag or a count), not an address; write `asm.cp(hw::LCDC.name)` if it is really meant |
+   | `gb_std` `Sprite::new(40, …)` (any id), a 41st `SpriteManager::add_sprite` | panics: an id is an OAM entry, 0 to 39 (its code read and wrote `_OAMRAM+160` and beyond) |
 4. **L3 re-implements L2 instead of using it.** `src/rust_boy/functions.rs:152-311` (at `4601a5c`) duplicated Memcopy,
    WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel from `gb_std`, and they had already
    diverged ([B23](#b23)). *Since B23* `rust_boy` emits the `gb_std` routines (only `Delay` is its own), and its

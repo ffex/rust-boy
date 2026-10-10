@@ -1,21 +1,22 @@
 use rust_boy::gb_asm::{Asm, Condition, Expr, Mem, R8, Section};
+use rust_boy::hw;
 
 fn program() -> Asm {
     let mut asm = Asm::new();
 
     // Cartridge header at $100-$14F: rgbfix fills in the logo and checksums
     asm.include_hardware()
-        .section(Section::rom0("Header").at(0x0100))
+        .section(Section::rom0("Header").at(hw::ROM_HEADER))
         .raw("nop")
         .raw("jp EntryPoint")
-        .ds_fill("$150 - @", "0");
+        .ds_fill(&format!("${:X} - @", hw::ROM_HEADER_END), "0");
 
     // Main code section
     asm.section(Section::rom0("Main"))
         .label("EntryPoint")
         .comment("Initialize display")
-        .ld_a(0x91)
-        .ldh(Mem::addr(Expr::hex(0xFF40)), R8::A);
+        .ld_a(hw::LCDCF_ON.value | hw::LCDCF_BG8000.value | hw::LCDCF_BGON.value)
+        .ldh(Mem::addr(Expr::hex(hw::LCDC.value)), R8::A);
 
     // Add a loop
     asm.label("MainLoop")
@@ -27,8 +28,8 @@ fn program() -> Asm {
     // Functions, still in the Main section
     asm.label("WaitVBlank")
         .comment("Wait for vertical blank")
-        .ld(R8::A, Mem::addr(Expr::hex(0xFF44)))
-        .cp_imm(144)
+        .ld(R8::A, Mem::addr(Expr::hex(hw::LY.value)))
+        .cp_imm(hw::SCRN_Y.value)
         .jr_cond(Condition::NZ, "WaitVBlank")
         .ret()
         .blank_line();

@@ -15,18 +15,22 @@ pub enum PadButton {
 }
 
 impl PadButton {
-    /// Returns the flag constant name (e.g., "PADF_DOWN")
-    pub fn name(self) -> &'static str {
+    /// The `hardware.inc` flag of this button in `wCurKeys` / `wNewKeys` (`hw::PADF_DOWN`, …)
+    pub fn flag(self) -> hw::Symbol<u8> {
         match self {
-            PadButton::Down => "PADF_DOWN",
-            PadButton::Up => "PADF_UP",
-            PadButton::Left => "PADF_LEFT",
-            PadButton::Right => "PADF_RIGHT",
-            PadButton::Start => "PADF_START",
-            PadButton::Select => "PADF_SELECT",
-            PadButton::B => "PADF_B",
-            PadButton::A => "PADF_A",
+            PadButton::Down => hw::PADF_DOWN,
+            PadButton::Up => hw::PADF_UP,
+            PadButton::Left => hw::PADF_LEFT,
+            PadButton::Right => hw::PADF_RIGHT,
+            PadButton::Start => hw::PADF_START,
+            PadButton::Select => hw::PADF_SELECT,
+            PadButton::B => hw::PADF_B,
+            PadButton::A => hw::PADF_A,
         }
+    }
+    /// The name of its flag constant (e.g., "PADF_DOWN"): `self.flag().name`
+    pub fn name(self) -> &'static str {
+        self.flag().name
     }
     /// Stem of the local labels [`check_key`] emits for this button, which a
     /// [`LabelAllocator`] numbers: "check_left" gives `.check_left_3`
@@ -112,7 +116,7 @@ pub fn check_key(
     let mut asm = Block::new();
     asm.label(&start);
     asm.ld_a_addr_def("wCurKeys");
-    asm.and(button.name());
+    asm.and(button.flag());
     asm.jp_cond(Condition::Z, &end);
     asm.emit_all(pressed_func);
     asm.label(&end);
@@ -140,8 +144,10 @@ mod tests {
         for var in vars {
             cpu.mem.insert(var.to_string(), 0);
         }
-        cpu.consts.insert("PADF_LEFT".to_string(), 0x20);
-        cpu.consts.insert("PADF_A".to_string(), 0x01);
+        // The key flags, with their `hardware.inc` values (Left is $20, A is $01)
+        for flag in [hw::PADF_LEFT, hw::PADF_A] {
+            cpu.consts.insert(flag.name.to_string(), flag.value);
+        }
         cpu.run(code);
         vars.iter().map(|var| cpu.mem[*var] == 1).collect()
     }

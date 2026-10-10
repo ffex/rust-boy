@@ -18,7 +18,9 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix�
 | `rust_boy::gb_std` | routines | Ready-made routines (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
 | `rust_boy::gb_asm` | assembly | `Asm` (a whole program) and `Block` (a piece of code): one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
 
-Each level is built on the one below it, and you can mix them.
+Each level is built on the one below it, and you can mix them. Beside them, `rust_boy::hw` holds the hardware facts
+as plain data: the registers, their flags, the memory map, the OAM layout and the screen sizes, each with its
+`hardware.inc` name (`hw::LCDC` is `rLCDC`, `$FF40`).
 
 ## Requirements
 
@@ -71,6 +73,7 @@ order with `rust_boy::Layout`, by `Chunk`):
 
 ```rust
 use rust_boy::gb_asm::{Asm, Condition, Section};
+use rust_boy::hw;
 
 fn main() {
     let mut asm = Asm::new();
@@ -90,8 +93,8 @@ fn main() {
         .blank_line(); // a blank line in the output
 
     asm.label("WaitVBlank")
-        .ld_a_addr_def("rLY")
-        .cp_imm(144)
+        .ld_a_addr_def(hw::LY) // ld a, [rLY]
+        .cp_imm(hw::SCRN_Y.value) // cp a, 144: the first line of VBlank
         .jr_cond(Condition::NZ, "WaitVBlank")
         .ret();
 
@@ -101,19 +104,21 @@ fn main() {
 
 Operands are typed: registers are `R8` (`a` … `l`, and `[hl]`) and `R16`, memory is `Mem` (`[bc]`, `[de]`,
 `[hli]`, `[hld]`, `[c]`, `[address]`), and values are `Expr`s: numbers, symbols (`hardware.inc` names, labels,
-variables, `DEF` constants) and arithmetic on them. A Rust integer or a symbol name can be passed directly:
+variables, `DEF` constants) and arithmetic on them. A Rust integer or a symbol name can be passed directly, and so
+can a `hw` symbol, which is written by its `hardware.inc` name:
 
 ```rust
 use rust_boy::gb_asm::{Block, Expr, Mem, R8, R16};
+use rust_boy::hw;
 
 // A Block is a piece of code, built with the same methods as an Asm
 let mut asm = Block::new();
-asm.ld(R16::HL, Expr::sym("_OAMRAM") + 4) // ld hl, _OAMRAM+4
+asm.ld(R16::HL, Expr::from(hw::OAMRAM) + 4) // ld hl, _OAMRAM+4
     .ld(R8::A, Mem::addr("wScore")) // ld a, [wScore]
     .add(R8::B) // add a, b
     .cp("BRICK_LEFT") // cp a, BRICK_LEFT
     .ld(Mem::Hli, R8::A) // ld [hli], a
-    .ld(R8::A, Expr::sym("LCDCF_ON") | "LCDCF_BGON") // ld a, LCDCF_ON | LCDCF_BGON
+    .ld(R8::A, Expr::from(hw::LCDCF_ON) | hw::LCDCF_BGON) // ld a, LCDCF_ON | LCDCF_BGON
     .sub(-1); // sub a, -1
 let text: Vec<String> = asm.iter().map(|i| i.to_string()).collect();
 assert_eq!(text[0], "ld hl, _OAMRAM+4");
@@ -247,7 +252,7 @@ src/
 ├── gb_asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
 ├── gb_std/        # routines (graphics, inputs, variables) and flow control (If, …)
 ├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs, the program layout (chunks)
-├── hw.rs          # hardware facts as data (VRAM, WRAM and OAM layout, hardware.inc names)
+├── hw.rs          # hardware facts as data: registers, flags, memory map, OAM layout, screen sizes (hardware.inc names and values)
 ├── bin/           # the example programs
 └── lib.rs
 include/hardware.inc          # hardware definitions for RGBDS (v4.x)

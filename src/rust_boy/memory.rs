@@ -26,8 +26,8 @@ impl MemoryRegion {
         match self {
             MemoryRegion::Vram | MemoryRegion::SpriteTiles => hw::VRAM_OBJ_TILES,
             MemoryRegion::BackgroundTiles => hw::VRAM_BG_TILES,
-            MemoryRegion::Wram | MemoryRegion::Wram0 => hw::WRAM0,
-            MemoryRegion::Oam => hw::OAM_START,
+            MemoryRegion::Wram | MemoryRegion::Wram0 => hw::RAM.value,
+            MemoryRegion::Oam => hw::OAMRAM.value,
         }
     }
 

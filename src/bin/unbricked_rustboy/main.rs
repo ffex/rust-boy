@@ -26,8 +26,9 @@ fn main() {
         .define_const("BRICK_RIGHT", "0x06")
         .define_const("BLANK_TILE", "0x08")
         .define_const("DIGIT_OFFSET", "0x1A")
-        .define_const_hex("SCORE_TENS", 0x9870)
-        .define_const_hex("SCORE_ONES", 0x9871);
+        // The score digits, on the map at row 3, columns 16 and 17
+        .define_const_hex("SCORE_TENS", TileRef::from_xy(16, 3).tilemap_addr)
+        .define_const_hex("SCORE_ONES", TileRef::from_xy(17, 3).tilemap_addr);
 
     // ========================================
     // TILES - Auto VRAM allocation!

@@ -82,7 +82,7 @@ impl SpriteSize {
     }
 
     /// The `hardware.inc` LCDC flag that selects this size
-    pub(crate) fn lcdc_flag(self) -> &'static str {
+    pub(crate) fn lcdc_flag(self) -> hw::Symbol<u8> {
         match self {
             SpriteSize::Size8x8 => hw::LCDCF_OBJ8,
             SpriteSize::Size8x16 => hw::LCDCF_OBJ16,
@@ -334,15 +334,15 @@ impl SpriteManager {
         }
         let entry = self
             .oam
-            .allocate(hw::OAM_ENTRY_SIZE.into())
+            .allocate(hw::OAM_ENTRY_SIZE.value.into())
             .unwrap_or_else(|| {
                 panic!(
                     "sprite \"{}\" does not fit in OAM, which holds {} sprites",
                     name,
-                    hw::OAM_COUNT
+                    hw::OAM_COUNT.value
                 )
             });
-        let oam_index = ((entry - hw::OAM_START) / u16::from(hw::OAM_ENTRY_SIZE)) as u8;
+        let oam_index = ((entry - hw::OAMRAM.value) / u16::from(hw::OAM_ENTRY_SIZE.value)) as u8;
 
         let id = SpriteId(self.next_id);
         self.next_id += 1;

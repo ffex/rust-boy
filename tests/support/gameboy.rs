@@ -4,28 +4,45 @@
 //! What it models:
 //! - The whole SM83 instruction set, M-cycle by M-cycle: every memory access takes one
 //!   M-cycle, and the PPU, the timer and the OAM DMA advance with it, so an access sees
-//!   the PPU mode of the cycle it happens in. Checked with Blargg's `cpu_instrs` (all 11)
-//!   and `instr_timing` ROMs (`tests/emulator.rs`, with `GB_TEST_ROMS`).
-//! - Interrupts (VBlank, STAT, timer, serial, joypad; `ei` takes effect after the next
-//!   instruction), `halt` (and the halt bug), the timer (`DIV`, `TIMA`, `TMA`, `TAC`).
+//!   the PPU mode of the cycle it happens in. Checked with Blargg's `cpu_instrs` (all 11),
+//!   `instr_timing` and `mem_timing` ROMs (`tests/emulator.rs`, with `GB_TEST_ROMS`).
+//! - Interrupts (VBlank, STAT, timer, serial, joypad), dispatched in 5 M-cycles (6 when
+//!   they end a `halt`). `ei` takes effect after the next instruction, which a `di`
+//!   cancels. `halt` waits for an interrupt; with one already pending it does not stop:
+//!   with IME set the interrupt is taken, with IME clear the halt bug reads the next
+//!   opcode twice, and right after `ei` the interrupt is taken and returns to the
+//!   `halt`, which runs again (Pan Docs, "halt bug"). Checked by `tests/emulator.rs`.
+//! - The timer: `DIV`, and `TIMA` counting on the falling edge of its `DIV` bit, which
+//!   after an overflow reads 0 for one M-cycle before the reload from `TMA` and the
+//!   interrupt (a write to `TIMA` in that M-cycle cancels them).
 //! - The PPU's timing, not its picture: 154 lines of 456 dots, mode 2 (80 dots), mode 3
 //!   (172 dots, its shortest length), mode 0 for the rest of the line, mode 1 (VBlank)
-//!   on lines 144-153, `LY`, `LYC`, `STAT` and its interrupt. With the LCD off, `LY` is 0
-//!   and the CPU can reach VRAM and OAM at any time.
+//!   on lines 144-153, `LY`, `LYC`, `STAT` and its interrupt (on the rising edge of the
+//!   OR of its sources). With the LCD off, `LY` is 0 and the CPU can reach VRAM and OAM at
+//!   any time; the first line after the LCD is turned on has no OAM scan (mode 0, OAM
+//!   free, where mode 2 would be).
 //! - What the hardware blocks: with the LCD on, a CPU write to OAM in mode 2 or 3 is
-//!   dropped and a read gives `$FF`; the same for VRAM in mode 3. During an OAM DMA the
-//!   CPU can reach only HRAM and the I/O registers (a read elsewhere gives `$FF`). Each
+//!   dropped and a read gives `$FF`; the same for VRAM in mode 3. An OAM DMA written in
+//!   M-cycle `w` copies byte `i` in M-cycle `w + 2 + i`, and from `w + 2` to `w + 161`
+//!   the CPU cannot reach OAM nor the bus the DMA reads (VRAM, or the external bus:
+//!   ROM, cartridge RAM, WRAM); a read there gives `$FF`, a write is dropped. Each
 //!   blocked access is counted, and every CPU write to OAM is logged ([`OamWrite`]), so a
 //!   test can see when a program touches OAM outside VBlank and HBlank ([B12]).
-//! - OAM DMA (`$FF46`, 160 M-cycles), the joypad (`P1`), the serial port (the bytes a
-//!   program sends are collected, as Blargg's ROMs print through it), and the cartridge:
-//!   ROM only, MBC1 and MBC5 ROM banking, 32 KiB of cartridge RAM.
+//! - The joypad (`P1`), the serial port (the bytes a program sends are collected, as
+//!   Blargg's ROMs print through it), and the cartridge: ROM only (with RAM for types
+//!   `$08` and `$09`), MBC1 and MBC5 ROM banking, 32 KiB of cartridge RAM.
 //!
-//! Not modelled: the picture (no pixels, no sprite or background fetch, so mode 3 has a
-//! fixed length), audio (the sound registers are plain bytes), `stop` (a 2-byte `nop`),
-//! the OAM corruption bug, the bus conflicts of a DMA from VRAM, the boot ROM (the
-//! emulator starts at `$0100` with the registers the DMG boot ROM leaves). An illegal
-//! opcode panics, so a test never passes by running garbage.
+//! Known limits (not modelled):
+//! - The picture: no pixels, no sprite or background fetch, so mode 3 always lasts its
+//!   shortest 172 dots (on hardware sprites and scrolling lengthen it, and mode 0 shrinks).
+//! - The first line after the LCD is turned on has the length of any other line.
+//! - The DMG `STAT`-write quirk (a write to `STAT` requests a STAT interrupt in modes 0
+//!   and 1), and the mode-2 STAT interrupt that line 144 also requests on the DMG.
+//! - A wake-up from `halt` with IME clear takes no extra M-cycle.
+//! - Audio (the sound registers are plain bytes), `stop` (a 2-byte `nop`), the OAM
+//!   corruption bug, MBC1 banking mode 1, the boot ROM (the emulator starts at `$0100`
+//!   with the registers the DMG boot ROM leaves).
+//! - An illegal opcode panics, so a test never passes by running garbage.
 //!
 //! [B12]: ../../CONTEXT.md#b12
 
@@ -201,6 +218,9 @@ struct Bus {
     lyc: u8,
     /// M-cycles into the current line
     line_cycle: u32,
+    /// The first line after the LCD is turned on, which has no OAM scan: mode 0 where
+    /// mode 2 would be, OAM free
+    first_line: bool,
     /// The STAT interrupt line, to request the interrupt on its rising edge
     stat_line: bool,
 
@@ -210,6 +230,9 @@ struct Bus {
     tima: u8,
     tma: u8,
     tac: u8,
+    /// `TIMA` overflowed in the last M-cycle: it reads 0 now, and is reloaded from `TMA`
+    /// (with the interrupt) in this one
+    tima_reload: bool,
 
     // Joypad
     /// The pressed buttons ([`Button::mask`])
@@ -218,8 +241,11 @@ struct Bus {
     p1_select: u8,
 
     // OAM DMA
+    /// The source of the DMA running
     dma_source: u16,
-    /// The next byte to copy, while a DMA runs
+    /// The source of a requested DMA, until it starts
+    dma_next_source: u16,
+    /// While a DMA runs: the next byte to copy (160 in its last busy M-cycle)
     dma_index: Option<u16>,
     /// M-cycles before a requested DMA starts
     dma_delay: u8,
@@ -251,6 +277,8 @@ impl Bus {
             0x19..=0x1E => Mbc::Mbc5,
             other => panic!("cartridge type ${:02X} is not modelled", other),
         };
+        // ROM + RAM without an MBC: the RAM needs no enable
+        let ram_without_mbc = matches!(rom[0x147], 0x08 | 0x09);
         let mut io = [0u8; 0x80];
         // What the DMG boot ROM leaves in the registers this module keeps as plain bytes
         io[0x01] = 0x00; // SB
@@ -280,7 +308,7 @@ impl Bus {
             mbc1_upper: 0,
             cart_ram: vec![0; 0x8000],
             cart_ram_bank: 0,
-            cart_ram_enabled: false,
+            cart_ram_enabled: ram_without_mbc,
             vram: [0; 0x2000],
             wram: [0; 0x2000],
             oam: [0; 0xA0],
@@ -293,14 +321,17 @@ impl Bus {
             ly: 0,
             lyc: 0,
             line_cycle: 0,
+            first_line: false,
             stat_line: false,
             div_counter: 0xABCC,
             tima: 0,
             tma: 0,
             tac: 0xF8,
+            tima_reload: false,
             buttons: 0,
             p1_select: 0x30,
             dma_source: 0,
+            dma_next_source: 0,
             dma_index: None,
             dma_delay: 0,
             serial_out: Vec::new(),
@@ -324,7 +355,11 @@ impl Bus {
         } else if self.ly >= 144 {
             Mode::VBlank
         } else if self.line_cycle < MODE2_MCYCLES {
-            Mode::OamScan
+            if self.first_line {
+                Mode::HBlank
+            } else {
+                Mode::OamScan
+            }
         } else if self.line_cycle < MODE2_MCYCLES + MODE3_MCYCLES {
             Mode::Drawing
         } else {
@@ -334,6 +369,22 @@ impl Bus {
 
     fn oam_blocked(&self) -> bool {
         self.dma_index.is_some() || matches!(self.mode(), Mode::OamScan | Mode::Drawing)
+    }
+
+    /// Whether a running OAM DMA keeps the CPU from `address`: OAM, and the bus the DMA
+    /// reads from (VRAM, or the external bus: ROM, cartridge RAM, WRAM); HRAM and the I/O
+    /// registers stay free
+    fn dma_blocks(&self, address: u16) -> bool {
+        if self.dma_index.is_none() {
+            return false;
+        }
+        let from_vram = (0x8000..=0x9FFF).contains(&self.dma_source);
+        match address {
+            0xFE00..=0xFEFF => true,
+            0xFF00..=0xFFFF => false,
+            0x8000..=0x9FFF => from_vram,
+            _ => !from_vram,
+        }
     }
 
     fn vram_blocked(&self) -> bool {
@@ -363,6 +414,11 @@ impl Bus {
     }
 
     fn tick_timer(&mut self) {
+        if self.tima_reload {
+            self.tima_reload = false;
+            self.tima = self.tma;
+            self.interrupt_flag |= INT_TIMER;
+        }
         let before = self.timer_input();
         self.div_counter = self.div_counter.wrapping_add(DOTS_PER_MCYCLE as u16);
         if before && !self.timer_input() {
@@ -372,30 +428,30 @@ impl Bus {
 
     fn increment_tima(&mut self) {
         let (tima, overflow) = self.tima.overflowing_add(1);
-        if overflow {
-            self.tima = self.tma;
-            self.interrupt_flag |= INT_TIMER;
-        } else {
-            self.tima = tima;
-        }
+        // On overflow TIMA reads 0 for one M-cycle, then the reload and the interrupt
+        self.tima = tima;
+        self.tima_reload = overflow;
     }
 
+    /// A DMA requested in M-cycle `w` (the write to `DMA`) copies byte `i` in M-cycle
+    /// `w + 2 + i` and keeps the CPU off its buses from `w + 2` to `w + 161`
     fn tick_dma(&mut self) {
         if self.dma_delay > 0 {
             self.dma_delay -= 1;
             if self.dma_delay == 0 {
+                // It starts (a DMA already running stops here)
+                self.dma_source = self.dma_next_source;
                 self.dma_index = Some(0);
             }
-            return;
         }
         if let Some(index) = self.dma_index {
-            let byte = self.peek(self.dma_source.wrapping_add(index));
-            self.oam[usize::from(index)] = byte;
-            self.dma_index = if index + 1 < 0xA0 {
-                Some(index + 1)
+            if index == 0xA0 {
+                self.dma_index = None;
             } else {
-                None
-            };
+                let byte = self.peek(self.dma_source.wrapping_add(index));
+                self.oam[usize::from(index)] = byte;
+                self.dma_index = Some(index + 1);
+            }
         }
     }
 
@@ -406,6 +462,7 @@ impl Bus {
         self.line_cycle += 1;
         if self.line_cycle == LINE_MCYCLES {
             self.line_cycle = 0;
+            self.first_line = false;
             self.ly = if self.ly == 153 { 0 } else { self.ly + 1 };
             if self.ly == 144 {
                 self.interrupt_flag |= INT_VBLANK;
@@ -429,7 +486,7 @@ impl Bus {
 
     /// The byte at `address`, as the CPU reads it now (blocked accesses give `$FF`)
     fn cpu_read(&mut self, address: u16) -> u8 {
-        if self.dma_index.is_some() && address < 0xFF00 {
+        if self.dma_blocks(address) {
             self.dma_conflicts += 1;
             return 0xFF;
         }
@@ -520,7 +577,7 @@ impl Bus {
             }
             0xFF44 => self.ly,
             0xFF45 => self.lyc,
-            0xFF46 => (self.dma_source >> 8) as u8,
+            0xFF46 => (self.dma_next_source >> 8) as u8,
             _ => self.io[usize::from(address - 0xFF00)],
         }
     }
@@ -544,7 +601,7 @@ impl Bus {
                 return;
             }
         }
-        if self.dma_index.is_some() && address < 0xFF00 {
+        if self.dma_blocks(address) {
             self.dma_conflicts += 1;
             return;
         }
@@ -611,7 +668,11 @@ impl Bus {
                     self.increment_tima();
                 }
             }
-            0xFF05 => self.tima = value,
+            0xFF05 => {
+                // A write in the M-cycle after an overflow cancels the reload
+                self.tima = value;
+                self.tima_reload = false;
+            }
             0xFF06 => self.tma = value,
             0xFF07 => {
                 let before = self.timer_input();
@@ -628,6 +689,9 @@ impl Bus {
                     self.ly = 0;
                     self.line_cycle = 0;
                 }
+                if !was_on && self.lcd_on() {
+                    self.first_line = true;
+                }
                 self.update_stat_line();
             }
             0xFF41 => {
@@ -640,8 +704,8 @@ impl Bus {
                 self.update_stat_line();
             }
             0xFF46 => {
-                self.dma_source = u16::from(value) << 8;
-                self.dma_delay = 1;
+                self.dma_next_source = u16::from(value) << 8;
+                self.dma_delay = 2;
             }
             _ => self.io[usize::from(address - 0xFF00)] = value,
         }
@@ -670,6 +734,10 @@ pub struct GameBoy {
     ime: bool,
     /// `ei` was run: IME is set after the next instruction
     ime_pending: bool,
+    /// The instruction running is the one right after `ei`: IME is already set (so a
+    /// `di` here cancels it), but no interrupt was taken before it, and a `halt` here
+    /// sees IME as 0
+    after_ei: bool,
     halted: bool,
     /// The halt bug: the next opcode is read twice
     halt_bug: bool,
@@ -694,6 +762,7 @@ impl GameBoy {
             pc: 0x0100,
             ime: false,
             ime_pending: false,
+            after_ei: false,
             halted: false,
             halt_bug: false,
             bus: Bus::new(rom),
@@ -1069,9 +1138,11 @@ impl GameBoy {
 
     /// Run one instruction, or one M-cycle of `halt`, or the dispatch of an interrupt
     pub fn step(&mut self) {
+        let mut woke = false;
         if self.halted {
             if self.pending_interrupt().is_some() {
                 self.halted = false;
+                woke = true;
             } else {
                 self.tick();
                 return;
@@ -1079,10 +1150,22 @@ impl GameBoy {
         }
         if self.ime {
             if let Some(bit) = self.pending_interrupt() {
+                if woke {
+                    // Leaving `halt` for an interrupt takes one more M-cycle
+                    self.tick();
+                }
                 self.ime = false;
                 self.tick();
                 self.tick();
-                let pc = self.pc;
+                // `ei` then `halt` with an interrupt pending: the halt bug left `pc` on the
+                // byte after the `halt` without moving past it, so the handler returns to
+                // the `halt`, which runs again
+                let pc = if self.halt_bug {
+                    self.halt_bug = false;
+                    self.pc.wrapping_sub(1)
+                } else {
+                    self.pc
+                };
                 self.push16(pc);
                 self.bus.interrupt_flag &= !(1 << bit);
                 self.pc = 0x0040 + 8 * u16::from(bit);
@@ -1090,14 +1173,17 @@ impl GameBoy {
                 return;
             }
         }
-        let enable_after = self.ime_pending;
-        self.ime_pending = false;
+        // `ei` takes effect here, after the check above: no interrupt is taken before
+        // the instruction that follows it, and a `di` in that instruction cancels it
+        self.after_ei = self.ime_pending;
+        if self.ime_pending {
+            self.ime_pending = false;
+            self.ime = true;
+        }
         self.bus.current_pc = self.pc;
         let opcode = self.fetch8();
         self.execute(opcode);
-        if enable_after {
-            self.ime = true;
-        }
+        self.after_ei = false;
     }
 
     fn execute(&mut self, opcode: u8) {
@@ -1111,9 +1197,14 @@ impl GameBoy {
                 self.fetch8();
             }
             0x76 => {
-                // halt
-                if !self.ime && self.pending_interrupt().is_some() {
-                    self.halt_bug = true;
+                // halt. With an interrupt pending it does not stop: with IME set it is taken
+                // at once; with IME clear, or right after `ei`, the halt bug (the next
+                // opcode is read twice; after `ei` the interrupt is taken and returns to
+                // the `halt`, see `step`)
+                if self.pending_interrupt().is_some() {
+                    if !self.ime || self.after_ei {
+                        self.halt_bug = true;
+                    }
                 } else {
                     self.halted = true;
                 }

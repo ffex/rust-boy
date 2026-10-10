@@ -169,6 +169,388 @@ fn emulator_sees_a_rom_that_does_nothing() {
     assert_eq!(gb.registers().pc, gb.symbol("EntryPoint.idle"));
 }
 
+// ----- Interrupts, halt, ei / di -----
+
+/// A program with counting handlers for the VBlank, STAT and timer interrupts, whose
+/// entry point runs `main`, then idles. Each handler adds 1 to its counter, `wVBlanks`,
+/// `wStats` or `wTimers`; the VBlank one also keeps `a` as it found it in `wSeenA`, and
+/// the STAT one `LY` in `wStatLY`. `wMark` and `wAfterHalt` are for `main`.
+fn interrupt_rom(main: &str) -> Rom {
+    let asm = INTERRUPT_ASM.replace("    ; main\n", main);
+    Rom::build(&asm, &[])
+}
+
+const INTERRUPT_ASM: &str = r#"INCLUDE "hardware.inc"
+
+SECTION "VBlank interrupt", ROM0[$40]
+    ld [wSeenA], a
+    push af
+    jp VBlankHandler
+
+SECTION "STAT interrupt", ROM0[$48]
+    push af
+    jp StatHandler
+
+SECTION "Timer interrupt", ROM0[$50]
+    push af
+    jp TimerHandler
+
+SECTION "Header", ROM0[$100]
+    jp EntryPoint
+    ds $150 - @, 0
+
+SECTION "Main", ROM0
+VBlankHandler:
+    ld a, [wVBlanks]
+    inc a
+    ld [wVBlanks], a
+    pop af
+    reti
+
+StatHandler:
+    ldh a, [rLY]
+    ld [wStatLY], a
+    ld a, [wStats]
+    inc a
+    ld [wStats], a
+    pop af
+    reti
+
+TimerHandler:
+    ld a, [wTimers]
+    inc a
+    ld [wTimers], a
+    pop af
+    reti
+
+EntryPoint:
+    ; main
+.idle:
+    jr .idle
+
+SECTION "Counters", WRAM0
+wVBlanks: ds 1
+wStats: ds 1
+wTimers: ds 1
+wSeenA: ds 1
+wStatLY: ds 1
+wMark: ds 1
+wAfterHalt: ds 1
+"#;
+
+/// A `halt` main loop woken by the VBlank interrupt: one interrupt a frame, and the code
+/// after the `halt` runs once each
+#[test]
+fn interrupts_vblank_wakes_a_halt_loop() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        "    ld a, IEF_VBLANK
+    ldh [rIE], a
+    xor a, a
+    ldh [rIF], a
+    ei
+.loop:
+    halt
+    ld a, [wAfterHalt]
+    inc a
+    ld [wAfterHalt], a
+    jr .loop
+",
+    )
+    .boot();
+    gb.run_frames(10);
+    assert_eq!(
+        gb.read_symbol("wVBlanks"),
+        10,
+        "one VBlank interrupt a frame"
+    );
+    assert_eq!(
+        gb.read_symbol("wAfterHalt"),
+        10,
+        "the code after halt ran each time"
+    );
+    assert!(gb.registers().halted, "waiting in the halt");
+}
+
+/// `ei` then `halt` with an interrupt already pending (IF = VBlank, as at power-on): the
+/// interrupt is taken at once and returns to the `halt`, which then waits for the next
+/// one (Pan Docs, "halt bug")
+#[test]
+fn interrupts_ei_then_halt_with_one_pending_returns_to_the_halt() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        "    ld a, IEF_VBLANK
+    ldh [rIE], a
+    ldh [rIF], a
+    ei
+    halt
+    ld a, [wVBlanks]
+    ld [wAfterHalt], a
+    ld a, 1
+    ld [wMark], a
+",
+    )
+    .boot();
+    gb.run_frames(3);
+    assert_eq!(gb.read_symbol("wMark"), 1, "the code after the halt ran");
+    assert_eq!(
+        gb.read_symbol("wAfterHalt"),
+        2,
+        "the pending interrupt, then the halt again until the frame's VBlank"
+    );
+    assert_eq!(
+        gb.read_symbol("wVBlanks"),
+        4,
+        "then one a frame, in the idle loop"
+    );
+    assert_eq!(gb.registers().pc, gb.symbol("EntryPoint.idle"));
+}
+
+/// `halt` with IME clear and an interrupt pending: the halt bug, the byte after the
+/// `halt` is read twice (`inc b` runs twice), and no interrupt is taken
+#[test]
+fn interrupts_halt_with_ime_clear_and_one_pending_is_the_halt_bug() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        "    di
+    ld a, IEF_VBLANK
+    ldh [rIE], a
+    ldh [rIF], a
+    ld b, 0
+    halt
+    inc b
+    ld a, b
+    ld [wMark], a
+",
+    )
+    .boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wMark"), 2, "inc b ran twice");
+    assert_eq!(gb.read_symbol("wVBlanks"), 0);
+}
+
+/// `ei` right before `di`: IME is never set, so the pending interrupt is never taken
+#[test]
+fn interrupts_ei_then_di_takes_none() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        "    ld a, IEF_VBLANK
+    ldh [rIE], a
+    ldh [rIF], a
+    ei
+    di
+",
+    )
+    .boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wVBlanks"), 0);
+    assert!(!gb.registers().ime);
+}
+
+/// `ei` takes effect after the next instruction: with an interrupt pending, the
+/// instruction after `ei` runs before the handler (which sees its `a`)
+#[test]
+fn interrupts_ei_takes_effect_after_the_next_instruction() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        "    ld a, IEF_VBLANK
+    ldh [rIE], a
+    ldh [rIF], a
+    ei
+    ld a, $42
+    di
+",
+    )
+    .boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wVBlanks"), 1, "taken once, then di");
+    assert_eq!(gb.read_symbol("wSeenA"), 0x42, "after ld a, $42 ran");
+}
+
+/// The STAT interrupt on `LY` = `LYC`: once a frame, on that line
+#[test]
+fn interrupts_stat_on_lyc() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        "    ld a, 100
+    ldh [rLYC], a
+    ld a, STATF_LYC
+    ldh [rSTAT], a
+    ld a, IEF_STAT
+    ldh [rIE], a
+    xor a, a
+    ldh [rIF], a
+    ei
+",
+    )
+    .boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wStats"), 5);
+    assert_eq!(gb.read_symbol("wStatLY"), 100);
+}
+
+/// The timer interrupt: at 4096 Hz (one `TIMA` step every 256 M-cycles) from `TMA` = $C0,
+/// an overflow every 64 steps, 16384 M-cycles: 10 in 10 frames (175560 M-cycles)
+#[test]
+fn interrupts_timer_overflow() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        "    ld a, $C0
+    ldh [rTMA], a
+    ldh [rTIMA], a
+    ld a, TACF_START | TACF_4KHZ
+    ldh [rTAC], a
+    ld a, IEF_TIMER
+    ldh [rIE], a
+    xor a, a
+    ldh [rIF], a
+    ei
+",
+    )
+    .boot();
+    gb.run_frames(10);
+    assert_eq!(gb.read_symbol("wTimers"), 10);
+}
+
+/// The first line after the LCD is turned on has no OAM scan: OAM can be written at once
+#[test]
+fn lcd_on_first_line_has_no_oam_scan() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = interrupt_rom(
+        ".wait_vblank:
+    ldh a, [rLY]
+    cp a, 144
+    jr nz, .wait_vblank
+    xor a, a
+    ldh [rLCDC], a
+    ld a, LCDCF_ON | LCDCF_OBJON
+    ldh [rLCDC], a
+    ld a, $42
+    ld [_OAMRAM], a
+    ldh a, [rSTAT]
+    ld [wMark], a
+",
+    )
+    .boot();
+    gb.run_frames(2);
+    assert_eq!(gb.oam_entry(0)[0], 0x42, "written in line 0");
+    assert_eq!(gb.read_symbol("wMark") & 0x03, 0, "STAT reads mode 0");
+    assert!(gb.dropped_oam_writes().is_empty());
+}
+
+/// The usual OAM DMA routine, run from HRAM, copies a shadow OAM in WRAM. A DMA written in
+/// M-cycle `w` keeps the CPU off WRAM until `w + 161`: a read of WRAM in `w + 161` gives
+/// $FF, one in `w + 162` the byte (each routine below counts its cycles from the `ldh`)
+#[test]
+fn oam_dma_from_hram() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let asm = r#"INCLUDE "hardware.inc"
+
+SECTION "Header", ROM0[$100]
+    jp EntryPoint
+    ds $150 - @, 0
+
+SECTION "Main", ROM0
+EntryPoint:
+    ; the shadow OAM: byte i = i
+    ld hl, wShadowOam
+    xor a, a
+.fill:
+    ld [hli], a
+    inc a
+    cp a, OAM_COUNT * sizeof_OAM_ATTRS
+    jr nz, .fill
+    ; the routines to HRAM
+    ld hl, Routines
+    ld de, hLastBusy
+    ld b, RoutinesEnd - Routines
+.copy:
+    ld a, [hli]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .copy
+    ld hl, wShadowOam + 5
+    ld a, HIGH(wShadowOam)
+    call hLastBusy
+    ldh [hReadLastBusy], a
+    ld a, HIGH(wShadowOam)
+    call hFirstFree
+    ldh [hReadFirstFree], a
+.idle:
+    jr .idle
+
+; Each: the DMA, then a read of [hl] in M-cycle w + 161 (w + 162 for the second); it
+; returns what it read in a
+Routines:
+LastBusy:
+    ldh [rDMA], a       ; written in w
+    ld a, 39            ; w + 1, w + 2
+.wait:
+    dec a               ; 39 times dec + jr: w + 3 to w + 157
+    jr nz, .wait
+    nop                 ; w + 158
+    nop                 ; w + 159
+    ld a, [hl]          ; read in w + 161
+    ret
+FirstFree:
+    ldh [rDMA], a
+    ld a, 39
+.wait:
+    dec a
+    jr nz, .wait
+    nop
+    nop
+    nop
+    ld a, [hl]          ; read in w + 162
+    ret
+RoutinesEnd:
+
+SECTION "Shadow OAM", WRAM0, ALIGN[8]
+wShadowOam: ds 160
+
+SECTION "DMA routines", HRAM
+hLastBusy: ds FirstFree - LastBusy
+hFirstFree: ds RoutinesEnd - FirstFree
+hReadLastBusy: ds 1
+hReadFirstFree: ds 1
+"#;
+    let mut gb = Rom::build(asm, &[]).boot();
+    gb.run_frames(2);
+    let expected: Vec<u8> = (0..160).collect();
+    assert_eq!(gb.oam().to_vec(), expected, "OAM is the shadow OAM");
+    assert_eq!(
+        gb.read_symbol("hReadLastBusy"),
+        0xFF,
+        "w + 161: still the DMA's"
+    );
+    assert_eq!(gb.read_symbol("hReadFirstFree"), 5, "w + 162: free again");
+    assert_eq!(
+        gb.dma_conflicts(),
+        1,
+        "that one read; the rest ran from HRAM"
+    );
+    assert_eq!(gb.registers().pc, gb.symbol("EntryPoint.idle"));
+}
+
 // ----- The examples -----
 
 /// Every CPU write to OAM with the LCD on happened in VBlank and none was dropped: the
@@ -269,6 +651,7 @@ fn basic_usage_turns_the_lcd_on_and_loops_on_vblank() {
         0x91,
         "LCDC: LCD on, tiles at $8000, background on"
     );
+    assert_oam_written_in_vblank(&gb);
 }
 
 #[test]

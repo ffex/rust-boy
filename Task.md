@@ -296,8 +296,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `examples/basic_usage/main.asm` added; `examples/unbricked/originals/main.asm` is the tutorial's own source,
       not a snapshot)
 - [x] Headless-emulator tests (run the ROM, assert on memory/registers) (branch `refactor-p3-tooling-emulator`: a
-      zero-dependency DMG emulator for the tests, `tests/support/gameboy.rs`, M-cycle accurate, checked against Blargg's
-      `cpu_instrs`, `instr_timing` and `mem_timing` ROMs, which `scripts/fetch-test-roms.sh` fetches at a pinned commit;
+      zero-dependency DMG emulator for the tests, `tests/support/gameboy.rs`: the CPU M-cycle by M-cycle (each memory
+      access in its own M-cycle), interrupts, `halt`, timer, PPU timing without pixels, OAM DMA, with its known limits
+      listed at its top; checked against Blargg's `cpu_instrs`, `instr_timing` and `mem_timing` ROMs, which
+      `scripts/fetch-test-roms.sh` fetches at a pinned commit, and by its own interrupt, `halt` and DMA tests;
       `Rom::build` / `Rom::example` assemble and link with RGBDS, `GameBoy::run_script` runs frames with scripted input,
       then a test reads WRAM/HRAM/VRAM/OAM, the registers and every OAM write with its PPU mode. `tests/emulator.rs`:
       one test per example, and [B12](CONTEXT.md#b12)'s situation as it is today; run with `RGBDS_LINK_CHECK`, in CI)

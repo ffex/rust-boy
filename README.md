@@ -284,9 +284,10 @@ UPDATE_SNAPSHOTS=1 cargo test --test snapshots
 ### Headless-emulator tests
 
 `tests/emulator.rs` builds ROMs with RGBDS and runs them on a small headless Game Boy written for the tests
-(`tests/support/gameboy.rs`, no dependency): the SM83 CPU cycle by cycle, interrupts, the timer, the PPU's timing
+(`tests/support/gameboy.rs`, no dependency): the SM83 CPU M-cycle by M-cycle, interrupts, `halt`, the timer, the PPU's timing
 (modes, `LY`, `STAT`), OAM DMA, the joypad, MBC1/MBC5 ROM banking, but no picture. It blocks what the hardware
-blocks (OAM in modes 2 and 3, VRAM in mode 3) and logs every OAM write with its PPU mode. Each example is run
+blocks (OAM in modes 2 and 3, VRAM in mode 3) and logs every OAM write with its PPU mode; what it does not model is
+listed at the top of `gameboy.rs`. Each example is run
 with scripted input and checked through its memory: the Unbricked ball moves and bounces and the paddle follows
 the joypad, the FOSDEM player walks with its animation, the coin animates on A and stops on B. A test of your own:
 

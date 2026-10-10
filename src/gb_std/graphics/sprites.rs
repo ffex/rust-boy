@@ -171,6 +171,11 @@ impl SpriteManager {
             current_sprite_index: 0,
         }
     }
+    /// Add a sprite in the next OAM entry
+    ///
+    /// # Panics
+    /// On a 41st sprite: OAM holds 40 ([`Sprite::new`]).
+    #[track_caller]
     pub fn add_sprite(&mut self, x: u8, y: u8, tile: u8, flags: u8) {
         let sprite = Sprite::new(self.current_sprite_index, x, y, tile, flags);
         self.sprites.push(sprite);
@@ -200,7 +205,20 @@ pub struct Sprite {
 }
 
 impl Sprite {
+    /// The sprite in OAM entry `id`, at screen (`x`, `y`)
+    ///
+    /// # Panics
+    /// If `id` is not an OAM entry (0 to 39): its code would read and write past OAM
+    /// (`_OAMRAM+160` and beyond).
+    #[track_caller]
     pub fn new(id: u8, x: u8, y: u8, tile: u8, flags: u8) -> Self {
+        assert!(
+            id < hw::OAM_COUNT.value,
+            "Sprite::new: sprite id {} is not an OAM entry: OAM holds {} sprites, ids 0 to {}",
+            id,
+            hw::OAM_COUNT.value,
+            hw::OAM_COUNT.value - 1
+        );
         Sprite {
             id,
             x,
@@ -404,6 +422,28 @@ pub(crate) mod tests {
     use crate::gb_asm::label_check::assert_code_labels_ok;
     use crate::gb_asm::test_cpu::TestCpu;
     use crate::gb_std::flow::{Emittable, If};
+
+    #[test]
+    fn test_a_sprite_id_past_oam_panics() {
+        assert_eq!(Sprite::new(39, 0, 0, 0, 0).id, 39);
+        let message = crate::rust_boy::panic_message(|| Sprite::new(40, 0, 0, 0, 0));
+        assert_eq!(
+            message,
+            "Sprite::new: sprite id 40 is not an OAM entry: OAM holds 40 sprites, ids 0 to 39"
+        );
+
+        // The manager hands out ids in order: the 41st sprite panics
+        let mut manager = SpriteManager::new();
+        for _ in 0..40 {
+            manager.add_sprite(0, 0, 0, 0);
+        }
+        let message = crate::rust_boy::panic_message(move || manager.add_sprite(0, 0, 0, 0));
+        assert!(
+            message.contains("sprite id 40 is not an OAM entry"),
+            "{}",
+            message
+        );
+    }
 
     /// The OAM clear (`hl` walking from `_OAMRAM`, `hw::OAM_SIZE` bytes) writes exactly the
     /// bytes `oam_address` names: every byte of the 40 entries, and nothing past OAM

@@ -5,6 +5,11 @@
 //! name ([`Expr::sym`]), never of its value: `ld_addr_def_a(hw::LCDC)` writes
 //! `ld [rLCDC], a`, and `Expr::from(hw::LCDCF_ON) | hw::LCDCF_BGON` writes
 //! `LCDCF_ON | LCDCF_BGON`. Code that wants the number writes `hw::SCRN_Y.value`.
+//!
+//! The 8-bit ALU (`and`, `cp`, …) takes only a `Symbol<u8>` (a flag, a count): an address
+//! symbol (`Symbol<u16>`) there does not compile. `Expr` and `Operand` take both, as they
+//! hold flag expressions (`LCDCF_ON | …`), 8-bit and 16-bit immediates (`ld hl, _OAMRAM`)
+//! and addresses alike; an operand typed by width is a later item (Task.md).
 
 use crate::gb_asm::{AluOperand, Expr, Operand};
 use crate::hw::Symbol;
@@ -21,8 +26,9 @@ impl<T> From<Symbol<T>> for Operand {
     }
 }
 
-impl<T> From<Symbol<T>> for AluOperand {
-    fn from(symbol: Symbol<T>) -> AluOperand {
+/// Only an 8-bit symbol: `cp(hw::LCDC)`, an address, does not compile
+impl From<Symbol<u8>> for AluOperand {
+    fn from(symbol: Symbol<u8>) -> AluOperand {
         AluOperand::from(Expr::from(symbol))
     }
 }

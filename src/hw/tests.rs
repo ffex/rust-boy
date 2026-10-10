@@ -93,6 +93,28 @@ fn test_oam_offset_rejects_a_flag_for_a_byte() {
     oam_offset(0, OAMF_PRI);
 }
 
+/// Only the four `OAMA_*` symbols are bytes of an entry: another `u8` symbol panics, even
+/// one whose value is below 4
+#[test]
+fn test_oam_offset_takes_only_the_oama_symbols() {
+    for symbol in [OAMB_BANK1, PADB_A, LCDCF_OFF, P1F_0, STATF_LCD] {
+        let message = crate::rust_boy::panic_message(|| oam_offset(0, symbol));
+        assert!(
+            message.contains(&format!(
+                "{} ({}) is not a byte of an OAM entry",
+                symbol.name, symbol.value
+            )),
+            "{}: {}",
+            symbol.name,
+            message
+        );
+    }
+    for (offset, byte) in OAM_ENTRY_BYTES.into_iter().enumerate() {
+        assert_eq!(usize::from(oam_offset(0, byte)), offset);
+    }
+    assert_eq!(OAM_ENTRY_BYTES.len(), usize::from(OAM_ENTRY_SIZE.value));
+}
+
 #[test]
 fn test_regions_are_consistent() {
     assert_eq!((VRAM_OBJ_TILES_END - VRAM_OBJ_TILES) / TILE_SIZE, 256);

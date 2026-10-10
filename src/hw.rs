@@ -47,7 +47,22 @@ mod tests;
 /// it never prints the one it did not mean. `gb_std` makes it an [`Expr`](crate::gb_asm::Expr), an
 /// [`Operand`](crate::gb_asm::Operand) or an [`AluOperand`](crate::gb_asm::AluOperand)
 /// (the symbol by its name), so it can be passed wherever the builders take one:
-/// `ld_addr_def_a(hw::LCDC)` writes `ld [rLCDC], a`.
+/// `ld_addr_def_a(hw::LCDC)` writes `ld [rLCDC], a`. The 8-bit ALU takes only a
+/// `Symbol<u8>`: an address there does not compile.
+///
+/// ```compile_fail
+/// use rust_boy::gb_asm::Block;
+/// use rust_boy::hw;
+///
+/// Block::new().cp(hw::LCDC); // rLCDC is an address, `Symbol<u16>`
+/// ```
+///
+/// ```
+/// use rust_boy::gb_asm::Block;
+/// use rust_boy::hw;
+///
+/// Block::new().cp(hw::SCRN_Y).and(hw::PADF_LEFT); // `Symbol<u8>`s
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Symbol<T> {
     /// The name in `hardware.inc`, which the generated code writes: `"rLCDC"`
@@ -361,13 +376,18 @@ pub const OAM_Y_OFFSET: u8 = 16;
 /// End (exclusive) of HRAM: `rIE` is at `$FFFF`
 pub const HRAM_END: u16 = 0xFFFF;
 
+/// The four bytes of an OAM entry, in order: [`OAMA_Y`], [`OAMA_X`], [`OAMA_TILEID`],
+/// [`OAMA_FLAGS`]
+pub const OAM_ENTRY_BYTES: [Symbol<u8>; 4] = [OAMA_Y, OAMA_X, OAMA_TILEID, OAMA_FLAGS];
+
 /// The offset from [`OAMRAM`] of byte `byte` ([`OAMA_Y`], [`OAMA_X`], [`OAMA_TILEID`] or
 /// [`OAMA_FLAGS`]) of OAM entry `index`: 5 for entry 1, X (the generated code writes
 /// `_OAMRAM+5`)
 ///
 /// # Panics
-/// If `index` is not an OAM entry (0 to 39), or `byte` is not a byte of one (0 to 3): the
-/// address would be past the entry, or past OAM.
+/// If `index` is not an OAM entry (0 to 39), or `byte` is not one of the four `OAMA_*`
+/// symbols: another `u8` symbol (`OAMB_BANK1`, `PADB_A`, `LCDCF_OFF`, …) is not a byte of
+/// an entry, even when its value is below 4.
 #[track_caller]
 pub fn oam_offset(index: u8, byte: Symbol<u8>) -> u16 {
     assert!(
@@ -378,7 +398,7 @@ pub fn oam_offset(index: u8, byte: Symbol<u8>) -> u16 {
         OAM_COUNT.value - 1
     );
     assert!(
-        byte.value < OAM_ENTRY_SIZE.value,
+        OAM_ENTRY_BYTES.contains(&byte),
         "{} ({}) is not a byte of an OAM entry: use OAMA_Y, OAMA_X, OAMA_TILEID or OAMA_FLAGS",
         byte.name,
         byte.value

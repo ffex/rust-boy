@@ -4,8 +4,16 @@ use crate::hw;
 
 use super::error::Error;
 
+/// The end (exclusive) of the HRAM `RustBoy` gives to variables: $FF80-$FFBF (64 bytes)
+///
+/// The stack is where the boot ROM puts it, `SP` = $FFFE (`RustBoy` does not move it), and
+/// it grows down into HRAM: the top 63 bytes ($FFC0-$FFFE) are left to it, 31 nested
+/// calls or pushes.
+pub const HRAM_VARIABLES_END: u16 = hw::HRAM.value + 64;
+
 /// Memory regions on the Game Boy
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MemoryRegion {
     /// Video RAM for tiles ($8000-$97FF for tile data)
     Vram,
@@ -20,6 +28,9 @@ pub enum MemoryRegion {
     BackgroundTiles,
     /// WRAM bank 0 ($C000-$CFFF): a `WRAM0` section must fit in it
     Wram0,
+    /// HRAM as `RustBoy` gives it to variables ($FF80-$FFBF): the stack has the rest
+    /// (see [`HRAM_VARIABLES_END`])
+    Hram,
 }
 
 impl MemoryRegion {
@@ -30,6 +41,7 @@ impl MemoryRegion {
             MemoryRegion::BackgroundTiles => hw::VRAM_BG_TILES,
             MemoryRegion::Wram | MemoryRegion::Wram0 => hw::RAM.value,
             MemoryRegion::Oam => hw::OAMRAM.value,
+            MemoryRegion::Hram => hw::HRAM.value,
         }
     }
 
@@ -42,6 +54,7 @@ impl MemoryRegion {
             MemoryRegion::Wram => hw::WRAM_END,
             MemoryRegion::Wram0 => hw::WRAM0_END,
             MemoryRegion::Oam => hw::OAM_END,
+            MemoryRegion::Hram => HRAM_VARIABLES_END,
         }
     }
 
@@ -54,8 +67,8 @@ impl MemoryRegion {
 /// Allocator for tracking memory usage in a region
 ///
 /// The tile manager allocates the sprite and background tiles with it and the sprite
-/// manager the OAM entries, when they are added (B17); `build()` lays out the WRAM0
-/// variables with it.
+/// manager the OAM entries, when they are added (B17); `build()` lays out the WRAM0 and
+/// HRAM variables with it, and puts their sections at the addresses it gives.
 #[derive(Debug)]
 pub struct MemoryAllocator {
     region: MemoryRegion,
@@ -174,6 +187,7 @@ mod tests {
             (MemoryRegion::BackgroundTiles, 0x9000, 0x800),
             (MemoryRegion::Wram0, 0xC000, 0x1000),
             (MemoryRegion::Oam, 0xFE00, 0xA0),
+            (MemoryRegion::Hram, 0xFF80, 0x40),
         ];
         for (region, start, size) in regions {
             assert_eq!((region.start_address(), region.size()), (start, size));

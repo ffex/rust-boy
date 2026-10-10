@@ -26,7 +26,8 @@
 //! `ld l, a` sets `hl`. 16-bit `add hl, rr`, `inc rr` and `dec rr` work on numbers and on
 //! a symbol plus a number (the carry of `add hl` is then unknown). Every load is modelled
 //! but the ones with `sp`: `ld [bc]`, `[de]`, `[hl]`, `[hli]`, `[hld]` and `[n16]` either
-//! way, `ldh [n8]` and `ldh [c]` (the byte at `$FF00 + c`). The 8-bit ALU instructions,
+//! way, `ldh [n8]` and `ldh [c]` (the byte at `$FF00 + c`; an `ldh` to a symbol whose value
+//! [`TestCpu::consts16`] gives outside `$FF00`-`$FFFF` panics). The 8-bit ALU instructions,
 //! `inc` / `dec` (also on `[hl]`), the rotates and shifts, `swap`, `bit` / `set` / `res`
 //! (on a register or `[hl]`), `cpl`, `scf`, `ccf` and `nop` are modelled exactly for the Z
 //! and C flags; N and H are not modelled, so `daa` is not either. `push` and `pop` share
@@ -348,8 +349,12 @@ impl TestCpu {
                     dst: Dst::R16(pair),
                     src,
                 } => self.load_pair(*pair, src),
-                // `ldh` is `ld` with an address from $FF00 (`Instr::check` makes sure)
+                // `ldh` is `ld` with an address from $FF00 (`Instr::check` makes sure of a
+                // number, `check_ldh` of a symbol whose value the test gives)
                 Instr::Ld { dst, src } | Instr::Ldh { dst, src } => {
+                    if matches!(instr, Instr::Ldh { .. }) {
+                        self.check_ldh(dst, src);
+                    }
                     let value = self.read(src);
                     self.write(dst, value);
                 }
@@ -997,6 +1002,36 @@ impl TestCpu {
                 self.unknown |= Self::unknown_bit(high) | Self::unknown_bit(low);
                 *self.pair(pair) = None;
             }
+        }
+    }
+
+    /// Panics if the `[n8]` operand of an `ldh` is a symbol whose value
+    /// [`TestCpu::consts16`] gives (`hScore` = $FF80), plus its offset, outside
+    /// $FF00-$FFFF: the CPU would read or write $FF00 + its low byte, another byte than the
+    /// one named. A symbol whose value the test does not give is taken as it is (RGBDS
+    /// checks it when it links the program).
+    fn check_ldh(&self, dst: &Dst, src: &Operand) {
+        let address = match (dst, src) {
+            (Dst::Mem(Mem::Addr(address)), _) | (_, Operand::Mem(Mem::Addr(address))) => address,
+            _ => return,
+        };
+        let pointer = self.pointer(address);
+        let value = if pointer.is_number() {
+            Some(pointer.offset)
+        } else {
+            self.consts16
+                .get(&pointer.symbol)
+                .map(|base| base.wrapping_add(pointer.offset))
+        };
+        if let Some(value) = value {
+            assert!(
+                value >= 0xFF00,
+                "ldh [{}]: the address is ${:04X}, not $FF00-$FFFF (the CPU would use \
+                 ${:04X})",
+                address,
+                value,
+                0xFF00 | (value & 0xFF)
+            );
         }
     }
 

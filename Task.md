@@ -57,8 +57,9 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 - [x] `LCDCF_OBJ16` forced → 8×8 sprites render wrong; add sprite-size config + even tile alignment in 8×16 — [B4](CONTEXT.md#b4)
       (branch `refactor-p1-sprite-size`: `RustBoy::set_sprite_size`, 8×8 by default; `fosdem` opts into 8×16)
 - [x] Two-operand `If` compares right-vs-left; fix `If`, then both Unbricked examples (paddle bounce in
-      `unbricked_std` never fires) — [B5](CONTEXT.md#b5) (branch `refactor-p1-if-semantics`; the left operand
-      must not change `b`, now documented — a register-safe `If` is in Phase 2)
+      `unbricked_std` never fires) — [B5](CONTEXT.md#b5) (branch `refactor-p1-if-semantics`; since
+      `refactor-p2-routines-if` the left operand may change `b`: the `If` saves `bc` around it when it may, and each
+      `If` kind documents the registers it uses)
 - [x] Composite 16×16 sprite collapses at screen edges (FOSDEM demo) — [B6](CONTEXT.md#b6)
       (branch `refactor-p1-sprite-limits`: the leading sprite is tested, the others follow at their offsets)
 
@@ -188,7 +189,13 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       as `RustBoy::set_sprite_size`
 - [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since
       [B17](CONTEXT.md#b17); HRAM, and real addresses for the variables (rgblink places the sections), are left)
-- [ ] `If` that never clobbers user registers (or documents what it uses)
+- [x] `If` that never clobbers user registers (or documents what it uses) (branch `refactor-p2-routines-if`: documented,
+      in the clobber model of routines: `If::clobbers()` is `a`, `b` and the flags, `IfConst` `a` and the flags, `IfA` and
+      `IfCall` the flags, each checked on the test CPU for every operator, with and without else. Not a `push`/`pop` of
+      every user register, which would change the ROMs of `unbricked_std` and `unbricked_rustboy`, the examples that use
+      an `If`. The B5 hole is closed: left code that may change `b` (a
+      call, raw code, a write to `b`; `Regs::written_by`) is wrapped in `push bc` / `pop bc`, which no example needs, so
+      the 6 example ROMs, their asm, `.map` and `.sym` are byte-identical)
 - [ ] `prelude` module; avoid the `rust_boy::rust_boy` stutter (optional rename: `asm` / `std` / `engine`)
 - [ ] Ship all breaking API changes together in one release
 

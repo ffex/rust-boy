@@ -445,10 +445,11 @@ impl FunctionRegistry {
 
         // A builtin is only here when no user function defines its label (user names and
         // labels are looked up first)
-        let routines = builtins.into_iter().map(|func| func.routine()).chain(
+        let builtins: Vec<Routine> = builtins.into_iter().map(|func| func.routine()).collect();
+        let routines = builtins.iter().chain(
             users
                 .into_iter()
-                .map(|index| self.user_functions[index].routine.clone()),
+                .map(|index| &self.user_functions[index].routine),
         );
         let mut used = UsedFunctions {
             code: Vec::new(),
@@ -463,7 +464,7 @@ impl FunctionRegistry {
                     used.variables.push(variable.clone());
                 }
             }
-            used.code.extend(routine);
+            used.code.extend(routine.body().iter().cloned());
         }
         used
     }

@@ -2309,6 +2309,164 @@ mod tests {
         }
     }
 
+    /// A routine `name` that calls each of `deps`, which it depends on
+    fn routine_calling(name: &str, deps: Vec<Routine>) -> Routine {
+        let mut body = Block::new();
+        body.label(name);
+        for dep in &deps {
+            body.call(dep.name());
+        }
+        body.ret();
+        deps.into_iter()
+            .fold(Routine::new(name, body), Routine::with_dep)
+    }
+
+    /// The global labels the Functions part of `out` defines, in order (after `jp Main`)
+    fn emitted_functions(out: &str) -> Vec<String> {
+        let functions = &out[out.find("jp Main").expect("the main loop")..];
+        functions
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.ends_with(':') && !line.starts_with('.'))
+            .map(|line| line.trim_end_matches(':').to_string())
+            .collect()
+    }
+
+    #[test]
+    fn test_a_typed_call_brings_the_routine_and_its_dependencies() {
+        // Routines as values: LoadLevel needs Memcopy and ClearMap, ClearMap needs Delay and
+        // Memcopy. Only typed calls reach them (call_routine, Routine::call): each routine
+        // and dependency is emitted once, builtins first (in their fixed order), then each
+        // user routine after the ones it needs
+        use crate::gb_std::graphics::utility::memcopy;
+        use crate::gb_std::utility::delay;
+
+        let program = || {
+            let clear_map = routine_calling("ClearMap", vec![delay(), memcopy()]);
+            let load_level = routine_calling("LoadLevel", vec![memcopy(), clear_map.clone()]);
+            let mut gb = RustBoy::new();
+            let call = gb.call_routine(&load_level);
+            gb.add_to_main_loop(call);
+            let load_a = |value: u8| {
+                let mut code = Block::new();
+                code.ld_a(value);
+                code.into_instrs()
+            };
+            gb.add_to_main_loop(If::eq(
+                load_a(1),
+                load_a(2),
+                vec![boxed(load_level.call()), boxed(clear_map.call())],
+            ));
+            let call = gb.call_routine(&clear_map);
+            gb.init(call);
+            gb
+        };
+        let out = program().build();
+        assert_eq!(
+            emitted_functions(&out),
+            [
+                "Memcopy",
+                "WaitVBlank",
+                "WaitNotVBlank",
+                "Delay",
+                "ClearMap",
+                "LoadLevel"
+            ],
+            "{}",
+            out
+        );
+        assert_links(&out);
+        // The same program always gives the same output
+        assert_eq!(program().build(), out);
+
+        // define_routine, then a typed call anywhere: the same
+        let clear_map = routine_calling("ClearMap", vec![delay(), memcopy()]);
+        let load_level = routine_calling("LoadLevel", vec![memcopy(), clear_map]);
+        let mut gb = RustBoy::new();
+        gb.define_routine(load_level.clone());
+        gb.define_function_from("Level1", load_level.call());
+        gb.add_to_main_loop(Call::new("Level1"));
+        let out = gb.build();
+        assert_eq!(
+            emitted_functions(&out),
+            [
+                "Memcopy",
+                "WaitVBlank",
+                "WaitNotVBlank",
+                "Delay",
+                "ClearMap",
+                "LoadLevel",
+                "Level1"
+            ],
+            "{}",
+            out
+        );
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_a_dependency_nothing_names_is_emitted() {
+        // A routine that reaches its dependency where no scan can see it: a jump table in
+        // an INCLUDEd file. The dependency list is enough.
+        let mut body = Block::new();
+        body.label("Dispatch").raw("INCLUDE \"table.inc\"").ret();
+        let handler = routine_calling("Handler", vec![]);
+        let dispatch = Routine::new("Dispatch", body).with_dep(handler);
+        let mut gb = RustBoy::new();
+        let call = gb.call_routine(&dispatch);
+        gb.add_to_main_loop(call);
+        let out = gb.build();
+        assert_eq!(definitions(&out, "Handler"), 1, "{}", out);
+        crate::gb_asm::label_check::assert_links_with(&out, &[("table.inc", "dw Handler")]);
+    }
+
+    #[test]
+    fn test_a_routine_and_a_function_of_one_name() {
+        use crate::gb_std::graphics::utility::is_specific_tile;
+
+        // A typed call to the routine the program defines (same code) shares it
+        let wall = is_specific_tile("IsWallTile", &["$00"]);
+        let mut gb = RustBoy::new();
+        gb.define_routine(wall.clone());
+        let call = gb.call_routine(&wall);
+        gb.add_to_main_loop(call);
+        let out = gb.build();
+        assert_eq!(definitions(&out, "IsWallTile"), 1);
+        assert_links(&out);
+
+        // Other code under that name: a call could reach only one of them
+        let other = is_specific_tile("IsWallTile", &["$01"]);
+        let message = panic_message(move || gb.call_routine(&other));
+        assert!(
+            message.contains(
+                "call_routine(\"IsWallTile\") needs a routine `IsWallTile`, but the program \
+                 already has a function with that name and other code"
+            ),
+            "{}",
+            message
+        );
+    }
+
+    #[test]
+    fn test_define_routine_replaces_a_builtin_with_its_variables() {
+        // A routine named like a builtin replaces it, as a function does; the variables
+        // emitted are the routine's own
+        let mut body = Block::new();
+        body.label("UpdateKeys")
+            .ld_a(0)
+            .ld_addr_def_a("wMyKeys")
+            .ret();
+        let own = Routine::new("UpdateKeys", body).with_variable("wMyKeys");
+        let mut gb = RustBoy::new();
+        gb.define_routine(own);
+        gb.add_to_main_loop(Call::new("UpdateKeys"));
+        let out = gb.build();
+        assert_eq!(definitions(&out, "UpdateKeys"), 1, "{}", out);
+        assert!(out.contains("wMyKeys: db"), "{}", out);
+        assert!(!out.contains("wCurKeys"), "{}", out);
+        assert_links(&out);
+    }
+
     #[test]
     fn test_a_builtin_called_from_everywhere_is_emitted_once() {
         let mut gb = RustBoy::new();

@@ -771,3 +771,40 @@ fn test_a_multi_line_instruction_is_checked_as_itself() {
         .is_ok()
     );
 }
+
+/// Where `f` panics, as rustc reports it (file, line)
+fn panic_location(f: impl FnOnce()) -> (String, u32) {
+    use std::cell::RefCell;
+    use std::sync::Once;
+    thread_local! {
+        static LOCATION: RefCell<Option<(String, u32)>> = const { RefCell::new(None) };
+    }
+    static HOOK: Once = Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Some(location) = info.location() {
+                LOCATION.with(|cell| {
+                    *cell.borrow_mut() = Some((location.file().to_string(), location.line()))
+                });
+            }
+            previous(info);
+        }));
+    });
+    assert!(catch(f).is_err(), "it did not panic");
+    LOCATION
+        .with(|cell| cell.borrow_mut().take())
+        .expect("a panic location")
+}
+
+#[test]
+fn test_a_section_error_points_at_the_builder_call() {
+    let mut asm = Asm::new();
+    asm.section(Section::wram0("Vars"));
+    let call = line!();
+    let (file, line) = panic_location(|| {
+        asm.ld_a(1);
+    });
+    assert!(file.ends_with("section/tests.rs"), "{}", file);
+    assert_eq!(line, call + 2);
+}

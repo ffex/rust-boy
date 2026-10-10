@@ -6,6 +6,8 @@
 //! to the type's own `emit`, which checks the instruction ([`Instr::check`]) and adds it
 //! where that type keeps its code (the end of an `Asm` or a `Block`, the current chunk
 //! of a `Layout`). The module that expands it imports the operand types the methods name.
+//! Every method is `#[track_caller]`, like `emit`: a panic (an invalid operand, code in a
+//! RAM section) points at the line that called the builder method.
 //!
 //! [`Instr::check`]: super::Instr::check
 
@@ -56,51 +58,61 @@ macro_rules! instruction_builders {
         }
 
         /// `ld a, value`
+        #[track_caller]
         pub fn ld_a(&mut self, value: u8) -> &mut Self {
             self.ld(R8::A, value)
         }
 
         /// `ld b, value`
+        #[track_caller]
         pub fn ld_b(&mut self, value: u8) -> &mut Self {
             self.ld(R8::B, value)
         }
 
         /// `ld c, value`
+        #[track_caller]
         pub fn ld_c(&mut self, value: u8) -> &mut Self {
             self.ld(R8::C, value)
         }
 
         /// `ld d, value`
+        #[track_caller]
         pub fn ld_d(&mut self, value: u8) -> &mut Self {
             self.ld(R8::D, value)
         }
 
         /// `ld e, value`
+        #[track_caller]
         pub fn ld_e(&mut self, value: u8) -> &mut Self {
             self.ld(R8::E, value)
         }
 
         /// `ld h, value`
+        #[track_caller]
         pub fn ld_h(&mut self, value: u8) -> &mut Self {
             self.ld(R8::H, value)
         }
 
         /// `ld l, value`
+        #[track_caller]
         pub fn ld_l(&mut self, value: u8) -> &mut Self {
             self.ld(R8::L, value)
         }
 
         /// `ld bc, value`
+        #[track_caller]
         pub fn ld_bc(&mut self, value: u16) -> &mut Self {
             self.ld(R16::BC, value)
         }
 
         /// `ld de, value`
+        #[track_caller]
         pub fn ld_de(&mut self, value: u16) -> &mut Self {
             self.ld(R16::DE, value)
         }
 
         /// `ld hl, value`
+        #[track_caller]
         pub fn ld_hl(&mut self, value: u16) -> &mut Self {
             self.ld(R16::HL, value)
         }
@@ -137,16 +149,19 @@ macro_rules! instruction_builders {
         }
 
         /// `ld hl, sp + offset`
+        #[track_caller]
         pub fn ld_hl_sp(&mut self, offset: i8) -> &mut Self {
             self.emit(Instr::LdHlSp { offset })
         }
 
         /// `push pair`
+        #[track_caller]
         pub fn push(&mut self, pair: R16Stack) -> &mut Self {
             self.emit(Instr::Push { pair })
         }
 
         /// `pop pair`
+        #[track_caller]
         pub fn pop(&mut self, pair: R16Stack) -> &mut Self {
             self.emit(Instr::Pop { pair })
         }
@@ -220,6 +235,7 @@ macro_rules! instruction_builders {
         }
 
         /// `cp a, value`
+        #[track_caller]
         pub fn cp_imm(&mut self, value: u8) -> &mut Self {
             self.cp(value)
         }
@@ -237,6 +253,7 @@ macro_rules! instruction_builders {
         ///
         /// Asm::new().inc(Mem::addr("wCount"));
         /// ```
+        #[track_caller]
         pub fn inc(&mut self, operand: impl Into<IncDec>) -> &mut Self {
             self.emit(Instr::Inc {
                 operand: operand.into(),
@@ -244,6 +261,7 @@ macro_rules! instruction_builders {
         }
 
         /// `dec operand`: an 8-bit register, `[hl]` or a 16-bit register
+        #[track_caller]
         pub fn dec(&mut self, operand: impl Into<IncDec>) -> &mut Self {
             self.emit(Instr::Dec {
                 operand: operand.into(),
@@ -255,11 +273,13 @@ macro_rules! instruction_builders {
         // ============================================
 
         /// `add hl, src`
+        #[track_caller]
         pub fn add_hl(&mut self, src: R16) -> &mut Self {
             self.emit(Instr::AddHl { src })
         }
 
         /// `add sp, offset`
+        #[track_caller]
         pub fn add_sp(&mut self, offset: i8) -> &mut Self {
             self.emit(Instr::AddSp { offset })
         }
@@ -269,61 +289,73 @@ macro_rules! instruction_builders {
         // ============================================
 
         /// `rlca`: rotate `a` left, bit 7 into the carry and bit 0 (Z reset)
+        #[track_caller]
         pub fn rlca(&mut self) -> &mut Self {
             self.emit(Instr::Rlca)
         }
 
         /// `rrca`: rotate `a` right, bit 0 into the carry and bit 7 (Z reset)
+        #[track_caller]
         pub fn rrca(&mut self) -> &mut Self {
             self.emit(Instr::Rrca)
         }
 
         /// `rla`: rotate `a` left through the carry (Z reset)
+        #[track_caller]
         pub fn rla(&mut self) -> &mut Self {
             self.emit(Instr::Rla)
         }
 
         /// `rra`: rotate `a` right through the carry (Z reset)
+        #[track_caller]
         pub fn rra(&mut self) -> &mut Self {
             self.emit(Instr::Rra)
         }
 
         /// `rlc operand`: rotate left, bit 7 into the carry and bit 0
+        #[track_caller]
         pub fn rlc(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Rlc { operand })
         }
 
         /// `rrc operand`: rotate right, bit 0 into the carry and bit 7
+        #[track_caller]
         pub fn rrc(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Rrc { operand })
         }
 
         /// `rl operand`: rotate left through the carry
+        #[track_caller]
         pub fn rl(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Rl { operand })
         }
 
         /// `rr operand`: rotate right through the carry
+        #[track_caller]
         pub fn rr(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Rr { operand })
         }
 
         /// `sla operand`: shift left, bit 7 into the carry
+        #[track_caller]
         pub fn sla(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Sla { operand })
         }
 
         /// `sra operand`: shift right, bit 0 into the carry, bit 7 kept (signed halving)
+        #[track_caller]
         pub fn sra(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Sra { operand })
         }
 
         /// `srl operand`: shift right, bit 0 into the carry, bit 7 reset
+        #[track_caller]
         pub fn srl(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Srl { operand })
         }
 
         /// `swap operand`: swap the two nibbles
+        #[track_caller]
         pub fn swap(&mut self, operand: R8) -> &mut Self {
             self.emit(Instr::Swap { operand })
         }
@@ -355,43 +387,52 @@ macro_rules! instruction_builders {
         // Flags, accumulator and CPU control
         // ============================================
 
+        #[track_caller]
         pub fn daa(&mut self) -> &mut Self {
             self.emit(Instr::Daa)
         }
 
         /// `cpl`: `a = !a`
+        #[track_caller]
         pub fn cpl(&mut self) -> &mut Self {
             self.emit(Instr::Cpl)
         }
 
         /// `scf`: set the carry
+        #[track_caller]
         pub fn scf(&mut self) -> &mut Self {
             self.emit(Instr::Scf)
         }
 
         /// `ccf`: complement the carry
+        #[track_caller]
         pub fn ccf(&mut self) -> &mut Self {
             self.emit(Instr::Ccf)
         }
 
+        #[track_caller]
         pub fn nop(&mut self) -> &mut Self {
             self.emit(Instr::Nop)
         }
 
+        #[track_caller]
         pub fn halt(&mut self) -> &mut Self {
             self.emit(Instr::Halt)
         }
 
+        #[track_caller]
         pub fn stop(&mut self) -> &mut Self {
             self.emit(Instr::Stop)
         }
 
         /// `di`: disable interrupts
+        #[track_caller]
         pub fn di(&mut self) -> &mut Self {
             self.emit(Instr::Di)
         }
 
         /// `ei`: enable interrupts (after the next instruction)
+        #[track_caller]
         pub fn ei(&mut self) -> &mut Self {
             self.emit(Instr::Ei)
         }
@@ -400,12 +441,14 @@ macro_rules! instruction_builders {
         // Jump instructions
         // ============================================
 
+        #[track_caller]
         pub fn jp(&mut self, label: &str) -> &mut Self {
             self.emit(Instr::Jp {
                 target: JumpTarget::Label(label.to_string()),
             })
         }
 
+        #[track_caller]
         pub fn jp_cond(&mut self, condition: Condition, label: &str) -> &mut Self {
             self.emit(Instr::JpCond {
                 condition,
@@ -414,16 +457,19 @@ macro_rules! instruction_builders {
         }
 
         /// `jp hl`: jump to the address in `hl`
+        #[track_caller]
         pub fn jp_hl(&mut self) -> &mut Self {
             self.emit(Instr::JpHl)
         }
 
+        #[track_caller]
         pub fn jr(&mut self, label: &str) -> &mut Self {
             self.emit(Instr::Jr {
                 target: JumpTarget::Label(label.to_string()),
             })
         }
 
+        #[track_caller]
         pub fn jr_cond(&mut self, condition: Condition, label: &str) -> &mut Self {
             self.emit(Instr::JrCond {
                 condition,
@@ -431,6 +477,7 @@ macro_rules! instruction_builders {
             })
         }
 
+        #[track_caller]
         pub fn call(&mut self, label: &str) -> &mut Self {
             self.emit(Instr::Call {
                 target: JumpTarget::Label(label.to_string()),
@@ -438,6 +485,7 @@ macro_rules! instruction_builders {
         }
 
         /// `call condition, label`
+        #[track_caller]
         pub fn call_cond(&mut self, condition: Condition, label: &str) -> &mut Self {
             self.emit(Instr::CallCond {
                 condition,
@@ -445,15 +493,18 @@ macro_rules! instruction_builders {
             })
         }
 
+        #[track_caller]
         pub fn ret(&mut self) -> &mut Self {
             self.emit(Instr::Ret)
         }
 
+        #[track_caller]
         pub fn ret_cond(&mut self, condition: Condition) -> &mut Self {
             self.emit(Instr::RetCond { condition })
         }
 
         /// `reti`: return and enable interrupts
+        #[track_caller]
         pub fn reti(&mut self) -> &mut Self {
             self.emit(Instr::Reti)
         }
@@ -473,6 +524,7 @@ macro_rules! instruction_builders {
 
         /// `ds count`: reserve `count` bytes (an RGBDS expression: `4`, `$150 - @`), the way
         /// a RAM section takes room; in ROM, rgblink fills them with its padding value
+        #[track_caller]
         pub fn ds(&mut self, count: &str) -> &mut Self {
             self.emit(Instr::Ds {
                 count: count.to_string(),
@@ -481,6 +533,7 @@ macro_rules! instruction_builders {
         }
 
         /// `ds count, fill`: `count` bytes of `fill` (ROM only: a RAM section holds no data)
+        #[track_caller]
         pub fn ds_fill(&mut self, count: &str, fill: &str) -> &mut Self {
             self.emit(Instr::Ds {
                 count: count.to_string(),
@@ -488,18 +541,21 @@ macro_rules! instruction_builders {
             })
         }
 
+        #[track_caller]
         pub fn include_hardware(&mut self) -> &mut Self {
             self.emit(Instr::Include {
                 file: "hardware.inc".to_string(),
             })
         }
 
+        #[track_caller]
         pub fn include(&mut self, file: &str) -> &mut Self {
             self.emit(Instr::Include {
                 file: file.to_string(),
             })
         }
 
+        #[track_caller]
         pub fn incbin(&mut self, file: &str) -> &mut Self {
             self.emit(Instr::Incbin {
                 file: file.to_string(),
@@ -508,6 +564,7 @@ macro_rules! instruction_builders {
             })
         }
 
+        #[track_caller]
         pub fn incbin_range(&mut self, file: &str, offset: u32, length: u32) -> &mut Self {
             self.emit(Instr::Incbin {
                 file: file.to_string(),
@@ -516,6 +573,7 @@ macro_rules! instruction_builders {
             })
         }
 
+        #[track_caller]
         pub fn incbin_offset(&mut self, file: &str, offset: u32) -> &mut Self {
             self.emit(Instr::Incbin {
                 file: file.to_string(),
@@ -524,6 +582,7 @@ macro_rules! instruction_builders {
             })
         }
 
+        #[track_caller]
         pub fn def<T: Display>(&mut self, label: &str, value: T) -> &mut Self {
             let value_str = format!("{}", value);
             self.emit(Instr::Def {
@@ -541,34 +600,40 @@ macro_rules! instruction_builders {
         /// asm.section(Section::wram0("Variables")).label("wScore").ds("1");
         /// assert_eq!(asm[0].to_string(), r#"SECTION "Variables", WRAM0"#);
         /// ```
+        #[track_caller]
         pub fn section(&mut self, section: Section) -> &mut Self {
             self.emit(Instr::Section(section))
         }
 
+        #[track_caller]
         pub fn label(&mut self, name: &str) -> &mut Self {
             self.emit(Instr::Label {
                 name: name.to_string(),
             })
         }
 
+        #[track_caller]
         pub fn comment(&mut self, text: &str) -> &mut Self {
             self.emit(Instr::Comment {
                 text: text.to_string(),
             })
         }
 
+        #[track_caller]
         pub fn db(&mut self, values: &str) -> &mut Self {
             self.emit(Instr::Db {
                 values: values.to_string(),
             })
         }
 
+        #[track_caller]
         pub fn dw(&mut self, value: &str) -> &mut Self {
             self.emit(Instr::Dw {
                 value: value.to_string(),
             })
         }
 
+        #[track_caller]
         pub fn raw(&mut self, line: &str) -> &mut Self {
             self.emit(Instr::Raw {
                 line: line.to_string(),

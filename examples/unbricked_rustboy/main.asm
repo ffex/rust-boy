@@ -1,18 +1,17 @@
     INCLUDE "hardware.inc"
-    DEF BRICK_LEFT EQU 5
-    DEF BRICK_RIGHT EQU 6
-    DEF BLANK_TILE EQU 8
-    DEF DIGIT_OFFSET EQU 26
-    DEF SCORE_TENS EQU 39024
-    DEF SCORE_ONES EQU 39025
     SECTION "Header", ROM0[$100]
     jp EntryPoint
     ds $150 - @, 0
+
+    DEF BRICK_LEFT EQU 0x05
+    DEF BRICK_RIGHT EQU 0x06
+    DEF BLANK_TILE EQU 0x08
+    DEF DIGIT_OFFSET EQU 0x1A
+    DEF SCORE_TENS EQU $9870
+    DEF SCORE_ONES EQU $9871
+
     EntryPoint:
-    WaitVBlank:
-    ld a, [rLY]
-    cp 144
-    jp c, WaitVBlank
+    call WaitVBlank
     ld a, 0
     ld [rLCDC], a
     ld de, Tiles
@@ -34,10 +33,10 @@
     ld a, 0
     ld b, 160
     ld hl, _OAMRAM
-    ClearOam:
+    .clear_oam_13:
     ld [hli], a
     dec b
-    jp nz, ClearOam
+    jp nz, .clear_oam_13
     ld hl, _OAMRAM
     ld a, 144
     ld [hli], a
@@ -45,6 +44,7 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
+    ld a, 0
     ld [hli], a
     ld a, 116
     ld [hli], a
@@ -54,169 +54,183 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
+    ld a, 228
+    ld [rBGP], a
+    ld [rOBP0], a
+    ld [rOBP1], a
+    ld a, 0
+    ld [wFrameCounter], a
     ld a, 1
     ld [wBallMomentumX], a
     ld a, -1
     ld [wBallMomentumY], a
-    ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON
-    ld [rLCDC], a
-    ld a, %11100100
-    ld [rBGP], a
-    ld a, %11100100
-    ld [rOBP0], a
     ld a, 0
-    ld [wFrameCounter], a
-    ld [wCurKeys], a
-    ld [wNewKeys], a
     ld [wScore], a
+    ld a, 0
+    ld [wCurKeys], a
+    ld a, 0
+    ld [wNewKeys], a
+    ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8
+    ld [rLCDC], a
+
     Main:
-    ; Wait until it's *not* VBlank
-    ld a, [rLY]
-    cp 144
-    jp nc, Main
-    WaitVBlank2:
-    ld a, [rLY]
-    cp 144
-    jp c, WaitVBlank2
+    call WaitNotVBlank
+    call WaitVBlank
     ld a, [wBallMomentumX]
     ld b, a
-    ld a, [_OAMRAM +5]
+    ld a, [_OAMRAM+5]
     add a, b
-    ld [_OAMRAM +5], a
+    ld [_OAMRAM+5], a
     ld a, [wBallMomentumY]
     ld b, a
-    ld a, [_OAMRAM +4]
+    ld a, [_OAMRAM+4]
     add a, b
-    ld [_OAMRAM +4], a
-    BounceOnTop:
-    ; Remember to offset the OAM position!
-    ; (8, 16) in OAM coordinates is (0, 0) on the screen.
-    ld a, [_OAMRAM + 4]
-    sub a, 16 + 1
+    ld [_OAMRAM+4], a
+    ld a, [_OAMRAM+4]
+    sub a, 17
     ld c, a
-    ld a, [_OAMRAM + 5]
+    ld a, [_OAMRAM+5]
     sub a, 8
     ld b, a
     call GetTileByPixel
-    ld a, [hl]
     call IsWallTile
-    jp nz, BounceOnRight
+    jp nz, .end_if_2
     call CheckAndHandleBrick
     ld a, 1
     ld [wBallMomentumY], a
-    BounceOnRight:
-    ld a, [_OAMRAM + 4]
+    .end_if_2:
+    ld a, [_OAMRAM+4]
     sub a, 16
     ld c, a
-    ld a, [_OAMRAM + 5]
-    sub a, 8 - 1
+    ld a, [_OAMRAM+5]
+    sub a, 7
     ld b, a
     call GetTileByPixel
-    ld a, [hl]
     call IsWallTile
-    jp nz, BounceOnLeft
+    jp nz, .end_if_3
     ld a, -1
     ld [wBallMomentumX], a
-    BounceOnLeft:
-    ld a, [_OAMRAM + 4]
+    .end_if_3:
+    ld a, [_OAMRAM+4]
     sub a, 16
     ld c, a
-    ld a, [_OAMRAM + 5]
-    sub a, 8 + 1
+    ld a, [_OAMRAM+5]
+    sub a, 9
     ld b, a
     call GetTileByPixel
-    ld a, [hl]
     call IsWallTile
-    jp nz, BounceOnBottom
+    jp nz, .end_if_4
     ld a, 1
     ld [wBallMomentumX], a
-    BounceOnBottom:
-    ld a, [_OAMRAM + 4]
-    sub a, 16 - 1
+    .end_if_4:
+    ld a, [_OAMRAM+4]
+    sub a, 15
     ld c, a
-    ld a, [_OAMRAM + 5]
+    ld a, [_OAMRAM+5]
     sub a, 8
     ld b, a
     call GetTileByPixel
-    ld a, [hl]
     call IsWallTile
-    jp nz, BounceDone
+    jp nz, .end_if_5
     ld a, -1
     ld [wBallMomentumY], a
-    BounceDone:
-    ; First, check if the ball is low enough to bounce off the paddle.
-    ld a, [_OAMRAM]
+    .end_if_5:
+    PaddleBounce:
+    ld a, [_OAMRAM+0]
     ld b, a
-    ld a, [_OAMRAM + 4]
+    ld a, [_OAMRAM+4]
     add a, 5
-    cp b
-    jp nz, PaddleBounceDone
-    ; Now let's compare the X positions of the objects to see if they're touching.
-    ld a, [_OAMRAM + 5]
+    cp a, b
+    jp nz, .end_if_6
+    ld a, [_OAMRAM+5]
     ld b, a
-    ld a, [_OAMRAM + 1]
+    ld a, [_OAMRAM+1]
     sub a, 8
-    cp b
-    jp nc, PaddleBounceDone
-    add a, 8 + 16
-    cp b
-    jp c, PaddleBounceDone
+    cp a, b
+    jp nc, .end_if_7
+    ld a, [_OAMRAM+5]
+    ld b, a
+    ld a, [_OAMRAM+1]
+    add a, 16
+    cp a, b
+    jp c, .end_if_8
     ld a, -1
     ld [wBallMomentumY], a
-    PaddleBounceDone:
+    .end_if_8:
+    .end_if_7:
+    .end_if_6:
+    PaddleBounceEND:
     call UpdateKeys
-    CheckLeft:
+    .check_left_11:
     ld a, [wCurKeys]
     and a, PADF_LEFT
-    jp z, CheckRight
-    Left:
-    ; move the paddle one pixel to the left
+    jp z, .check_left_end_11
     ld a, [_OAMRAM+1]
-    dec a
-    cp 15
-    jp z, Main
+    sub a, 16
+    jp c, .sprite0_left_limit_end_9
+    sub a, 1
+    jp nc, .sprite0_left_limit_store_9
+    ld a, 0
+    .sprite0_left_limit_store_9:
+    add a, 16
     ld [_OAMRAM+1], a
-    jp Main
-    CheckRight:
+    .sprite0_left_limit_end_9:
+    .check_left_end_11:
+    .check_right_12:
     ld a, [wCurKeys]
     and a, PADF_RIGHT
-    jp z, Main
-    Right:
-    ; move the paddle one pixel to the right
+    jp z, .check_right_end_12
     ld a, [_OAMRAM+1]
-    inc a
-    cp 105
-    jp z, Main
+    sub a, 104
+    jp nc, .sprite0_right_limit_end_10
+    add a, 1
+    jp nc, .sprite0_right_limit_store_10
+    ld a, 0
+    .sprite0_right_limit_store_10:
+    add a, 104
     ld [_OAMRAM+1], a
+    .sprite0_right_limit_end_10:
+    .check_right_end_12:
     jp Main
+
     ; Copy bytes from one area to another
     ; @param de: source
     ; @param hl: destination
-    ; @param bc: length
+    ; @param bc: length (0 copies nothing)
     Memcopy:
+    ld a, b
+    or a, c
+    ret z
+    .copy:
     ld a, [de]
     ld [hli], a
     inc de
     dec bc
     ld a, b
     or a, c
-    jp nz, Memcopy
+    jp nz, .copy
+    ret
+    WaitVBlank:
+    ld a, [rLY]
+    cp a, 144
+    jp c, WaitVBlank
+    ret
+    WaitNotVBlank:
+    ld a, [rLY]
+    cp a, 144
+    jp nc, WaitNotVBlank
     ret
     UpdateKeys:
-    ; poll half the controller
     ld a, P1F_GET_BTN
     call .onenibble
     ld b, a
-    ; poll the other half
     ld a, P1F_GET_DPAD
     call .onenibble
     swap a
     xor a, b
     ld b, a
-    ; And release the controller
     ld a, P1F_GET_NONE
     ldh [rP1], a
-    ; Combine with previous wCurKeys to make wNewKeys
     ld a, [wCurKeys]
     xor a, b
     and a, b
@@ -229,100 +243,94 @@
     call .knowret
     ldh a, [rP1]
     ldh a, [rP1]
-    or a, $F0
-    ret
+    ldh a, [rP1]
+    or a, 240
     .knowret:
     ret
-    ; check if a brick was collided with and breaks if it is possible
-    ; @param hl: address of the tile
-    CheckAndHandleBrick:
-    ld a, [hl]
-    cp BRICK_LEFT
-    jr nz, CheckAndHandleBrickRight
-    ; break from left side
-    ld [hl], BLANK_TILE
-    inc hl
-    ld [hl], BLANK_TILE
-    call IncreaseScorePackedBCD
-    ret
-    CheckAndHandleBrickRight:
-    cp BRICK_RIGHT
-    ret nz
-    ld [hl], BLANK_TILE
-    dec hl
-    ld [hl], BLANK_TILE
-    call IncreaseScorePackedBCD
-    ret
-    ; Convert a pixel position to a tilemap address
-    ; hl = $9800 + X + Y * 32
+    ; Convert a pixel position to a tilemap address and read the tile there
+    ; hl = $9800 + X / 8 + (Y / 8) * 32
     ; @param b: X
     ; @param c: Y
     ; @return hl: tile address
+    ; @return a: tile index at that address
+    ; changes bc
     GetTileByPixel:
-    ; First, we need to divide by 8 to convert a pixel position to a tile position.
-    ; After this we want to multiply the Y position by 32.
-    ; These operations effectively cancel out so we only need to mask the Y value.
     ld a, c
-    and a, %11111000
+    and a, 248
     ld l, a
     ld h, 0
-    ; Now we have the position * 8 in hl
     add hl, hl
     add hl, hl
-    ; Convert the X position to an offset.
     ld a, b
     srl a
     srl a
     srl a
-    ; Add the two offsets together.
     add a, l
     ld l, a
-    adc h
+    adc a, h
     sub a, l
     ld h, a
-    ; Add the offset to the tilemap's base address, and we are done!
     ld bc, $9800
     add hl, bc
+    ld a, [hl]
     ret
-    ; @param a: tile ID
-    ; @return z: set if a is a wall.
     IsWallTile:
-    cp $00
+    cp a, $00
     ret z
-    cp $01
+    cp a, $01
     ret z
-    cp $02
+    cp a, $02
     ret z
-    cp $04
+    cp a, $04
     ret z
-    cp $05
+    cp a, $05
     ret z
-    cp $06
+    cp a, $06
     ret z
-    cp $07
+    cp a, $07
     ret
-    ; Increase score by 1 and store it as a 1 byte packed BCD number
-    ; changes A and HL
-    IncreaseScorePackedBCD:
-    xor a, a
-    inc a
-    ld hl, wScore
-    adc [hl]
-    daa
-    ld [hl], a
-    call UpdateScoreBoard
+    CheckAndHandleBrick:
+    ld a, [_OAMRAM+4]
+    sub a, 17
+    ld c, a
+    ld a, [_OAMRAM+5]
+    sub a, 8
+    ld b, a
+    call GetTileByPixel
+    cp a, BRICK_LEFT
+    jp nz, .end_if_0
+    ld [hl], BLANK_TILE
+    inc hl
+    ld [hl], BLANK_TILE
+    .end_if_0:
+    cp a, BRICK_RIGHT
+    jp nz, .end_if_1
+    ld [hl], BLANK_TILE
+    dec hl
+    ld [hl], BLANK_TILE
+    .end_if_1:
     ret
-    UpdateScoreBoard:
-    ld a, [wScore]
-    and a, %11110000
-    swap a
-    add a, DIGIT_OFFSET
-    ld [SCORE_TENS], a
-    ld a, [wScore]
-    and a, %00001111
-    add a, DIGIT_OFFSET
-    ld [SCORE_ONES], a
-    ret
+
+    Paddle:
+    dw `13333331
+    dw `30000003
+    dw `13333331
+    dw `00000000
+    dw `00000000
+    dw `00000000
+    dw `00000000
+    dw `00000000
+    PaddleEnd:
+    Ball:
+    dw `00033000
+    dw `00322300
+    dw `03222230
+    dw `03222230
+    dw `00322300
+    dw `00033000
+    dw `00000000
+    dw `00000000
+    BallEnd:
     Tiles:
     dw `33333333
     dw `33333333
@@ -613,55 +621,34 @@
     dw `33000033
     dw `33333333
     TilesEnd:
+
     Tilemap:
-    db $00, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $02, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $0A, $0B, $0C, $0D, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $0E, $0F, $10, $11, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $12, $13, $14, $15, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $16, $17, $18, $19, $03, 0,0,0,0,0,0,0,0,0,0,0,0
-    db $04, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $07, $03, $03, $03, $03, $03, $03, 0,0,0,0,0,0,0,0,0,0,0,0
+    db $00, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $01, $02, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $05, $06, $05, $06, $05, $06, $05, $06, $05, $06, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $0A, $0B, $0C, $0D, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $0E, $0F, $10, $11, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $12, $13, $14, $15, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $08, $07, $03, $16, $17, $18, $19, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $04, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     TilemapEnd:
-    Paddle:
-    dw `13333331
-    dw `30000003
-    dw `13333331
-    dw `00000000
-    dw `00000000
-    dw `00000000
-    dw `00000000
-    dw `00000000
-    PaddleEnd:
-    Ball:
-    dw `00033000
-    dw `00322300
-    dw `03222230
-    dw `03222230
-    dw `00322300
-    dw `00033000
-    dw `00000000
-    dw `00000000
-    BallEnd:
-    SECTION "Counter", WRAM0
+
+    SECTION "Variables", WRAM0[$C000]
     wFrameCounter: db
-    SECTION "Input Variables", WRAM0
-    wCurKeys: db
-    wNewKeys: db
-    SECTION "Ball Data", WRAM0
     wBallMomentumX: db
     wBallMomentumY: db
-    SECTION "Score", WRAM0
     wScore: db
+    wCurKeys: db
+    wNewKeys: db
 
 

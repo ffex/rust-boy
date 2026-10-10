@@ -18,7 +18,8 @@ refactoring is in this release, so a program migrates once. The reasons are in
   builtins and the animation delay, in one value.
 - **Memory**:
   - HRAM variables, accessed with `ldh`;
-  - every variable section at the address the allocator gives it, so `get_address` is the linked address;
+  - every variable section at the address the allocator gives it, so `get_address` is the linked address once the
+    program's variables are created (the variables `build()` adds go after them);
   - VRAM tiles, WRAM0, HRAM and OAM are all allocated and bounded.
 - **A typed assembly layer**:
   - the whole SM83 instruction set, with typed operands (`R8`, `R16`, `Mem`, ...) and `Expr` values;
@@ -52,8 +53,9 @@ refactoring is in this release, so a program migrates once. The reasons are in
 
 ## Migration guide
 
-Each table maps the code of the previous release ("Before") to this one ("After"). "Before" uses the old module
-names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`.
+Each table maps the code of the previous release, `main` at `4601a5c` ("Before"), to this one ("After"). "Before"
+uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were added and changed again on the
+`refactor` branch, and never released, are at the end, [for users of the `refactor` branch](#for-users-of-the-refactor-branch).
 
 ### 1. Modules and imports
 
@@ -64,25 +66,25 @@ names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`.
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Asm`, `Block`, `Emittable`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 
 | Before | After |
 |---|---|
 | `let out = gb.build();` (`String`, `build(&mut self)`) | `let out = gb.build()?;` (`Result<String, engine::Error>`, `build(&self)`). In `main`: `fn main() -> Result<(), Error>` and `println!("{}", gb.build()?)` |
-| `build()` panicked on a user function that is also a variable, a constant / `DEF` / raw label, or an external symbol | `Err(Error::NameConflict { name, first: Definition::Function, second })` |
-| `build()` panicked when `wFrameCounter` or `wAnim_*` existed with another type than `u8` | `Err(Error::NameConflict { .., second: Definition::GeneratedVariable(VarType::U8) })` |
-| code or data in a RAM section, or a section name used twice: rgbasm failed, then `build()` panicked | `Err(Error::Section(message))` |
-| `create_*` panicked when WRAM0 was full | `build()` returns `Err(Error::MemoryFull { region, what, needed, available })` |
-| `gb.call("X")`, `call_args`, `keep_function("X")` panicked when `X` was not (yet) a function | `X` may be defined after the call; `build()` returns `Err(Error::UnknownFunction { name, available })` if it is still not one |
-| `call` / `keep_function` of an animation function worked only after a first `build()` | they work at any time; `function_exists` knows animation functions |
-| a variable or tile name that is a register or keyword (`"a"`, `"LOW"`), or not an identifier, failed in `build()` or in rgbasm | panics in `create_*` / `tiles.add_*` / `add_sprite` |
-| an `Instr` built by hand that `Instr::check` rejects, given to `init`, `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` or an input action, panicked in `build()` | panics at that call |
-| `gb.set_sprite_size(..)`, `set_background_tilemap`, `set_animation_delay`, `use_function` | unchanged, or all at once: `RustBoy::with_config(RustBoyConfig::default().sprite_size(..).palettes(..))`; `gb.config()` reads them; `set_palettes(Palettes)` is new |
-| `rBGP` / `rOBP0` / `rOBP1` were always `%11100100`, and LCDC always had `BGON` and `OBJON` | the defaults of `RustBoyConfig::palettes` and `RustBoyConfig::lcdc`, which can change them |
+| a user function also defined as a variable, a constant / `DEF` / raw label, or an external file: rgbasm reported the name defined twice, or the call reached the other definition | `Err(Error::NameConflict { name, first: Definition::Function, second })` |
+| a program that created `wFrameCounter` (or `wCurKeys`, `wNewKeys`) itself got a second label (rgbasm: "already defined") | the program's variable is used; with another type than `u8`, `Err(Error::NameConflict { .., second: Definition::GeneratedVariable(VarType::U8) })` |
+| code or data in a RAM section, or a section name used twice: rgbasm failed | `Err(Error::Section(message))` |
+| variables past WRAM0 were not checked (rgblink failed, or the counter wrapped) | `build()` returns `Err(Error::MemoryFull { region, what, needed, available })` |
+| `gb.call("X")`, `call_args("X", ..)` panicked when `X` was not (yet) a function | `X` may be defined after the call; `build()` returns `Err(Error::UnknownFunction { name, available })` if it is still not one (`keep_function`, new, the same) |
+| `call` of an animation function worked only after a first `build()` | it works at any time; `function_exists` knows animation functions |
+| a variable, tile or section name that RGBDS rejects (`"a"`, `"LOW"`, `"my tiles"`, a `"` in a section name) failed in rgbasm | panics in `create_*` / `tiles.add_*` / `add_sprite` / `create_in_section` / `Routine::with_variable` |
+| an `Instr` built by hand with an operand RGBDS rejects (`ld a, 300`), given to `init`, `add_to_main_loop`, `call_args`, `define_function` or an input action, failed in rgbasm | panics at that call (`Instr::check`) |
+| every sprite was 8x16, the background showed `$9800`, the animation delay was 8, and `rBGP` / `rOBP0` were `%11100100` | settings, all in `RustBoyConfig` (`RustBoy::with_config(RustBoyConfig::default().sprite_size(..).palettes(..))`, read with `gb.config()`), or with the setters `set_sprite_size`, `set_background_tilemap`, `set_animation_delay`, `set_palettes`, `use_function`. Defaults: 8x8 sprites (see table 3), `$9800`, 8, `%11100100` for `rBGP`, `rOBP0` **and** `rOBP1`, LCDC `BGON` and `OBJON` (`RustBoyConfig::lcdc`) |
+| `gb.sprites.get(id)` returned an `Option<&SpriteData>`, a type that was not exported | not public any more (`pub(crate)`); keep the values given to `add_sprite` |
 | `SECTION "Variables", WRAM0` (floating) | `SECTION "Variables", WRAM0[$C000]`: each variable section is at its address. A `raw()` section fixed where the variables are now overlaps them; let it float |
-| `get_address`: creation order across sections | section by section, in first-use order: the address the variable has when linked |
+| `get_address`: creation order across sections | section by section, in first-use order: the address the variable has when linked, once the program's variables are created (`build()` puts its own at the end of the last section) |
 | no HRAM variables | `gb.vars.create_hram_u8("hSpeed", 0)` (also `u16`, `i8`, `i16`): `Var::set` / `get` use `ldh`; HRAM gives variables $FF80-$FFBF, and the stack keeps the rest |
 | `MemoryRegion` matched exhaustively | `MemoryRegion` is `#[non_exhaustive]`, and it has `SpriteTiles`, `BackgroundTiles`, `Wram0`, `Hram`: add a `_` arm |
 
@@ -117,7 +119,6 @@ names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`.
 |---|---|
 | `memcopy()`, `wait_vblank()`, `wait_not_vblank()`, `update_keys()`, `get_tile_by_pixel()`, `is_specific_tile(..)` returned `Vec<Instr>` | they return a `Routine`. `asm.emit_all(memcopy())` and `code.extend(memcopy())` work as before; `memcopy().body()` or `Vec::<Instr>::from(memcopy())` gives the instructions |
 | `gb.define_function("IsWallTile", is_specific_tile("IsWallTile", ..))` | `gb.define_routine(is_specific_tile("IsWallTile", ..))`, which keeps the routine's dependencies and calling convention. `define_function` still takes a `Vec<Instr>` |
-| `BuiltinFunction::variables()` returned `&'static [&'static str]` | it returns `Vec<String>` |
 | `Delay` was the engine's own (private) | `stdlib::utility::delay()` |
 | `gb_std::graphics::sprites::SpriteManager` (`sm.add_sprite(x, y, tile, flags)`, `sm.draw()`, `sm.get_sprite(i)`) | `Sprite::new(oam_entry, x, y, tile, flags)` values and `draw_sprites([&a, &b])`; call the sprite's own methods (`ball.get_pivot(..)`) |
 | `gb_std` `Sprite::new(40, ..)` (any id) | panics: the id is an OAM entry, 0 to 39 |
@@ -157,14 +158,16 @@ names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`.
 | `asm.chunk(Chunk::Functions)` on an `Asm` | an `Asm` is printed in the order it is written. Build a part early in a `Block` and emit it later, or use an `engine::Layout` and `layout.program()` |
 | `asm.get_chunk(chunk)`, `asm.get_main_instrs()` | `layout.get_chunk(chunk)`; `asm.instrs()` |
 | a fresh `Asm` used as a scratch buffer | `Block` (the same builder methods), `block.into_instrs()` |
-| `LabelAllocator::new()` beside an `Asm` program | `asm.labels()`, the program's allocator |
-| `LabelAllocator::local("check left")` (any text) | panics: a stem is made of identifier characters |
-| generated labels `ClearOam`, `AnimEnd`, `.check_left_N_end`, `.spriteK_left_limit_N_store` / `_end` | `.clear_oam_N`, `.anim_end_N`, `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` |
+| the `If` counter (`.end_if_N`), and fixed labels for the snippets | every generated label comes from the program's `asm::LabelAllocator`, `asm.labels()` / `gb.labels()` (B7) |
+| generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`, `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
 | a `jr` out of range (or to an external symbol) failed in rgbasm | it is printed as `jp`, one byte longer. Code of fixed size or timing must write jumps that reach. A target `Label + 2`, or `@` used elsewhere than `ds N - @`, leaves the program unrelaxed |
 
-### 6. Hardware facts (`hw`)
+### For users of the `refactor` branch
 
-| Before | After |
+These APIs were added on `refactor` and changed again before the release; `main` never had them. A program written
+against `refactor` needs, besides the tables above:
+
+| On `refactor` | In the release |
 |---|---|
 | `hw::LCDC`, `LY`, `P1`, `BGP`, `OBP0`, `OBP1`, `OAMRAM`, `LCDCF_*`, `P1F_*` were `&str` | `hw::Symbol`s: pass them to the builders as they are (`ld_addr_def_a(hw::LCDC)`); `Expr::from(hw::LCDCF_ON)`; `.name` for the text |
 | `hw::SCRN0`, `SCRN1` were `u16`; `OAM_COUNT`, `OAM_ENTRY_SIZE`, `OAMA_*` were `u8` | `hw::Symbol`s: `.value` for the number |
@@ -173,3 +176,9 @@ names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`.
 | `hw::oam_offset(index, 1)` | `hw::oam_offset(index, hw::OAMA_X)`; panics past OAM or on another symbol than an `OAMA_*` |
 | `format!("{}", hw::LCDC)` | `hw::LCDC.name` (`Symbol` has no `Display`) |
 | `asm.cp(hw::LCDC)` (an address in an 8-bit ALU operand) | does not compile (the ALU takes a `Symbol<u8>`); write `asm.cp(hw::LCDC.name)` if it is really meant |
+| `BuiltinFunction::variables()` returned `&'static [&'static str]` | it returns `Vec<String>` |
+| `LabelAllocator::new()` beside an `Asm` program | `asm.labels()`, the program's allocator |
+| `LabelAllocator::local("check left")` (any text) | panics: a stem is made of identifier characters |
+| `.check_left_N_end`, `.spriteK_left_limit_N_store` / `_end` | `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` |
+| `create_*` panicked when WRAM0 was full; `call` / `keep_function` panicked on an unknown name; `build()` panicked on a name conflict | `build()` returns the `Error` (table 2) |
+| `RustBoy::set_sprite_size` / `set_background_tilemap` | unchanged, and also `RustBoyConfig` |

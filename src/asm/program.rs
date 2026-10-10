@@ -19,7 +19,7 @@ use std::fmt::Display;
 /// lines separated by a blank line ([`Asm::blank_line`]). Each instruction is checked when
 /// it is emitted, against its operands ([`Instr::check`]) and against the section it lands
 /// in: code or data in a RAM section, or a section name used twice, panics (see
-/// [`Section`](super::Section)). How a game is laid out (header, start-up code, main loop,
+/// [`Section`]). How a game is laid out (header, start-up code, main loop,
 /// functions, data, ...) is the engine's business (`engine::Layout`), not this type's.
 pub struct Asm {
     instrs: Vec<Instr>,
@@ -96,7 +96,7 @@ impl Asm {
     /// # Panics
     /// Panics if [`Instr::check`] rejects one of its operands, or if it does not belong in
     /// the section it lands in: code or data in a RAM section, a section name used twice
-    /// (see [`Section`](super::Section)).
+    /// (see [`Section`]).
     ///
     /// ```should_panic
     /// use rust_boy::asm::{Asm, Section};

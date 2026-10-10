@@ -1,10 +1,12 @@
 //! The types most programs use, in one import: `use rust_boy::prelude::*;`
 //!
-//! It brings the engine ([`RustBoy`], its settings, its errors, sprites, tiles, variables,
-//! inputs), the control flow and routines of [`stdlib`](crate::stdlib) (`If`, `IfA`,
-//! `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`), the building blocks of
-//! [`asm`](crate::asm) for code written by hand (`Block`, `Expr`, `R8`, `R16`, `Mem`,
-//! `Condition`, `Section`), and the [`hw`](crate::hw) module itself (`hw::LCDC`, ...).
+//! It brings the engine ([`RustBoy`], its settings, its errors with what they hold
+//! (`Definition`, `MemoryRegion`), sprites, tiles, variables, inputs), the control flow
+//! and routines of [`stdlib`](crate::stdlib) (`If`, `IfA`, `IfConst`, `IfCall`, `Call`,
+//! `Routine`, `Regs`, `PadButton`), the building blocks of [`asm`](crate::asm) for code
+//! written by hand (`Block`, `Expr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and
+//! `Emittable` with the `LabelAllocator` its `emit` takes), and the [`hw`]
+//! module itself (`hw::LCDC`, ...).
 //! Everything else is in its layer: [`asm`](crate::asm), [`stdlib`](crate::stdlib),
 //! [`engine`](crate::engine).
 //!
@@ -31,11 +33,13 @@
 //! }
 //! ```
 
-pub use crate::asm::{Asm, Block, Condition, Emittable, Expr, Instr, Mem, R8, R16, Section};
+pub use crate::asm::{
+    Asm, Block, Condition, Emittable, Expr, Instr, LabelAllocator, Mem, R8, R16, Section,
+};
 pub use crate::engine::{
-    ANIM_DISABLED, AnimationType, BuiltinFunction, Chunk, CompositeSpriteId, Error, InputManager,
-    Layout, Lcdc, Palettes, RustBoy, RustBoyConfig, SpriteId, SpriteSize, TileSource, TilemapArea,
-    Var, VarType,
+    ANIM_DISABLED, AnimationType, BuiltinFunction, Chunk, CompositeSpriteId, Definition, Error,
+    InputManager, Layout, Lcdc, MemoryRegion, Palettes, RustBoy, RustBoyConfig, SpriteId,
+    SpriteSize, TileSource, TilemapArea, Var, VarType,
 };
 pub use crate::hw;
 pub use crate::stdlib::flow::{Call, If, IfA, IfCall, IfConst};

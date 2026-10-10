@@ -14,6 +14,13 @@
 //!   ([`Instr::size`]) between them, and the offset from the end of the `jr` must be in
 //!   -128..=127.
 //!
+//! **Sections.** Each typed [`Instr::Section`](super::Section) starts a new block, whatever
+//! its memory type, address, bank or kind: rgblink places every section on its own, so a
+//! label in another one is out of reach of a `jr` even when it follows in the text, also
+//! the next piece of a `FRAGMENT` of the same name (other files can add pieces in between)
+//! or a section after a RAM section. A raw line that opens a section is a line of code of
+//! unknown size, which ends a block too.
+//!
 //! Every other `jr` becomes a `jp` with the same condition and target: a target out of
 //! range, in another section, unknown to the program (an external symbol, a label of an
 //! `INCLUDE`d file or of a raw line, an anonymous label `:+`), defined twice, an absolute
@@ -139,17 +146,16 @@ fn uses_here(code: &str) -> bool {
 /// Whether `instr` is the padding `ds N - @` (up to the address N): it keeps its meaning
 /// when the code before it grows
 fn is_padding(instr: &Instr) -> bool {
-    let Instr::Ds {
-        num_bytes,
-        starter_point,
-    } = instr
-    else {
+    let Instr::Ds { count, fill } = instr else {
         return false;
     };
-    let padding = num_bytes
+    let padding = count
         .split_once('-')
         .is_some_and(|(end, here)| here.trim() == "@" && parse_number(end.trim()).is_some());
-    padding && !code_lines(starter_point).iter().any(|code| uses_here(code))
+    padding
+        && !fill
+            .iter()
+            .any(|fill| code_lines(fill).iter().any(|code| uses_here(code)))
 }
 
 /// Whether `program` uses `@` anywhere but in a jump target (which [`classify`] reads) or a
@@ -391,14 +397,14 @@ fn relax(program: &[Instr]) -> Option<(Vec<bool>, Vec<(usize, usize)>, Vec<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gb_asm::label_check::{jr_range_errors, rgbds_rom};
-    use crate::gb_asm::{Asm, Chunk, Condition, R8};
+    use crate::gb_asm::label_check::{jr_range_errors, rgbds_rom, rgbds_rom_and_symbols};
+    use crate::gb_asm::{Asm, Chunk, Condition, R8, Section};
 
     /// A program in one ROM0 section at $0000, starting with the global label `Main`,
     /// then the code `build` writes
     fn one_section(build: impl FnOnce(&mut Asm)) -> Asm {
         let mut asm = Asm::new();
-        asm.section("Code", "ROM0[$0000]").label("Main");
+        asm.section(Section::rom0("Code").at(0x0000)).label("Main");
         build(&mut asm);
         asm
     }
@@ -621,7 +627,7 @@ mod tests {
     fn test_what_cannot_be_measured_becomes_jp() {
         let mut asm = Asm::new();
         asm.raw("DEF S EQUS \"1, 2, 3, 4\"")
-            .section("Code", "ROM0[$0000]")
+            .section(Section::rom0("Code").at(0x0000))
             .label("Main")
             // A label of another section, right after in the text
             .jr("Other")
@@ -653,13 +659,13 @@ mod tests {
             .raw("    ; a comment")
             .db("1, $FF, %101")
             .dw("$8000, 2")
-            .ds("4", "0")
+            .ds_fill("4", "0")
             .comment("note")
             .label(".measured")
             // A jp stays a jp, however close
             .jp(".measured")
             .ret()
-            .section("Other", "ROM0[$0100]")
+            .section(Section::rom0("Other").at(0x0100))
             .label("Other")
             .ret();
         let program = asm.program();
@@ -727,7 +733,8 @@ mod tests {
         // program, in their order, and each one keeps its own instructions
         let build = || {
             let mut asm = Asm::new();
-            asm.chunk(Chunk::Header).section("Code", "ROM0[$0000]");
+            asm.chunk(Chunk::Header)
+                .section(Section::rom0("Code").at(0x0000));
             asm.chunk(Chunk::MainLoop).label("Main").jr("Done");
             asm.chunk(Chunk::Functions);
             nops(&mut asm, 200);
@@ -790,8 +797,15 @@ mod tests {
             ),
             (
                 Instr::Ds {
-                    num_bytes: text("4"),
-                    starter_point: text("0"),
+                    count: text("4"),
+                    fill: Some(text("0")),
+                },
+                Some(4),
+            ),
+            (
+                Instr::Ds {
+                    count: text("4"),
+                    fill: None,
                 },
                 Some(4),
             ),
@@ -810,13 +824,7 @@ mod tests {
                 Some(0),
             ),
             (Instr::Raw { line: text("") }, Some(0)),
-            (
-                Instr::Section {
-                    name: text("Code"),
-                    mem_type: text("ROM0"),
-                },
-                Some(0),
-            ),
+            (Instr::Section(Section::rom0("Code")), Some(0)),
             (Instr::Comment { text: text("note") }, Some(0)),
             // Only RGBDS knows these
             (
@@ -834,8 +842,8 @@ mod tests {
             (Instr::Db { values: text("") }, None),
             (
                 Instr::Ds {
-                    num_bytes: text("$150 - @"),
-                    starter_point: text("0"),
+                    count: text("$150 - @"),
+                    fill: Some(text("0")),
                 },
                 None,
             ),
@@ -1011,7 +1019,7 @@ mod tests {
         let asm = one_section(|asm| {
             asm.jr(".far")
                 .jr("@+2")
-                .section("Other", "ROM0")
+                .section(Section::rom0("Other"))
                 .label("Other");
             nops(asm, 128);
             asm.label(".far").ret();
@@ -1089,7 +1097,7 @@ mod tests {
         // The padding `ds N - @`, `@` in a comment or a string, and a name with `@` in it
         // keep the relaxation
         let asm = one_section(|asm| {
-            asm.ds("$10 - @", "0")
+            asm.ds_fill("$10 - @", "0")
                 .comment("@param a: nothing")
                 .db("\"a@b\"")
                 .label("a@b")
@@ -1148,5 +1156,96 @@ mod tests {
             asm.jr("@+$04").nop().nop().ret();
         });
         assert_eq!(jr_range_errors(&asm.program()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_typed_sections_split_the_relaxation() {
+        // Each typed SECTION starts a new block, whatever its kind: a jr to a label of
+        // another section is a jp, even a FRAGMENT of the same name (rgblink places each
+        // piece on its own) or a section that follows in the text with only a RAM section
+        // in between. Inside a section, a jr that reaches stays a jr.
+        let mut asm = Asm::new();
+        asm.section(Section::rom0("Code").at(0x0000))
+            .label("Main")
+            .jr(".near");
+        nops(&mut asm, 10);
+        asm.label(".near")
+            .jr("Far")
+            .jr("Second")
+            .jr("AfterRam")
+            .ret()
+            .section(Section::wram0("Vars"))
+            .label("wByte")
+            .ds("1")
+            .section(Section::rom0("Next"))
+            .label("AfterRam")
+            .jr("AfterRam")
+            .section(Section::rom0("Pieces").fragment())
+            .label("First")
+            .jr("First")
+            .section(Section::rom0("Pieces").fragment())
+            .label("Second")
+            .jr("First")
+            .section(Section::romx("Far").at(0x4000).bank(1).align(8))
+            .label("Far")
+            .jr("Far")
+            .jr("Main");
+        let program = asm.program();
+        let kinds: Vec<(&str, &str)> = program
+            .iter()
+            .filter_map(|instr| match instr {
+                Instr::Jr {
+                    target: JumpTarget::Label(target),
+                } => Some(("jr", target.as_str())),
+                Instr::Jp {
+                    target: JumpTarget::Label(target),
+                } => Some(("jp", target.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("jr", ".near"),
+                ("jp", "Far"),
+                ("jp", "Second"),
+                ("jp", "AfterRam"),
+                ("jr", "AfterRam"),
+                ("jr", "First"),
+                ("jp", "First"),
+                ("jr", "Far"),
+                ("jp", "Main"),
+            ]
+        );
+        assert_eq!(jr_range_errors(&program), Vec::<String>::new());
+
+        // RGBDS assembles it, and each jump lands on its label wherever rgblink put it
+        let Some((rom, symbols)) = rgbds_rom_and_symbols(&asm.to_asm()) else {
+            return;
+        };
+        let at = |label: &str| {
+            let (bank, address) = symbols[label];
+            match bank {
+                0 => usize::from(address),
+                bank => bank as usize * 0x4000 + usize::from(address - 0x4000),
+            }
+        };
+        let address = |label: &str| symbols[label].1.to_le_bytes();
+        let jp = |label: &str| [vec![0xC3], address(label).to_vec()].concat();
+        // Main: jr .near (over 10 nops), then three jp
+        assert_eq!(rom[at("Main")..at("Main") + 2], [0x18, 10]);
+        let near = at("Main.near");
+        assert_eq!(rom[near..near + 3], jp("Far")[..]);
+        assert_eq!(rom[near + 3..near + 6], jp("Second")[..]);
+        assert_eq!(rom[near + 6..near + 9], jp("AfterRam")[..]);
+        // A jr to itself is `18 FE`
+        assert_eq!(rom[at("AfterRam")..at("AfterRam") + 2], [0x18, 0xFE]);
+        assert_eq!(rom[at("First")..at("First") + 2], [0x18, 0xFE]);
+        assert_eq!(rom[at("Second")..at("Second") + 3], jp("First")[..]);
+        assert_eq!(symbols["Far"], (1, 0x4000));
+        assert_eq!(
+            rom[at("Far")..at("Far") + 5],
+            [0x18, 0xFE, 0xC3, 0x00, 0x00]
+        );
     }
 }

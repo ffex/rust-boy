@@ -28,6 +28,7 @@ use std::fmt;
 
 use super::expr::{Expr, parse_number};
 use super::labels::code_lines;
+use super::section::Section;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Instr {
@@ -217,9 +218,11 @@ pub enum Instr {
     },
 
     // Assembler directives
+    /// `ds count` (reserve `count` bytes: the only data a RAM section takes) or
+    /// `ds count, fill` (`count` bytes of `fill`, ROM only)
     Ds {
-        num_bytes: String,
-        starter_point: String,
+        count: String,
+        fill: Option<String>,
     },
     Include {
         file: String,
@@ -233,10 +236,8 @@ pub enum Instr {
         label: String,
         value: String,
     },
-    Section {
-        name: String,
-        mem_type: String,
-    },
+    /// A typed `SECTION` directive
+    Section(Section),
     Label {
         name: String,
     },
@@ -295,6 +296,7 @@ impl Instr {
                     bit
                 ))
             }
+            Instr::Section(section) => section.check(),
             Instr::Rst { vector } if vector % 8 != 0 || *vector > 0x38 => Err(format!(
                 "rst ${:02x}: the vector must be one of $00, $08, $10, $18, $20, $28, $30, $38",
                 vector
@@ -402,7 +404,7 @@ impl Instr {
             | Instr::JpCond { .. }
             | Instr::Call { .. }
             | Instr::CallCond { .. } => 3,
-            Instr::Ds { num_bytes, .. } => plain_number(num_bytes)?,
+            Instr::Ds { count, .. } => plain_number(count)?,
             Instr::Db { values } => data_items(values)?,
             Instr::Dw { value } => 2 * data_items(value)?,
             Instr::Incbin {

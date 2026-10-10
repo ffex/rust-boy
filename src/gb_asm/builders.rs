@@ -470,10 +470,20 @@ macro_rules! instruction_builders {
         // Assembler directives
         // ============================================
 
-        pub fn ds(&mut self, num_bytes: &str, starter_point: &str) -> &mut Self {
+        /// `ds count`: reserve `count` bytes (an RGBDS expression: `4`, `$150 - @`), the way
+        /// a RAM section takes room; in ROM, rgblink fills them with its padding value
+        pub fn ds(&mut self, count: &str) -> &mut Self {
             self.emit(Instr::Ds {
-                num_bytes: num_bytes.to_string(),
-                starter_point: starter_point.to_string(),
+                count: count.to_string(),
+                fill: None,
+            })
+        }
+
+        /// `ds count, fill`: `count` bytes of `fill` (ROM only: a RAM section holds no data)
+        pub fn ds_fill(&mut self, count: &str, fill: &str) -> &mut Self {
+            self.emit(Instr::Ds {
+                count: count.to_string(),
+                fill: Some(fill.to_string()),
             })
         }
 
@@ -521,11 +531,17 @@ macro_rules! instruction_builders {
             })
         }
 
-        pub fn section(&mut self, name: &str, mem_type: &str) -> &mut Self {
-            self.emit(Instr::Section {
-                name: name.to_string(),
-                mem_type: mem_type.to_string(),
-            })
+        /// `SECTION ...`: the code and data that follow go in `section` (see [`Section`])
+        ///
+        /// ```
+        /// use rust_boy::gb_asm::{Block, Section};
+        ///
+        /// let mut asm = Block::new();
+        /// asm.section(Section::wram0("Variables")).label("wScore").ds("1");
+        /// assert_eq!(asm[0].to_string(), r#"SECTION "Variables", WRAM0"#);
+        /// ```
+        pub fn section(&mut self, section: Section) -> &mut Self {
+            self.emit(Instr::Section(section))
         }
 
         pub fn label(&mut self, name: &str) -> &mut Self {

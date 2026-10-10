@@ -218,10 +218,54 @@ pub(crate) fn rgbds_rom(asm: &str) -> Option<Vec<u8>> {
     std::env::var_os("RGBDS_LINK_CHECK").map(|_| rgbds_link(asm, &[], &["-Weverything", "-Werror"]))
 }
 
+/// The symbols of a linked program (`rgblink -n`): (bank, address) by name
+pub(crate) type Symbols = BTreeMap<String, (u32, u16)>;
+
+/// The ROM that RGBDS makes of `asm`, as [`rgbds_rom`], and its symbols (`rgblink -n`):
+/// the (bank, address) of each label, by name (`Scope.local` for a local label). `None`
+/// unless `RGBDS_LINK_CHECK` is set; panics with the RGBDS errors if it fails.
+pub(crate) fn rgbds_rom_and_symbols(asm: &str) -> Option<(Vec<u8>, Symbols)> {
+    std::env::var_os("RGBDS_LINK_CHECK")?;
+    let (rom, sym) = rgbds_run(asm, &[], &["-Weverything", "-Werror"])
+        .unwrap_or_else(|error| panic!("{}\n\nin:\n{}", error, asm));
+    let symbols = sym
+        .lines()
+        .filter(|line| !line.starts_with(';') && !line.trim().is_empty())
+        .map(|line| {
+            let (place, name) = line.split_once(' ').expect("a line `bank:address name`");
+            let (bank, address) = place.split_once(':').expect("`bank:address`");
+            let bank = u32::from_str_radix(bank, 16).expect("a hexadecimal bank");
+            let address = u16::from_str_radix(address, 16).expect("a hexadecimal address");
+            (name.trim().to_string(), (bank, address))
+        })
+        .collect();
+    Some((rom, symbols))
+}
+
+/// Whether RGBDS assembles `asm` (every warning an error: `-Weverything -Werror`) and
+/// links it: `None` unless the environment variable `RGBDS_LINK_CHECK` is set
+pub(crate) fn rgbds_accepts(asm: &str) -> Option<bool> {
+    std::env::var_os("RGBDS_LINK_CHECK")?;
+    Some(rgbds_run(asm, &[], &["-Weverything", "-Werror"]).is_ok())
+}
+
 /// Assemble `asm` (`rgbasm_flags` added), with `files` next to it, and link it, with
 /// RGBDS in a new temporary directory, and return the ROM; panics with the RGBDS errors
 /// if it fails
 fn rgbds_link(asm: &str, files: &[(&str, &str)], rgbasm_flags: &[&str]) -> Vec<u8> {
+    rgbds_run(asm, files, rgbasm_flags)
+        .unwrap_or_else(|error| panic!("{}\n\nin:\n{}", error, asm))
+        .0
+}
+
+/// Assemble `asm` (`rgbasm_flags` added), with `files` next to it, and link it, with
+/// RGBDS in a new temporary directory: the ROM and the symbol file, or which tool failed
+/// and its errors
+fn rgbds_run(
+    asm: &str,
+    files: &[(&str, &str)],
+    rgbasm_flags: &[&str],
+) -> Result<(Vec<u8>, String), String> {
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -241,7 +285,7 @@ fn rgbds_link(asm: &str, files: &[(&str, &str)], rgbasm_flags: &[&str]) -> Vec<u
     rgbasm.extend(["-I", include, "-o", "main.o", "main.asm"]);
     let steps: [(&str, Vec<&str>); 2] = [
         ("rgbasm", rgbasm),
-        ("rgblink", vec!["-o", "main.gb", "main.o"]),
+        ("rgblink", vec!["-n", "main.sym", "-o", "main.gb", "main.o"]),
     ];
     for (tool, args) in steps {
         let output = Command::new(tool)
@@ -249,17 +293,19 @@ fn rgbds_link(asm: &str, files: &[(&str, &str)], rgbasm_flags: &[&str]) -> Vec<u
             .current_dir(&dir)
             .output()
             .unwrap_or_else(|error| panic!("cannot run {}: {}", tool, error));
-        assert!(
-            output.status.success(),
-            "{} failed:\n{}\n\nin:\n{}",
-            tool,
-            String::from_utf8_lossy(&output.stderr),
-            asm
-        );
+        if !output.status.success() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(format!(
+                "{} failed:\n{}",
+                tool,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
     }
     let rom = std::fs::read(dir.join("main.gb")).expect("cannot read main.gb");
+    let sym = std::fs::read_to_string(dir.join("main.sym")).expect("cannot read main.sym");
     let _ = std::fs::remove_dir_all(&dir);
-    rom
+    Ok((rom, sym))
 }
 
 /// [`assert_labels_ok`] for a piece of generated code, placed after a global label as

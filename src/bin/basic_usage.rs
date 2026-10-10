@@ -1,17 +1,17 @@
-use rust_boy::gb_asm::{Asm, Chunk, Condition, Expr, Mem, R8};
+use rust_boy::gb_asm::{Asm, Chunk, Condition, Expr, Mem, R8, Section};
 
 fn program() -> Asm {
     let mut asm = Asm::new();
 
     // Cartridge header at $100-$14F: rgbfix fills in the logo and checksums
     asm.include_hardware()
-        .section("Header", "ROM0[$100]")
+        .section(Section::rom0("Header").at(0x0100))
         .raw("nop")
         .raw("jp EntryPoint")
-        .ds("$150 - @", "0");
+        .ds_fill("$150 - @", "0");
 
     // Main code section
-    asm.section("Main", "ROM0")
+    asm.section(Section::rom0("Main"))
         .label("EntryPoint")
         .comment("Initialize display")
         .ld_a(0x91)

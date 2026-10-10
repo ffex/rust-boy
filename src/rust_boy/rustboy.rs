@@ -2,7 +2,7 @@
 
 use crate::gb_asm::labels::code_lines;
 use crate::gb_asm::{
-    Asm, Block, Chunk, Expr, Instr, JumpTarget, LabelAllocator, R8, is_identifier,
+    Asm, Block, Chunk, Expr, Instr, JumpTarget, LabelAllocator, R8, Section, is_identifier,
 };
 use crate::gb_std::flow::Emittable;
 use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
@@ -668,7 +668,7 @@ impl RustBoy {
         if !raw_data.is_empty() && self.vars.is_empty() && !opens_section(&raw_data) {
             // No variable section before it: the raw data would land in the ROM0 section
             // of the code, so it gets a WRAM0 section of its own
-            asm.section(RAW_DATA_SECTION, "WRAM0");
+            asm.section(Section::wram0(RAW_DATA_SECTION));
         }
         asm.emit_all(raw_data);
 
@@ -1912,7 +1912,7 @@ mod tests {
                 .ld(R8::A, "RAW_CONST")
                 .call("UpdateKeys")
                 .ret();
-            asm.chunk(Chunk::Data).section("RawData", "WRAM0");
+            asm.chunk(Chunk::Data).section(Section::wram0("RawData"));
             asm.raw("wRawData: db");
             asm.chunk(Chunk::Tiles).label("RawTiles");
             asm.chunk(Chunk::Tilemap).label("RawMap");
@@ -1971,7 +1971,7 @@ mod tests {
         // Raw data that opens its own section (typed or in a raw line) gets none
         for open in [
             |asm: &mut Asm| {
-                asm.section("Mine", "WRAM0");
+                asm.section(Section::wram0("Mine"));
             },
             |asm: &mut Asm| {
                 asm.raw("  ; mine\n  section \"Mine\", HRAM");
@@ -2012,6 +2012,40 @@ mod tests {
         assert!(!data.contains("Raw Data"), "{}", data);
         assert!(data.contains("wScore: db\nwMore: db"), "{}", data);
         assert_links(&gb.build());
+    }
+
+    #[test]
+    fn test_raw_data_reserves_space_only() {
+        // The Data chunk is in WRAM0: labels and `ds n` are fine there
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wScore", 0);
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).label("wBuffer").ds("16");
+        });
+        assert_links(&gb.build());
+
+        // Code or initialised data there is rejected when the program is built (rgbasm
+        // rejected it: "cannot contain code or data")
+        for write in [
+            |asm: &mut Asm| {
+                asm.ld_a(1);
+            },
+            |asm: &mut Asm| {
+                asm.db("1, 2");
+            },
+            |asm: &mut Asm| {
+                asm.ds_fill("4", "0");
+            },
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(|asm| write(asm.chunk(Chunk::Data)));
+            let message = crate::rust_boy::panic_message(|| gb.build());
+            assert!(
+                message.contains("in the WRAM0 section \"Raw Data\": a RAM section holds no code"),
+                "{}",
+                message
+            );
+        }
     }
 
     #[test]

@@ -2,7 +2,7 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, Block, R8},
+    gb_asm::{Asm, Block, R8, Section},
     gb_std::{
         flow::If,
         graphics::{
@@ -211,10 +211,10 @@ fn main() {
 
     // Variables management
     asm.chunk(rust_boy::gb_asm::Chunk::Data);
-    let mut counter_sec = VariableSection::new("Counter", "WRAM0");
-    let mut input_vars_sec = VariableSection::new("Input Variables", "WRAM0");
-    let mut ball_data_sec = VariableSection::new("Ball Data", "WRAM0");
-    let mut score_sec = VariableSection::new("Score", "WRAM0");
+    let mut counter_sec = VariableSection::new(Section::wram0("Counter"));
+    let mut input_vars_sec = VariableSection::new(Section::wram0("Input Variables"));
+    let mut ball_data_sec = VariableSection::new(Section::wram0("Ball Data"));
+    let mut score_sec = VariableSection::new(Section::wram0("Score"));
 
     counter_sec.add_data("wFrameCounter", "db");
     input_vars_sec.add_data("wCurKeys", "db");

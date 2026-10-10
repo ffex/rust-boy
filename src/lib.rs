@@ -7,14 +7,14 @@ pub mod rust_boy;
 
 #[cfg(test)]
 mod tests {
-    use super::gb_asm::{Asm, Chunk, Condition};
+    use super::gb_asm::{Asm, Chunk, Condition, Section};
 
     #[test]
     fn test_basic_assembly_generation() {
         let mut asm = Asm::new();
 
         asm.include_hardware()
-            .section("Main", "ROM0")
+            .section(Section::rom0("Main"))
             .label("Start")
             .ld_a(0x42)
             .ret();

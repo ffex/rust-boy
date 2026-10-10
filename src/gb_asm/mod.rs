@@ -11,6 +11,7 @@ mod isa_tests;
 pub(crate) mod label_check;
 pub mod labels;
 mod relax;
+pub mod section;
 #[cfg(test)]
 pub(crate) mod test_cpu;
 
@@ -22,3 +23,4 @@ pub use instr::{
     AluOperand, Condition, Dst, IncDec, Instr, JumpTarget, Mem, Operand, R8, R16, R16Stack,
 };
 pub use labels::{LabelAllocator, is_identifier};
+pub use section::{Align, MemoryType, Section, SectionKind};

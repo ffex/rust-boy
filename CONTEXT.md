@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 301 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `rust_boy::Error`, `RustBoy::build`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 306 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -223,7 +223,9 @@ rgbfix -v -p 0xFF main.gb
    clear the whole OAM (always, with `gb_std`'s `initialize_objects_screen` + `clear_objects_screen`) and write
    the initial sprites → `rBGP`, `rOBP0`, `rOBP1` = `%11100100` → create animation variables → **variable
    initialisation** → **user `init()` code** → LCD on (`LCDCF_ON|BGON|OBJON` + `OBJ8`, or `OBJ16` after
-   `set_sprite_size(Size8x16)`). (Since [B11](#b11)/[B28](#b28); before, user code ran before the variables were
+   `set_sprite_size(Size8x16)`). Since `refactor-p2-engine-api-config` these values come from the program's
+   `RustBoyConfig`: `palettes` (`%11100100` each by default; `a` is loaded once per value), `lcdc` (`BGON`, `OBJON`),
+   `sprite_size`, `background_tilemap` (`| LCDCF_BG9C00`). (Since [B11](#b11)/[B28](#b28); before, user code ran before the variables were
    set, the palettes after LCD on, `rOBP1` was never set and the OAM was cleared only when sprites existed.)
 4. **MainLoop**: `Main:` → `call WaitNotVBlank` → `call WaitVBlank` → animation dispatcher → user main-loop
    code (incl. `UpdateKeys` + key checks) → `jp Main`.
@@ -445,6 +447,27 @@ The problems are where each layer reaches across the line:
    | a variable named like a register or keyword (`"a"`, `"LOW"`), or not an identifier (`"w Score"`), panicked in `build()` | panics in `create_*` ("invalid variable name") |
    | a tile name that is not a symbol (`tiles.add_background("my tiles", ..)`, a sprite `"A"` or `"Low"`) panicked in `build()` (rgbasm rejected it before) | panics in `tiles.add_*` / `add_sprite` ("invalid tile name") |
    | an `Instr` built by hand that `Instr::check` rejects (`ld a, 300`), given to `init`, `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` or an `InputManager` action, panicked in `build()` | panics at that call |
+
+   *Since `refactor-p2-engine-api-config`:* the settings of a program are one value, `rust_boy::RustBoyConfig`, given
+   to `RustBoy::with_config` (`RustBoy::new()` is `with_config(RustBoyConfig::default())`, and `RustBoy::config()` reads
+   it): `sprite_size` (`SpriteSize`, 8x8), `background_tilemap` (`TilemapArea`, `$9800`), `palettes` (`Palettes { bgp,
+   obp0, obp1 }`, `%11100100` each), `lcdc` (`Lcdc { background, objects }`, both on), `builtins` (the builtins emitted
+   even if unused, none) and `animation_delay` (8). The defaults are the settings `RustBoy::new` had, so the default
+   output is byte-identical (`test_config_defaults_reproduce_the_output`: the defaults, the same program from `new()`,
+   the default config and every default written out, and the exact palette and LCDC lines). `RustBoyConfig` and `Lcdc`
+   are `#[non_exhaustive]` (a setting can be added later, e.g. the window in Phase 3): build one from `default()` with
+   the builder methods, one per field. The setters stay and change the same settings (`set_sprite_size`,
+   `set_background_tilemap`, `set_animation_delay`, `use_function`, and `set_palettes`, new); the sprite size is also the
+   sprite manager's, which needs it when a sprite is added, so both are set together. The background tile data
+   (`LCDCF_BG8800`, the engine's VRAM layout) and the window (off; Phase 3) are not settings. Tests:
+   `test_config_and_setters_give_the_same_program`, `test_a_forced_builtin_comes_from_the_config`,
+   `test_palettes_from_the_config` and `test_lcdc_flags_from_the_config` (the start-up code on `gb_asm::test_cpu`: each
+   palette register and the `rLCDC` value). `fosdem` uses `with_config` (the same asm). Not breaking, except for one row:
+
+   | Before | After |
+   |---|---|
+   | `FunctionRegistry` kept the builtins of `use_function` (internal) | they are `RustBoyConfig::builtins`; `use_function` works as before |
+   | (new) | `RustBoy::with_config(RustBoyConfig::default().sprite_size(..).palettes(..))`, `RustBoy::config()`, `RustBoy::set_palettes(Palettes)` |
 
 ### Proposed target
 
@@ -672,7 +695,8 @@ initial sprites → default palettes → every variable set to its initial value
 One difference from the fix above: **`rLCDC` stays after the user code**, because turning the LCD on ends
 the start-up, and `init()` code keeps running with the LCD off, so it can still write VRAM and OAM freely; an
 `rLCDC` value written in `init()` is still replaced (documented on `RustBoy::init`; LCDC flags belong to the
-Phase 2 `RustBoyConfig`). Also documented there, and not new: `init()` code must not wait for VBlank, because with
+Phase 2 `RustBoyConfig`: since `refactor-p2-engine-api-config`, `RustBoyConfig::lcdc`, `sprite_size` and
+`background_tilemap`, and the palettes are `RustBoyConfig::palettes`). Also documented there, and not new: `init()` code must not wait for VBlank, because with
 the LCD off `rLY` stays 0 and the wait never ends. Tests run the start-up code (`RustBoy::build_layout`, `build_asm` then, the `Init` chunk) on
 `gb_asm::test_cpu`, which now models the register pairs `bc`/`de`/`hl` as symbolic addresses
 (`ld hl, _OAMRAM` + `ld [hli], a`; one address has one name, `_OAMRAM+4+1` is `_OAMRAM+5`), stubbed routines

@@ -7,6 +7,7 @@ use crate::gb_std::graphics::sprites::{clear_objects_screen, initialize_objects_
 use crate::gb_std::routine::Routine;
 use crate::hw;
 
+use super::config::{Palettes, RustBoyConfig};
 use super::error::Error;
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
@@ -14,11 +15,6 @@ use super::layout::{Chunk, Layout};
 use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
 use super::tiles::{TileManager, TilemapArea};
 use super::variables::VariableManager;
-
-/// The palette `build()` writes to `rBGP`, `rOBP0` and `rOBP1` at start-up: colour i
-/// shows shade i (0 lightest, 3 darkest), so both object palettes look like the
-/// background one until the program changes them
-const DEFAULT_PALETTE: u8 = 0b11100100;
 
 /// The `WRAM0` section `build()` opens for the `raw()` code of `Chunk::Data` when no
 /// variable section comes before it and it opens none itself
@@ -92,19 +88,34 @@ pub struct RustBoy {
     /// Main loop code
     main_loop_code: Vec<Instr>,
 
-    /// Animation delay value in frames (higher = slower animations)
-    animation_delay: u8,
-
-    /// The tilemap the background shows (LCDC bit 3)
-    background_tilemap: TilemapArea,
+    /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
+    /// builtins, animation delay. The sprite size is also the sprite manager's, which
+    /// needs it when a sprite is added: `with_config` and `set_sprite_size` set both
+    config: RustBoyConfig,
 }
 
 impl RustBoy {
-    /// Create a new RustBoy instance
+    /// Create a new RustBoy instance, with the default settings
+    /// ([`RustBoyConfig::default`])
     pub fn new() -> Self {
+        Self::with_config(RustBoyConfig::default())
+    }
+
+    /// Create a new RustBoy instance with the settings `config`
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::rust_boy::{RustBoy, RustBoyConfig, SpriteSize};
+    ///
+    /// let gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    /// assert_eq!(gb.sprite_size(), SpriteSize::Size8x16);
+    /// ```
+    pub fn with_config(config: RustBoyConfig) -> Self {
         let asm = Layout::new();
+        let mut sprites = SpriteManager::new(asm.labels().clone());
+        sprites.set_size(config.sprite_size);
         Self {
-            sprites: SpriteManager::new(asm.labels().clone()),
+            sprites,
             asm,
             tiles: TileManager::new(),
             vars: VariableManager::new(),
@@ -112,15 +123,29 @@ impl RustBoy {
             constants: Vec::new(),
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
-            animation_delay: 8, // Default: update animation every 8 frames
-            background_tilemap: TilemapArea::default(),
+            config,
         }
+    }
+
+    /// The settings of this program
+    pub fn config(&self) -> &RustBoyConfig {
+        &self.config
     }
 
     /// Set the animation delay value in frames (higher = slower animations)
     /// Default is 8 (animation updates every 8 frames, ~7.5 fps at 60fps)
+    /// ([`RustBoyConfig::animation_delay`])
     pub fn set_animation_delay(&mut self, delay: u8) -> &mut Self {
-        self.animation_delay = delay;
+        self.config.animation_delay = delay;
+        self
+    }
+
+    /// Set the palettes the start-up code writes to `rBGP`, `rOBP0` and `rOBP1` (by
+    /// default `%11100100` each, see [`Palettes`])
+    ///
+    /// The `init()` code runs after they are written, so it can still change them.
+    pub fn set_palettes(&mut self, palettes: Palettes) -> &mut Self {
+        self.config.palettes = palettes;
         self
     }
 
@@ -135,6 +160,7 @@ impl RustBoy {
     /// If sprites were already added with another size: call it before adding sprites.
     pub fn set_sprite_size(&mut self, size: SpriteSize) -> &mut Self {
         self.sprites.set_size(size);
+        self.config.sprite_size = size;
         self
     }
 
@@ -150,13 +176,13 @@ impl RustBoy {
     /// Put a tilemap there with `tiles.add_tilemap_at`. `GetTileByPixel` (and so
     /// `get_pivot` + `GetTileByPixel` collisions) reads the `$9800` map only.
     pub fn set_background_tilemap(&mut self, area: TilemapArea) -> &mut Self {
-        self.background_tilemap = area;
+        self.config.background_tilemap = area;
         self
     }
 
     /// The tilemap the background shows (see [`RustBoy::set_background_tilemap`])
     pub fn background_tilemap(&self) -> TilemapArea {
-        self.background_tilemap
+        self.config.background_tilemap
     }
 
     /// Define a constant value
@@ -288,7 +314,7 @@ impl RustBoy {
     /// Not needed for a builtin the program calls: `build()` emits every builtin and
     /// user function that the generated code refers to (see [`RustBoy::keep_function`]).
     pub fn use_function(&mut self, func: BuiltinFunction) -> &mut Self {
-        self.functions.use_function(func);
+        self.config.builtins.insert(func);
         self
     }
 
@@ -660,10 +686,20 @@ impl RustBoy {
             startup.emit_all(self.sprites.generate_init_code());
         }
 
-        // Default palettes, every one of them (OBP1 too, B28)
-        startup.ld_a(DEFAULT_PALETTE);
-        for palette in [hw::BGP, hw::OBP0, hw::OBP1] {
-            startup.ld_addr_def_a(palette);
+        // The palettes, every one of them (OBP1 too, B28); `a` is loaded again only for
+        // another value
+        let palettes = self.config.palettes;
+        let mut loaded = None;
+        for (register, palette) in [
+            (hw::BGP, palettes.bgp),
+            (hw::OBP0, palettes.obp0),
+            (hw::OBP1, palettes.obp1),
+        ] {
+            if loaded != Some(palette) {
+                startup.ld_a(palette);
+                loaded = Some(palette);
+            }
+            startup.ld_addr_def_a(register);
         }
 
         // Then the variables (below), then the user init code, after every default it
@@ -676,12 +712,16 @@ impl RustBoy {
         // Turn on screen, with the sprite size chosen by set_sprite_size, and the
         // background map chosen by set_background_tilemap (`LCDCF_BG9800` is 0, so it is
         // left out, as before B19)
-        let mut lcdc = Expr::from(hw::LCDCF_ON)
-            | hw::LCDCF_BGON
-            | hw::LCDCF_OBJON
-            | self.sprites.size().lcdc_flag();
-        if self.background_tilemap != TilemapArea::Map9800 {
-            lcdc = lcdc | self.background_tilemap.lcdc_bg_flag();
+        let mut lcdc = Expr::from(hw::LCDCF_ON);
+        if self.config.lcdc.background {
+            lcdc = lcdc | hw::LCDCF_BGON;
+        }
+        if self.config.lcdc.objects {
+            lcdc = lcdc | hw::LCDCF_OBJON;
+        }
+        lcdc = lcdc | self.sprites.size().lcdc_flag();
+        if self.config.background_tilemap != TilemapArea::Map9800 {
+            lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
         }
         finish.ld(R8::A, lcdc);
         finish.ld_addr_def_a(hw::LCDC);
@@ -699,7 +739,7 @@ impl RustBoy {
         if self.sprites.has_animations() {
             asm.emit_all(
                 self.sprites
-                    .generate_animation_calls(&labels, self.animation_delay),
+                    .generate_animation_calls(&labels, self.config.animation_delay),
             );
         }
 
@@ -771,9 +811,9 @@ impl RustBoy {
         ]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
         let generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
-        let functions = self
-            .functions
-            .generate_used(&code, vars.names(), &generated)?;
+        let functions =
+            self.functions
+                .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
         asm.chunk(Chunk::Functions);
         asm.emit_all(functions.code);
 
@@ -1127,10 +1167,13 @@ mod tests {
 
     /// One program that uses every manager whose output order matters
     fn sample_rustboy() -> RustBoy {
+        sample_rustboy_with(RustBoy::new())
+    }
+
+    /// [`sample_rustboy`], from `gb` (a program with its settings, and nothing else yet)
+    fn sample_rustboy_with(mut gb: RustBoy) -> RustBoy {
         use crate::gb_std::inputs::PadButton;
         use crate::rust_boy::{AnimationType, TileSource, VarType};
-
-        let mut gb = RustBoy::new();
 
         gb.tiles
             .add_background("BgTiles", TileSource::from_raw(&[["$00"; 8]]));
@@ -2732,6 +2775,169 @@ mod tests {
                 assert_mem(&cpu, palette, IDENTITY_PALETTE);
             }
         }
+    }
+
+    // ==================== RustBoyConfig ====================
+
+    use crate::rust_boy::{Lcdc, Palettes, RustBoyConfig};
+
+    #[test]
+    fn test_config_defaults_reproduce_the_output() {
+        // The defaults are the settings RustBoy::new had before the configuration existed
+        let config = RustBoyConfig::default();
+        assert_eq!(config.sprite_size, SpriteSize::Size8x8);
+        assert_eq!(config.background_tilemap, TilemapArea::Map9800);
+        assert_eq!(config.palettes, Palettes::all(0b1110_0100));
+        assert_eq!((config.lcdc.background, config.lcdc.objects), (true, true));
+        assert!(config.builtins.is_empty());
+        assert_eq!(config.animation_delay, 8);
+        assert_eq!(RustBoy::new().config(), &config);
+        assert_eq!(RustBoyConfig::new(), config);
+
+        // The same program: with new(), with the default config, and with every default
+        // written out
+        let explicit = RustBoyConfig::new()
+            .sprite_size(SpriteSize::Size8x8)
+            .background_tilemap(TilemapArea::Map9800)
+            .palettes(Palettes::all(0b1110_0100))
+            .lcdc(Lcdc::default().background(true).objects(true))
+            .animation_delay(8);
+        let out = sample_game();
+        for config in [RustBoyConfig::default(), explicit] {
+            assert_eq!(
+                sample_rustboy_with(RustBoy::with_config(config))
+                    .build()
+                    .unwrap(),
+                out
+            );
+        }
+        // And the code it writes for these settings is the code written before
+        let palettes = "    ld a, 228\n    ld [rBGP], a\n    ld [rOBP0], a\n    ld [rOBP1], a\n";
+        assert!(out.contains(palettes), "{}", out);
+        assert_eq!(
+            lcdc_on(&out),
+            "ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8"
+        );
+        assert!(out.contains("cp a, 8\n"), "the animation delay: {}", out);
+    }
+
+    #[test]
+    fn test_config_and_setters_give_the_same_program() {
+        let config = RustBoyConfig::default()
+            .sprite_size(SpriteSize::Size8x16)
+            .background_tilemap(TilemapArea::Map9C00)
+            .palettes(Palettes::default().bgp(0b0001_1011).obp1(0))
+            .builtin(BuiltinFunction::Memcopy)
+            .animation_delay(3);
+        let from_config = RustBoy::with_config(config.clone());
+        let mut from_setters = RustBoy::new();
+        from_setters
+            .set_sprite_size(SpriteSize::Size8x16)
+            .set_background_tilemap(TilemapArea::Map9C00)
+            .set_palettes(Palettes::default().bgp(0b0001_1011).obp1(0))
+            .use_function(BuiltinFunction::Memcopy)
+            .set_animation_delay(3);
+        assert_eq!(from_setters.config(), &config);
+        assert_eq!(from_config.sprite_size(), SpriteSize::Size8x16);
+        assert_eq!(from_config.background_tilemap(), TilemapArea::Map9C00);
+        let program = |gb: RustBoy| {
+            let mut gb = gb;
+            let coin = gb.add_sprite("Coin", tiles(4), 0, 0, 0);
+            gb.sprites
+                .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+            gb.build().unwrap()
+        };
+        let out = program(from_config);
+        assert_eq!(program(from_setters), out);
+        assert!(out.contains("LCDCF_OBJ16 | LCDCF_BG9C00"), "{}", out);
+        assert!(out.contains("cp a, 3\n"), "{}", out);
+        assert_eq!(
+            definitions(&out, "Memcopy"),
+            1,
+            "forced, and used by the copies"
+        );
+        assert_links(&out);
+
+        // The size is the sprite manager's too: an 8x16 config takes 16x16 sprites
+        let mut gb =
+            RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+        gb.add_sprite_16x16("Player", tiles(2), tiles(2), 0, 0, 0);
+    }
+
+    #[test]
+    fn test_a_forced_builtin_comes_from_the_config() {
+        let gb = RustBoy::with_config(RustBoyConfig::default().builtin(BuiltinFunction::Delay));
+        let out = gb.build().unwrap();
+        assert_eq!(definitions(&out, "Delay"), 1);
+        assert_eq!(definitions(&RustBoy::new().build().unwrap(), "Delay"), 0);
+    }
+
+    #[test]
+    fn test_palettes_from_the_config() {
+        // Each register gets its palette, at start-up; `a` is loaded once per value
+        for (palettes, loads) in [
+            (Palettes::all(0x1B), 1),
+            (Palettes::all(0x1B).obp0(0xE4), 3),
+            (Palettes::all(0xE4).obp1(0x00), 2),
+            (Palettes::default().bgp(0xFF).obp0(0x00).obp1(0x55), 3),
+        ] {
+            let mut gb = RustBoy::new();
+            gb.set_palettes(palettes);
+            let cpu = run_startup(&mut gb);
+            assert_mem(&cpu, "rBGP", palettes.bgp);
+            assert_mem(&cpu, "rOBP0", palettes.obp0);
+            assert_mem(&cpu, "rOBP1", palettes.obp1);
+            let out = gb.build().unwrap();
+            let start = out.find("ld [rBGP], a").unwrap() - 20;
+            let end = out.find("ld [rOBP1], a").unwrap();
+            assert_eq!(
+                out[start..end].matches("ld a, ").count(),
+                loads,
+                "{}",
+                &out[start..end]
+            );
+        }
+    }
+
+    #[test]
+    fn test_lcdc_flags_from_the_config() {
+        // The value written to rLCDC when the LCD is turned on, run on the test CPU
+        let cases = [
+            (Lcdc::default(), 0b1000_0011),
+            (Lcdc::default().background(false), 0b1000_0010),
+            (Lcdc::default().objects(false), 0b1000_0001),
+            (
+                Lcdc::default().background(false).objects(false),
+                0b1000_0000,
+            ),
+        ];
+        for (lcdc, value) in cases {
+            for (size, size_bit) in [(SpriteSize::Size8x8, 0), (SpriteSize::Size8x16, 0b100)] {
+                let mut gb =
+                    RustBoy::with_config(RustBoyConfig::default().lcdc(lcdc).sprite_size(size));
+                let (code, mut cpu) = startup(&mut gb);
+                cpu.stubs.insert("Memcopy".to_string());
+                // Not the shortcut of `startup` for the whole default text (0x83, whatever
+                // the size): the value of each flag
+                cpu.consts.retain(|text, _| !text.contains('|'));
+                for flag in [
+                    hw::LCDCF_ON,
+                    hw::LCDCF_BGON,
+                    hw::LCDCF_OBJON,
+                    hw::LCDCF_OBJ8,
+                    hw::LCDCF_OBJ16,
+                ] {
+                    cpu.consts.insert(flag.name.to_string(), flag.value);
+                }
+                cpu.run(&code);
+                assert_mem(&cpu, "rLCDC", value | size_bit);
+            }
+        }
+        let out =
+            RustBoy::with_config(RustBoyConfig::default().lcdc(Lcdc::default().background(false)))
+                .build()
+                .unwrap();
+        assert_eq!(lcdc_on(&out), "ld a, LCDCF_ON | LCDCF_OBJON | LCDCF_OBJ8");
     }
 
     // ==================== Functions (B23, B24, B26, B27) ====================

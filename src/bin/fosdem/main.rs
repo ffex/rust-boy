@@ -1,15 +1,14 @@
 use rust_boy::{
     gb_std::inputs::PadButton,
     rust_boy::{
-        ANIM_DISABLED, AnimationType, Error, InputManager, RustBoy, SpriteSize, TileSource,
+        ANIM_DISABLED, AnimationType, Error, InputManager, RustBoy, RustBoyConfig, SpriteSize,
+        TileSource,
     },
 };
 
 fn main() -> Result<(), Error> {
-    let mut gb = RustBoy::new();
-
     // The 16x16 character is made of 8x16 sprites (the default is 8x8)
-    gb.set_sprite_size(SpriteSize::Size8x16);
+    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
 
     // Add 16x16 composite sprite (two 8x16 sprites side by side)
     let player = gb.add_sprite_16x16(

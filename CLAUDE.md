@@ -48,11 +48,12 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 
 ## Architecture rules
 
-- Layers: `gb_asm` (instructions) → `gb_std` (stateless routines, `If`/flow control) → `rust_boy`
-  (`RustBoy` engine and managers). A layer depends only on the layers below it.
-  Target design (Phase 2): `asm` / `hw` (pure data) / `std` / `engine` — see `CONTEXT.md` §3.
+- Layers: `asm` (instructions, `src/asm/`) → `stdlib` (stateless routines, `If`/flow control, `src/stdlib/`) →
+  `engine` (`RustBoy` and its managers, `src/engine/`), with `hw` (pure data, `src/hw.rs`) beside them and
+  `prelude` (re-exports). A layer depends only on the layers below it; `asm` does not use `hw` (see `CONTEXT.md`
+  §3). Until Phase 2 they were `gb_asm`, `gb_std` and `rust_boy` (`rust_boy::rust_boy`).
 - Every routine (Memcopy, WaitVBlank, UpdateKeys, …) exists **once**. Do not copy a routine into another layer.
-  The exceptions, decided by the maintainer: the two examples written by hand with raw `gb_asm` never link with the
+  The exceptions, decided by the maintainer: the two examples written by hand with raw `asm` never link with the
   library's routines and keep their own: `src/bin/unbricked.rs`, the tutorial (WaitVBlank, Memcopy, UpdateKeys,
   GetTileByPixel), and `src/bin/basic_usage.rs`, the minimal example (WaitVBlank, which waits for `rLY` = 144).
 - Generated output must be **deterministic**: never let `HashMap`/`HashSet` iteration order reach the

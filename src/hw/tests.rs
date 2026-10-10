@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::gb_asm::label_check::{rgbds_accepts, rgbds_rom};
+use crate::asm::label_check::{rgbds_accepts, rgbds_rom};
 
 const HARDWARE_INC: &str = include_str!("../../include/hardware.inc");
 
@@ -98,7 +98,7 @@ fn test_oam_offset_rejects_a_flag_for_a_byte() {
 #[test]
 fn test_oam_offset_takes_only_the_oama_symbols() {
     for symbol in [OAMB_BANK1, PADB_A, LCDCF_OFF, P1F_0, STATF_LCD] {
-        let message = crate::rust_boy::panic_message(|| oam_offset(0, symbol));
+        let message = crate::engine::panic_message(|| oam_offset(0, symbol));
         assert!(
             message.contains(&format!(
                 "{} ({}) is not a byte of an OAM entry",
@@ -384,9 +384,9 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// No `hardware.inc` name and no hardware address is written as text (or as a hex
-/// integer) in `gb_std`, `rust_boy` or the examples: they take them from `hw`. Items
+/// integer) in `stdlib`, `engine` or the examples: they take them from `hw`. Items
 /// marked `#[cfg(test)]` are not checked (tests spell out the text they expect), nor is the
-/// raw-`gb_asm` tutorial `src/bin/unbricked.rs`, written by hand on purpose (CLAUDE.md).
+/// raw-`asm` tutorial `src/bin/unbricked.rs`, written by hand on purpose (CLAUDE.md).
 /// What it flags, and what it does not see: [`hardware_literals`].
 #[test]
 fn test_no_hardware_strings_outside_hw() {
@@ -394,7 +394,7 @@ fn test_no_hardware_strings_outside_hw() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let exempt = root.join("src/bin/unbricked.rs");
     let mut files = Vec::new();
-    for dir in ["src/gb_std", "src/rust_boy", "src/bin"] {
+    for dir in ["src/stdlib", "src/engine", "src/bin"] {
         files.extend(rust_files(&root.join(dir)));
     }
     assert!(files.len() > 20, "{} files", files.len());

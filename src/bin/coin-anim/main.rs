@@ -1,7 +1,4 @@
-use rust_boy::{
-    gb_std::inputs::PadButton,
-    rust_boy::{AnimationType, Error, InputManager, RustBoy, TileSource},
-};
+use rust_boy::prelude::*;
 
 fn main() -> Result<(), Error> {
     let mut gb = RustBoy::new();

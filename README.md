@@ -266,6 +266,33 @@ differ. When a change of the generated code is intended, rewrite the snapshots a
 UPDATE_SNAPSHOTS=1 cargo test --test snapshots
 ```
 
+### Headless-emulator tests
+
+`tests/emulator.rs` builds ROMs with RGBDS and runs them on a small headless Game Boy written for the tests
+(`tests/support/gameboy.rs`, no dependency): the SM83 CPU M-cycle by M-cycle, interrupts, `halt`, the timer, the PPU's timing
+(modes, `LY`, `STAT`), OAM DMA, the joypad, MBC1/MBC5 ROM banking, but no picture. It blocks what the hardware
+blocks (OAM in modes 2 and 3, VRAM in mode 3) and logs every OAM write with its PPU mode; what it does not model is
+listed at the top of `gameboy.rs`. Each example is run
+with scripted input and checked through its memory: the Unbricked ball moves and bounces and the paddle follows
+the joypad, the FOSDEM player walks with its animation, the coin animates on A and stops on B. A test of your own:
+
+```rust,ignore
+// In tests/: `mod support;` gives the helpers; `game` is a RustBoy program
+let rom = Rom::build(&game.build()?, &[]);    // rgbasm + rgblink + rgbfix, and the symbols
+let mut gb = rom.boot();                      // a GameBoy at $0100
+gb.run_script(&[(30, &[]), (20, &[Button::Right])]);  // 30 frames, then 20 holding Right
+assert_eq!(gb.read_symbol("wScore"), 0);
+assert!(gb.oam_entry(0)[1] > 24);             // OAM entry 0 (Y, X, tile, attributes) moved right
+```
+
+They need RGBDS (`RGBDS_LINK_CHECK=1`) and return early without it. The emulator itself is checked against
+Blargg's test ROMs (`cpu_instrs`, `instr_timing`, `mem_timing`), fetched at a pinned commit:
+
+```bash
+scripts/fetch-test-roms.sh /tmp/gb-test-roms
+RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
+```
+
 ## Examples
 
 | Binary | Level | What it shows |
@@ -313,11 +340,13 @@ src/
 ├── prelude.rs     # the common types of every layer, for `use rust_boy::prelude::*`
 ├── bin/           # the example programs
 └── lib.rs
-tests/                        # integration tests: snapshots.rs (the examples' generated asm)
+tests/                        # integration tests: snapshots.rs (the examples' generated asm), emulator.rs
+                              # (ROMs run headless; the test emulator is support/gameboy.rs)
 include/hardware.inc          # hardware definitions for RGBDS (v4.x)
 examples/<bin>/               # per example: main.asm, its generated asm (the snapshot), and its assets
                               # (.2bpp, .png, .aseprite); examples/unbricked/originals/ is the tutorial's own source
 scripts/assemble-examples.sh  # build every example into a ROM
+scripts/fetch-test-roms.sh    # Blargg's test ROMs, which check the test emulator
 Task.md, CONTEXT.md, CLAUDE.md
 ```
 
@@ -330,6 +359,8 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test                      # with the snapshot tests; UPDATE_SNAPSHOTS=1 rewrites the snapshots
 scripts/assemble-examples.sh
+scripts/fetch-test-roms.sh /tmp/gb-test-roms
+RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --lib --test emulator
 ```
 
 Work happens on branches merged through pull requests into `refactor`; see [CLAUDE.md](CLAUDE.md).

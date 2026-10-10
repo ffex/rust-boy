@@ -227,7 +227,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 ## Phase 3 — Missing features
 
 ### Graphics
-- [ ] Shadow OAM in WRAM + OAM DMA routine in HRAM (fixes [B12](CONTEXT.md#b12))
+- [ ] Shadow OAM in WRAM + OAM DMA routine in HRAM (fixes [B12](CONTEXT.md#b12)); then turn
+      `b12_oam_written_outside_vblank_is_lost` (`tests/emulator.rs`, today's behaviour) into the check that the sprite moves
 - [ ] VRAM write queue flushed during VBlank (tilemap edits, score)
 - [ ] Background scrolling (`SCX`/`SCY`), camera helpers
 - [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
@@ -290,7 +291,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `unbricked-rustboy/` moved to `examples/unbricked/`, `examples/unbricked_std/` and `examples/unbricked_rustboy/`,
       `examples/basic_usage/main.asm` added; `examples/unbricked/originals/main.asm` is the tutorial's own source,
       not a snapshot)
-- [ ] Headless-emulator tests (run the ROM, assert on memory/registers)
+- [x] Headless-emulator tests (run the ROM, assert on memory/registers) (branch `refactor-p3-tooling-emulator`: a
+      zero-dependency DMG emulator for the tests, `tests/support/gameboy.rs`: the CPU M-cycle by M-cycle (each memory
+      access in its own M-cycle), interrupts, `halt`, timer, PPU timing without pixels, OAM DMA, with its known limits
+      listed at its top; checked against Blargg's `cpu_instrs`, `instr_timing` and `mem_timing` ROMs, which
+      `scripts/fetch-test-roms.sh` fetches at a pinned commit, and by its own interrupt, `halt` and DMA tests;
+      `Rom::build` / `Rom::example` assemble and link with RGBDS, `GameBoy::run_script` runs frames with scripted input,
+      then a test reads WRAM/HRAM/VRAM/OAM, the registers and every OAM write with its PPU mode. `tests/emulator.rs`:
+      one test per example, and [B12](CONTEXT.md#b12)'s situation as it is today; run with `RGBDS_LINK_CHECK`, in CI)
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)

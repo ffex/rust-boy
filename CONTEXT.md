@@ -35,6 +35,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ─�
 cargo build                              # library + all bins
 cargo test                               # unit tests, doctests, snapshot tests (tests/snapshots.rs)
 UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # rewrite examples/<bin>/main.asm after an intended change
+RGBDS_LINK_CHECK=1 cargo test --test emulator    # build ROMs with RGBDS, run them on the test emulator
 cargo run --bin fosdem > main.asm        # bins: basic_usage, unbricked, unbricked_std,
                                          #       unbricked_rustboy, fosdem, coin-anim
 rgbasm -I include -o main.o main.asm     # add -I <example dir> for its .2bpp assets
@@ -65,7 +66,8 @@ rgbfix -v -p 0xFF main.gb
 | Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
 | Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address once the program's variables are created (the variables `build()` adds go at the end of the last `WRAM0` section and move none; checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
 | Snapshot tests | ✅ since Phase 3 (`refactor-p3-tooling`) the asm each example prints is committed as `examples/<bin>/main.asm` (the old files were stale snapshots from `main`, regenerated), and `tests/snapshots.rs` fails with a unified diff when the output differs; `UPDATE_SNAPSHOTS=1 cargo test --test snapshots` rewrites them |
-| CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
+| Headless-emulator tests | ✅ since Phase 3 (`refactor-p3-tooling-emulator`) `tests/emulator.rs` builds ROMs with RGBDS and runs them on a DMG emulator written for the tests (`tests/support/gameboy.rs`, no dependency: the SM83 M-cycle by M-cycle, interrupts with the `ei` delay, `halt` and the halt bug, timer, PPU timing without pixels, OAM DMA, joypad, MBC1/MBC5 ROM banking; OAM blocked in modes 2-3 and VRAM in mode 3, as on the hardware; its known limits are listed at its top), checked against Blargg's `cpu_instrs` (11), `instr_timing` and `mem_timing` (3) ROMs and by its own tests of interrupts (VBlank with a `halt` loop, `ei; halt` and `halt` with one pending, `ei; di`, the `ei` delay, STAT on `LYC`, timer), the first line after LCD on and the OAM DMA window; a test runs frames with scripted input and reads WRAM, HRAM, VRAM, OAM, the registers and every OAM write with its PPU mode. One test per example (the Unbricked ball moves and bounces, bricks break, the paddle stops at its limit; the FOSDEM player walks as one block with its animation; the coin animates on A, stops on B; `basic_usage` loops), each also checking that every OAM write lands in VBlank, and [B12](#b12) as it is today. They run with `RGBDS_LINK_CHECK` (in CI); cross-checked once against PyBoy 2.6.0 (identical OAM traces over 390 frames with input for the 3 Unbricked examples) |
+| CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)), and the emulator tests with the Blargg ROMs (since `refactor-p3-tooling-emulator`; RGBDS, the ROMs and the Cargo builds are cached) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
 ---
@@ -762,6 +764,10 @@ animation functions read-modify-write `_OAMRAM+n` from the main loop (`src/engin
 VBlank/HBlank: in modes 2/3 writes are dropped and reads return `$FF`. It works only while the whole main
 loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Growth → silent sprite glitches.
 *Fix:* shadow OAM in WRAM (`ALIGN[8]`) + OAM DMA routine in HRAM, run in VBlank.
+**Status: open; today's behaviour is tested** (`refactor-p3-tooling-emulator`, `b12_oam_written_outside_vblank_is_lost` in
+`tests/emulator.rs`): a `RustBoy` program that moves a sprite after ~7000 M-cycles of `Delay` moves it while the PPU is
+in mode 3 of line 52, so the read gives `$FF`, the write is dropped and the sprite never moves; without the delay it
+moves one pixel a frame. The 6 examples write OAM only in VBlank today (each example test checks it).
 
 ### P2
 
@@ -1213,8 +1219,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine does not use the new instructions yet.
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
-  generated asm (Phase 3, `refactor-p3-tooling`); still missing: headless-emulator tests and a one-command
-  "build ROM and run".
+  generated asm (Phase 3, `refactor-p3-tooling`) and headless-emulator tests (`refactor-p3-tooling-emulator`);
+  still missing: a one-command "build ROM and run".
 
 ---
 

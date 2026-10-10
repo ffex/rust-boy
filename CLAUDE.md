@@ -33,7 +33,18 @@ cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbric
                                           #       unbricked_rustboy, fosdem, coin-anim
 scripts/assemble-examples.sh              # every example -> target/examples/<bin>/main.gb (needs RGBDS;
                                           # under $CARGO_TARGET_DIR when it is set)
+RGBDS_LINK_CHECK=1 cargo test --lib --test emulator   # with RGBDS: link the test programs, and build ROMs
+                                          # and run them on the test emulator (tests/emulator.rs)
+scripts/fetch-test-roms.sh <dir>          # Blargg's test ROMs (pinned, checksummed); with GB_TEST_ROMS=<dir>,
+                                          # tests/emulator.rs also checks the emulator against them
 ```
+
+Headless-emulator tests (`tests/emulator.rs`): `support::rom::Rom::build(asm, include_dirs)` (or
+`Rom::example(bin)`) assembles and links a program with RGBDS; `rom.boot()` gives a `support::gameboy::GameBoy`
+(zero-dependency DMG emulator in `tests/support/gameboy.rs`) to run frames with scripted input
+(`run_script(&[(frames, &[Button::Left])])`) and read WRAM/HRAM/VRAM/OAM (`read_symbol("wScore")`, `oam_entry(0)`),
+the registers, and every OAM write with its PPU mode (`oam_writes()`, for [B12](CONTEXT.md#b12)). Without
+`RGBDS_LINK_CHECK` these tests return early; CI runs them.
 
 Each example's generated asm is committed as `examples/<bin>/main.asm`, next to its assets: the snapshot that
 `tests/snapshots.rs` compares with the binary's output, which fails with a diff when they differ.
@@ -82,7 +93,8 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   still target `refactor`, and start the PR description with "Depends on #N".
 - Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
 - Before pushing, run what CI runs (`.github/workflows/ci.yml`): `cargo fmt --check`,
-  `cargo clippy --all-targets -- -D warnings`, `cargo test`, and `scripts/assemble-examples.sh`.
+  `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
+  `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`).
 - Push the branch and open a **PR into `refactor`** (never straight into `main`). When everything is done,
   `refactor` → `main` is a final PR.
 - Never force-push, rewrite published history or delete branches without asking first.

@@ -60,10 +60,16 @@ macro_rules! snapshot_tests {
             }
         )*
 
-        /// Every example has its test above
+        /// Every example has its test above, and the three lists of examples agree: this
+        /// file's, `support::examples::EXAMPLES` and `scripts/assemble-examples.sh`'s, and
+        /// they are the binaries in `src/bin`
         #[test]
         fn every_example_has_a_snapshot_test() {
             assert_eq!([$($bin),*], EXAMPLES);
+            let mut sorted = EXAMPLES.map(String::from).to_vec();
+            sorted.sort();
+            assert_eq!(sorted, binaries(), "EXAMPLES and the binaries in src/bin");
+            assert_eq!(script_examples(), EXAMPLES, "the list in scripts/assemble-examples.sh");
         }
     };
 }
@@ -75,6 +81,41 @@ snapshot_tests! {
     snapshot_unbricked_rustboy: "unbricked_rustboy";
     snapshot_fosdem: "fosdem";
     snapshot_coin_anim: "coin-anim";
+}
+
+/// The binaries in `src/bin`, sorted: `name.rs` files and `name/main.rs` directories
+fn binaries() -> Vec<String> {
+    let dir = support::examples::root().join("src/bin");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("src/bin")
+        .map(|entry| entry.expect("a directory entry").path())
+        .filter_map(|path| {
+            if path.is_dir() && path.join("main.rs").is_file() {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                path.file_stem()
+                    .map(|name| name.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// The examples `scripts/assemble-examples.sh` builds: its `examples=(...)` line
+fn script_examples() -> Vec<String> {
+    let script =
+        std::fs::read_to_string(support::examples::root().join("scripts/assemble-examples.sh"))
+            .expect("scripts/assemble-examples.sh");
+    let line = script
+        .lines()
+        .find_map(|line| line.strip_prefix("examples=("))
+        .and_then(|rest| rest.strip_suffix(')'))
+        .expect("an `examples=(...)` line");
+    line.split_whitespace().map(String::from).collect()
 }
 
 /// A diff of two texts, line by line, in the unified format (`@@ -a,b +c,d @@` hunks with

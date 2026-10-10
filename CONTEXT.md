@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 257 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 259 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -69,7 +69,7 @@ rgbfix -v -p 0xFF main.gb
 | Layer | Path | LOC | Role |
 |---|---|---|---|
 | **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
-| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`) | ~2040 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef` |
+| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`) | ~2800 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2800 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` |
 | **`hw`** (data) | `src/hw.rs` | ~390 | Hardware facts as pure data (since [B22](#b22); complete since Phase 2 `refactor-p2-hw`): `hw::Symbol`s, each a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM layout and the screen sizes (`hw::SYMBOLS` lists them), the facts with no `hardware.inc` name as plain numbers, and `oam_offset`; depends on nothing, used by `gb_std` (which turns a `Symbol` into an `Expr`, `src/gb_std/hw_symbols.rs`), `rust_boy` and the examples, not by `gb_asm` |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
@@ -151,9 +151,12 @@ rgbfix -v -p 0xFF main.gb
   number: the tile regions as `RustBoy` uses them (`VRAM_OBJ_TILES`, `VRAM_BG_TILES`, …), region ends (`WRAM0_END`,
   `OAM_END`, `HRAM_END`, `VRAM_END`), `OAM_SIZE`, `OAM_X_OFFSET`/`OAM_Y_OFFSET`, `TILE_SIZE`/`TILE_WIDTH`,
   `ROM_HEADER`/`ROM_HEADER_END`. `hw::oam_offset(index, hw::OAMA_X)` is the offset of a byte of an OAM entry, and panics
-  past OAM or on a byte that is not an `OAMA_*`. `gb_std` turns a `Symbol` into an `Expr`, `Operand` or `AluOperand` by
-  its name (`src/gb_std/hw_symbols.rs`: the first layer that sees both, so `hw` stays data and `gb_asm` does not know
-  it), so a symbol goes straight to the builders: `ld_addr_def_a(hw::LCDC)` writes `ld [rLCDC], a`,
+  past OAM or on any symbol but the four `OAMA_*` (`hw::OAM_ENTRY_BYTES`; `OAMB_BANK1`, whose value is 3, panics too).
+  `gb_std` turns a `Symbol` into an `Expr`, `Operand` or `AluOperand` by its name (`src/gb_std/hw_symbols.rs`: the
+  first layer that sees both, so `hw` stays data and `gb_asm` does not know it); the 8-bit ALU (`AluOperand`) takes
+  only a `Symbol<u8>`, so `cp(hw::LCDC)` does not compile, while `Expr` and `Operand` take both widths (they hold 16-bit
+  immediates and addresses as well as flag expressions; an operand typed by width is a Task.md follow-up). A symbol
+  goes straight to the builders: `ld_addr_def_a(hw::LCDC)` writes `ld [rLCDC], a`,
   `Expr::from(hw::LCDCF_ON) | hw::LCDCF_BGON` writes `LCDCF_ON | LCDCF_BGON`. Code that needs the number uses `.value`
   (`cp_imm(hw::SCRN_Y.value)`, `Expr::hex(hw::SCRN0.value)`, the VRAM addresses the allocators compute). `Symbol` has no
   `Display`, so a message must say `.name` or `.value`. The generated code writes a symbol where it wrote its name
@@ -296,8 +299,10 @@ The problems are where each layer reaches across the line:
    | `hw::SCRN0`, `SCRN1` were `u16`; `OAM_COUNT`, `OAM_ENTRY_SIZE`, `OAMA_Y`, `OAMA_X`, `OAMA_TILEID` were `u8` | `hw::Symbol`s: `.value` for the number (`hw::SCRN0.value`) |
    | `hw::OAM_START`, `hw::WRAM0` | `hw::OAMRAM.value`, `hw::RAM.value` |
    | `hw::SCRN_ROW_TILES`, `hw::SCRN_ROWS` (`usize`) | `hw::SCRN_VX_B.value`, `hw::SCRN_VY_B.value` (`u8`) |
-   | `hw::oam_offset(index, 1)` (any `u8` byte, any index) | `hw::oam_offset(index, hw::OAMA_X)`; panics for an index past OAM (40 entries) or a byte that is not an `OAMA_*` |
+   | `hw::oam_offset(index, 1)` (any `u8` byte, any index) | `hw::oam_offset(index, hw::OAMA_X)`; panics for an index past OAM (40 entries) or any symbol but the four `OAMA_*` (`hw::OAM_ENTRY_BYTES`) |
    | `format!("{}", hw::LCDC)` | `hw::LCDC.name` (`Symbol` has no `Display`) |
+   | `asm.cp(hw::LCDC)` (any `&str` constant in an 8-bit ALU operand) | does not compile: the ALU takes a `Symbol<u8>` (a flag or a count), not an address; write `asm.cp(hw::LCDC.name)` if it is really meant |
+   | `gb_std` `Sprite::new(40, …)` (any id), a 41st `SpriteManager::add_sprite` | panics: an id is an OAM entry, 0 to 39 (its code read and wrote `_OAMRAM+160` and beyond) |
 4. **L3 re-implements L2 instead of using it.** `src/rust_boy/functions.rs:152-311` (at `4601a5c`) duplicated Memcopy,
    WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel from `gb_std`, and they had already
    diverged ([B23](#b23)). *Since B23* `rust_boy` emits the `gb_std` routines (only `Delay` is its own), and its

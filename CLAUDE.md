@@ -24,7 +24,9 @@ ask about it or point out a problem with it.
 
 ```bash
 cargo build                               # library + all bins
-cargo test                                # unit tests
+cargo test                                # unit tests, doctests and the snapshot tests
+UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # rewrite examples/<bin>/main.asm after an intended
+                                          # change of the generated asm; commit them with it
 cargo clippy --all-targets                # lint
 cargo fmt                                 # format
 cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbricked_std,
@@ -33,8 +35,11 @@ scripts/assemble-examples.sh              # every example -> target/examples/<bi
                                           # under $CARGO_TARGET_DIR when it is set)
 ```
 
-Assembling generated output (RGBDS ≥ 0.9). `include/hardware.inc` (v4.x) and the example's `.2bpp` assets
-go on the include path with `-I`:
+Each example's generated asm is committed as `examples/<bin>/main.asm`, next to its assets: the snapshot that
+`tests/snapshots.rs` compares with the binary's output, which fails with a diff when they differ.
+
+Assembling generated output (RGBDS ≥ 0.9). `include/hardware.inc` (v4.x) and the example's directory, for its
+`.2bpp` assets, go on the include path with `-I`:
 
 ```bash
 rgbasm -I include -I examples/fosdem -o main.o main.asm   # no `-L`: it was removed in RGBDS 0.8
@@ -63,6 +68,8 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   `If` body breaks `.end_if_N`). Prefer local labels or the label allocator.
 - Do not hardcode hardware addresses/flags as strings in new code; use (or add to) the `hw` constants.
 - Every bug fix gets a test; when it changes generated asm, the asm must still assemble.
+- A change to an example's generated asm updates its snapshot `examples/<bin>/main.asm` in the same commit
+  (`UPDATE_SNAPSHOTS=1 cargo test --test snapshots`); the PR shows the asm change in that diff.
 - Never commit build artifacts (`*.gb`, `*.o`, `target/`).
 
 ## Git workflow

@@ -278,11 +278,18 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 
 ### Tooling
 - [ ] One-command build & run: produce `.gb` + `.sym` + `.map` via rgbasm/rgblink/rgbfix and open an emulator
-- [ ] Snapshot tests of generated asm (after [B13](CONTEXT.md#b13))
-- [ ] The committed example asm files (`examples/fosdem/main.asm`, `examples/coin-anim/main.asm`,
+- [x] Snapshot tests of generated asm (after [B13](CONTEXT.md#b13)) (branch `refactor-p3-tooling`: `tests/snapshots.rs`
+      compares what each example binary prints with its committed `examples/<bin>/main.asm` and fails with a unified
+      diff; `UPDATE_SNAPSHOTS=1 cargo test --test snapshots` rewrites them; no new dependency)
+- [x] The committed example asm files (`examples/fosdem/main.asm`, `examples/coin-anim/main.asm`,
       `examples/unbricked/generated/`, `generated-std/`, `unbricked-rustboy/`) are old snapshots from `main`: they still
       show `ClearOam`, `AnimEnd` and other code the library no longer generates. Regenerate them (and keep them in sync,
       e.g. as the snapshot tests above), delete them, or mark them as old snapshots — the maintainer's choice
+      (branch `refactor-p3-tooling`, the maintainer's choice: regenerated and kept in sync as the snapshots above, one
+      layout for every bin, `examples/<bin>/main.asm` next to its assets; `generated/`, `generated-std/` and
+      `unbricked-rustboy/` moved to `examples/unbricked/`, `examples/unbricked_std/` and `examples/unbricked_rustboy/`,
+      `examples/basic_usage/main.asm` added; `examples/unbricked/originals/main.asm` is the tutorial's own source,
+      not a snapshot)
 - [ ] Headless-emulator tests (run the ROM, assert on memory/registers)
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")

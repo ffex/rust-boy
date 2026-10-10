@@ -7,21 +7,21 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
-    ld de, player_right
-    ld hl, $8400
-    ld bc, player_rightEnd - player_right
-    call Memcopy
     ld de, player_left
     ld hl, $8000
     ld bc, player_leftEnd - player_left
     call Memcopy
+    ld de, player_right
+    ld hl, $8400
+    ld bc, player_rightEnd - player_right
+    call Memcopy
     ld a, 0
     ld b, 160
     ld hl, _OAMRAM
-    ClearOam:
+    .clear_oam_8:
     ld [hli], a
     dec b
-    jp nz, ClearOam
+    jp nz, .clear_oam_8
     ld hl, _OAMRAM
     ld a, 88
     ld [hli], a
@@ -39,22 +39,22 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
+    ld a, 228
+    ld [rBGP], a
+    ld [rOBP0], a
+    ld [rOBP1], a
+    ld a, 0
+    ld [wCurKeys], a
+    ld a, 0
+    ld [wNewKeys], a
+    ld a, 0
+    ld [wFrameCounter], a
     ld a, 255
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    ld a, 0
-    ld [wCurKeys], a
-    ld a, 0
-    ld [wFrameCounter], a
-    ld a, 0
-    ld [wNewKeys], a
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16
     ld [rLCDC], a
-    ld a, 228
-    ld [rBGP], a
-    ld a, 228
-    ld [rOBP0], a
 
     Main:
     call WaitNotVBlank
@@ -62,155 +62,170 @@
     ld a, [wFrameCounter]
     inc a
     ld [wFrameCounter], a
-    cp 8
-    jr c, AnimEnd
+    cp a, 8
+    jp c, .anim_end_9
     ld a, 0
     ld [wFrameCounter], a
     ld a, [wAnim_player_left_Current]
-    cp 255
-    jr z, .animEnd_player_left
-    cp 0
-    jr nz, .skip_playerWalkFront_0
-    call Anim_playerWalkFront_0
-    jr .animEnd_player_left
-    .skip_playerWalkFront_0:
-    cp 1
-    jr nz, .skip_playerWalkBack_0
-    call Anim_playerWalkBack_0
-    jr .animEnd_player_left
-    .skip_playerWalkBack_0:
-    cp 2
-    jr nz, .skip_playerWalkLeft_0
-    call Anim_playerWalkLeft_0
-    jr .animEnd_player_left
-    .skip_playerWalkLeft_0:
-    cp 3
-    jr nz, .skip_playerWalkRight_0
-    call Anim_playerWalkRight_0
-    jr .animEnd_player_left
-    .skip_playerWalkRight_0:
-    .animEnd_player_left:
+    cp a, 255
+    jp z, .anim_player_left_end_10
+    cp a, 0
+    jr nz, .skip_player_left_playerWalkFront_11
+    call Anim_player_left_playerWalkFront
+    jp .anim_player_left_end_10
+    .skip_player_left_playerWalkFront_11:
+    cp a, 1
+    jr nz, .skip_player_left_playerWalkBack_12
+    call Anim_player_left_playerWalkBack
+    jp .anim_player_left_end_10
+    .skip_player_left_playerWalkBack_12:
+    cp a, 2
+    jr nz, .skip_player_left_playerWalkLeft_13
+    call Anim_player_left_playerWalkLeft
+    jp .anim_player_left_end_10
+    .skip_player_left_playerWalkLeft_13:
+    cp a, 3
+    jr nz, .skip_player_left_playerWalkRight_14
+    call Anim_player_left_playerWalkRight
+    jp .anim_player_left_end_10
+    .skip_player_left_playerWalkRight_14:
+    .anim_player_left_end_10:
     ld a, [wAnim_player_right_Current]
-    cp 255
-    jr z, .animEnd_player_right
-    cp 0
-    jr nz, .skip_playerWalkFront_1
-    call Anim_playerWalkFront_1
-    jr .animEnd_player_right
-    .skip_playerWalkFront_1:
-    cp 1
-    jr nz, .skip_playerWalkBack_1
-    call Anim_playerWalkBack_1
-    jr .animEnd_player_right
-    .skip_playerWalkBack_1:
-    cp 2
-    jr nz, .skip_playerWalkLeft_1
-    call Anim_playerWalkLeft_1
-    jr .animEnd_player_right
-    .skip_playerWalkLeft_1:
-    cp 3
-    jr nz, .skip_playerWalkRight_1
-    call Anim_playerWalkRight_1
-    jr .animEnd_player_right
-    .skip_playerWalkRight_1:
-    .animEnd_player_right:
-    AnimEnd:
+    cp a, 255
+    jp z, .anim_player_right_end_15
+    cp a, 0
+    jr nz, .skip_player_right_playerWalkFront_16
+    call Anim_player_right_playerWalkFront
+    jp .anim_player_right_end_15
+    .skip_player_right_playerWalkFront_16:
+    cp a, 1
+    jr nz, .skip_player_right_playerWalkBack_17
+    call Anim_player_right_playerWalkBack
+    jp .anim_player_right_end_15
+    .skip_player_right_playerWalkBack_17:
+    cp a, 2
+    jr nz, .skip_player_right_playerWalkLeft_18
+    call Anim_player_right_playerWalkLeft
+    jp .anim_player_right_end_15
+    .skip_player_right_playerWalkLeft_18:
+    cp a, 3
+    jr nz, .skip_player_right_playerWalkRight_19
+    call Anim_player_right_playerWalkRight
+    jp .anim_player_right_end_15
+    .skip_player_right_playerWalkRight_19:
+    .anim_player_right_end_15:
+    .anim_end_9:
     call UpdateKeys
-    CheckLeft:
+    .check_left_4:
     ld a, [wCurKeys]
     and a, PADF_LEFT
-    jp z, CheckLeftEnd
+    jp z, .check_left_end_4
     ld a, [_OAMRAM+1]
     sub a, 1
-    cp 0
-    jp z, Sprite0LeftLimitEnd
-    ld [_OAMRAM+1], a
-    Sprite0LeftLimitEnd:
-    ld a, [_OAMRAM+5]
+    jp c, .sprite0_left_limit_end_0
     sub a, 1
-    cp 0
-    jp z, Sprite1LeftLimitEnd
+    jp nc, .sprite0_left_limit_store_0
+    ld a, 0
+    .sprite0_left_limit_store_0:
+    add a, 1
+    ld [_OAMRAM+1], a
+    add a, 8
     ld [_OAMRAM+5], a
-    Sprite1LeftLimitEnd:
+    .sprite0_left_limit_end_0:
     ld a, 2
     ld [wAnim_player_left_Current], a
     ld a, 2
     ld [wAnim_player_right_Current], a
-    CheckLeftEnd:
-    CheckRight:
+    .check_left_end_4:
+    .check_right_5:
     ld a, [wCurKeys]
     and a, PADF_RIGHT
-    jp z, CheckRightEnd
-    ld a, [_OAMRAM+1]
-    add a, 1
-    cp 150
-    jp z, Sprite0RightLimitEnd
-    ld [_OAMRAM+1], a
-    Sprite0RightLimitEnd:
+    jp z, .check_right_end_5
     ld a, [_OAMRAM+5]
+    sub a, 149
+    jp nc, .sprite1_right_limit_end_1
     add a, 1
-    cp 150
-    jp z, Sprite1RightLimitEnd
+    jp nc, .sprite1_right_limit_store_1
+    ld a, 0
+    .sprite1_right_limit_store_1:
+    add a, 149
     ld [_OAMRAM+5], a
-    Sprite1RightLimitEnd:
+    sub a, 8
+    ld [_OAMRAM+1], a
+    .sprite1_right_limit_end_1:
     ld a, 3
     ld [wAnim_player_left_Current], a
     ld a, 3
     ld [wAnim_player_right_Current], a
-    CheckRightEnd:
-    CheckUp:
+    .check_right_end_5:
+    .check_up_6:
     ld a, [wCurKeys]
     and a, PADF_UP
-    jp z, CheckUpEnd
+    jp z, .check_up_end_6
     ld a, [_OAMRAM+0]
     sub a, 1
-    cp 0
-    jp z, Sprite0UpLimitEnd
-    ld [_OAMRAM+0], a
-    Sprite0UpLimitEnd:
-    ld a, [_OAMRAM+4]
+    jp c, .sprite0_up_limit_end_2
     sub a, 1
-    cp 0
-    jp z, Sprite1UpLimitEnd
+    jp nc, .sprite0_up_limit_store_2
+    ld a, 0
+    .sprite0_up_limit_store_2:
+    add a, 1
+    ld [_OAMRAM+0], a
     ld [_OAMRAM+4], a
-    Sprite1UpLimitEnd:
+    .sprite0_up_limit_end_2:
     ld a, 1
     ld [wAnim_player_left_Current], a
     ld a, 1
     ld [wAnim_player_right_Current], a
-    CheckUpEnd:
-    CheckDown:
+    .check_up_end_6:
+    .check_down_7:
     ld a, [wCurKeys]
     and a, PADF_DOWN
-    jp z, CheckDownEnd
+    jp z, .check_down_end_7
     ld a, [_OAMRAM+0]
+    sub a, 149
+    jp nc, .sprite0_down_limit_end_3
     add a, 1
-    cp 150
-    jp z, Sprite0DownLimitEnd
+    jp nc, .sprite0_down_limit_store_3
+    ld a, 0
+    .sprite0_down_limit_store_3:
+    add a, 149
     ld [_OAMRAM+0], a
-    Sprite0DownLimitEnd:
-    ld a, [_OAMRAM+4]
-    add a, 1
-    cp 150
-    jp z, Sprite1DownLimitEnd
     ld [_OAMRAM+4], a
-    Sprite1DownLimitEnd:
+    .sprite0_down_limit_end_3:
     ld a, 0
     ld [wAnim_player_left_Current], a
     ld a, 0
     ld [wAnim_player_right_Current], a
-    CheckDownEnd:
+    .check_down_end_7:
     jp Main
 
-    WaitNotVBlank:
-    ld a, [rLY]
-    cp 144
-    jp nc, WaitNotVBlank
+    ; Copy bytes from one area to another
+    ; @param de: source
+    ; @param hl: destination
+    ; @param bc: length (0 copies nothing)
+    Memcopy:
+    ld a, b
+    or a, c
+    ret z
+    .copy:
+    ld a, [de]
+    ld [hli], a
+    inc de
+    dec bc
+    ld a, b
+    or a, c
+    jp nz, .copy
     ret
     WaitVBlank:
     ld a, [rLY]
-    cp 144
+    cp a, 144
     jp c, WaitVBlank
+    ret
+    WaitNotVBlank:
+    ld a, [rLY]
+    cp a, 144
+    jp nc, WaitNotVBlank
     ret
     UpdateKeys:
     ld a, P1F_GET_BTN
@@ -239,124 +254,111 @@
     or a, 240
     .knowret:
     ret
-    ; Copy bytes from one area to another
-    ; @param de: source
-    ; @param hl: destination
-    ; @param bc: length
-    Memcopy:
-    ld a, [de]
-    ld [hli], a
-    inc de
-    dec bc
-    ld a, b
-    or a, c
-    jp nz, Memcopy
-    ret
-    Anim_playerWalkFront_0:
+    Anim_player_left_playerWalkFront:
     ld a, [_OAMRAM+2]
+    cp a, 0
+    jr c, .reset_playerWalkFront
+    cp a, 6
+    jr c, .next_playerWalkFront
+    .reset_playerWalkFront:
+    ld a, 254
+    .next_playerWalkFront:
     add a, 2
-    cp 0
-    jr c, .reset_playerWalkFront_0
-    cp 8
-    jr c, .store_playerWalkFront_0
-    .reset_playerWalkFront_0:
-    ld a, 0
-    .store_playerWalkFront_0:
     ld [_OAMRAM+2], a
     ret
-    Anim_playerWalkBack_0:
+    Anim_player_left_playerWalkBack:
     ld a, [_OAMRAM+2]
+    cp a, 8
+    jr c, .reset_playerWalkBack
+    cp a, 14
+    jr c, .next_playerWalkBack
+    .reset_playerWalkBack:
+    ld a, 6
+    .next_playerWalkBack:
     add a, 2
-    cp 8
-    jr c, .reset_playerWalkBack_0
-    cp 16
-    jr c, .store_playerWalkBack_0
-    .reset_playerWalkBack_0:
-    ld a, 8
-    .store_playerWalkBack_0:
     ld [_OAMRAM+2], a
     ret
-    Anim_playerWalkLeft_0:
+    Anim_player_left_playerWalkLeft:
     ld a, [_OAMRAM+2]
+    cp a, 16
+    jr c, .reset_playerWalkLeft
+    cp a, 22
+    jr c, .next_playerWalkLeft
+    .reset_playerWalkLeft:
+    ld a, 14
+    .next_playerWalkLeft:
     add a, 2
-    cp 16
-    jr c, .reset_playerWalkLeft_0
-    cp 24
-    jr c, .store_playerWalkLeft_0
-    .reset_playerWalkLeft_0:
-    ld a, 16
-    .store_playerWalkLeft_0:
     ld [_OAMRAM+2], a
     ret
-    Anim_playerWalkRight_0:
+    Anim_player_left_playerWalkRight:
     ld a, [_OAMRAM+2]
+    cp a, 24
+    jr c, .reset_playerWalkRight
+    cp a, 30
+    jr c, .next_playerWalkRight
+    .reset_playerWalkRight:
+    ld a, 22
+    .next_playerWalkRight:
     add a, 2
-    cp 24
-    jr c, .reset_playerWalkRight_0
-    cp 32
-    jr c, .store_playerWalkRight_0
-    .reset_playerWalkRight_0:
-    ld a, 24
-    .store_playerWalkRight_0:
     ld [_OAMRAM+2], a
     ret
-    Anim_playerWalkFront_1:
+    Anim_player_right_playerWalkFront:
     ld a, [_OAMRAM+6]
+    cp a, 64
+    jr c, .reset_playerWalkFront
+    cp a, 70
+    jr c, .next_playerWalkFront
+    .reset_playerWalkFront:
+    ld a, 62
+    .next_playerWalkFront:
     add a, 2
-    cp 64
-    jr c, .reset_playerWalkFront_1
-    cp 72
-    jr c, .store_playerWalkFront_1
-    .reset_playerWalkFront_1:
-    ld a, 64
-    .store_playerWalkFront_1:
     ld [_OAMRAM+6], a
     ret
-    Anim_playerWalkBack_1:
+    Anim_player_right_playerWalkBack:
     ld a, [_OAMRAM+6]
+    cp a, 72
+    jr c, .reset_playerWalkBack
+    cp a, 78
+    jr c, .next_playerWalkBack
+    .reset_playerWalkBack:
+    ld a, 70
+    .next_playerWalkBack:
     add a, 2
-    cp 72
-    jr c, .reset_playerWalkBack_1
-    cp 80
-    jr c, .store_playerWalkBack_1
-    .reset_playerWalkBack_1:
-    ld a, 72
-    .store_playerWalkBack_1:
     ld [_OAMRAM+6], a
     ret
-    Anim_playerWalkLeft_1:
+    Anim_player_right_playerWalkLeft:
     ld a, [_OAMRAM+6]
+    cp a, 80
+    jr c, .reset_playerWalkLeft
+    cp a, 86
+    jr c, .next_playerWalkLeft
+    .reset_playerWalkLeft:
+    ld a, 78
+    .next_playerWalkLeft:
     add a, 2
-    cp 80
-    jr c, .reset_playerWalkLeft_1
-    cp 88
-    jr c, .store_playerWalkLeft_1
-    .reset_playerWalkLeft_1:
-    ld a, 80
-    .store_playerWalkLeft_1:
     ld [_OAMRAM+6], a
     ret
-    Anim_playerWalkRight_1:
+    Anim_player_right_playerWalkRight:
     ld a, [_OAMRAM+6]
+    cp a, 88
+    jr c, .reset_playerWalkRight
+    cp a, 94
+    jr c, .next_playerWalkRight
+    .reset_playerWalkRight:
+    ld a, 86
+    .next_playerWalkRight:
     add a, 2
-    cp 88
-    jr c, .reset_playerWalkRight_1
-    cp 96
-    jr c, .store_playerWalkRight_1
-    .reset_playerWalkRight_1:
-    ld a, 88
-    .store_playerWalkRight_1:
     ld [_OAMRAM+6], a
     ret
 
-    player_right:
-    INCBIN "char-dx.2bpp"
-    player_rightEnd:
     player_left:
     INCBIN "char.2bpp"
     player_leftEnd:
+    player_right:
+    INCBIN "char-dx.2bpp"
+    player_rightEnd:
 
-    SECTION "Variables", WRAM0
+    SECTION "Variables", WRAM0[$C000]
     wCurKeys: db
     wNewKeys: db
     wFrameCounter: db

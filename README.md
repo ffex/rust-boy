@@ -258,6 +258,14 @@ scripts/assemble-examples.sh
 CI does the same on every pull request and keeps the ROMs as a downloadable artifact (`example-roms`).
 Open them in any Game Boy emulator.
 
+The assembly each example generates is committed as `examples/<bin>/main.asm`, next to the example's assets.
+`cargo test` compares it with what the binary prints (`tests/snapshots.rs`) and fails with a diff when they
+differ. When a change of the generated code is intended, rewrite the snapshots and commit them with the change:
+
+```bash
+UPDATE_SNAPSHOTS=1 cargo test --test snapshots
+```
+
 ## Examples
 
 | Binary | Level | What it shows |
@@ -305,8 +313,10 @@ src/
 ├── prelude.rs     # the common types of every layer, for `use rust_boy::prelude::*`
 ├── bin/           # the example programs
 └── lib.rs
+tests/                        # integration tests: snapshots.rs (the examples' generated asm)
 include/hardware.inc          # hardware definitions for RGBDS (v4.x)
-examples/                     # example assets (.2bpp, .png, .aseprite) and reference .asm files
+examples/<bin>/               # per example: main.asm, its generated asm (the snapshot), and its assets
+                              # (.2bpp, .png, .aseprite); examples/unbricked/originals/ is the tutorial's own source
 scripts/assemble-examples.sh  # build every example into a ROM
 Task.md, CONTEXT.md, CLAUDE.md
 ```
@@ -318,7 +328,7 @@ Run the same checks as CI before pushing:
 ```bash
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test
+cargo test                      # with the snapshot tests; UPDATE_SNAPSHOTS=1 rewrites the snapshots
 scripts/assemble-examples.sh
 ```
 

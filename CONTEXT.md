@@ -33,7 +33,8 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ─�
 
 ```bash
 cargo build                              # library + all bins
-cargo test                               # unit tests
+cargo test                               # unit tests, doctests, snapshot tests (tests/snapshots.rs)
+UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # rewrite examples/<bin>/main.asm after an intended change
 cargo run --bin fosdem > main.asm        # bins: basic_usage, unbricked, unbricked_std,
                                          #       unbricked_rustboy, fosdem, coin-anim
 rgbasm -I include -o main.o main.asm     # add -I <example dir> for its .2bpp assets
@@ -46,7 +47,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 312 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `prelude` module, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 312 library unit tests (and one in the `basic_usage` bin), the snapshot tests of the 6 examples (`tests/snapshots.rs`, which also tests its diff) and the doctests (README examples, the `prelude` module, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -63,6 +64,7 @@ rgbfix -v -p 0xFF main.gb
 | Hardware facts | ✅ since Phase 2 (`refactor-p2-hw`) every register, flag, address, OAM offset and screen size that `gb_std`, `rust_boy` and the examples write comes from `hw` (see [Key concepts](#key-concepts)): 110 `hw::Symbol`s, each a `hardware.inc` name and its value, plus the facts `hardware.inc` has no name for. Tests: every symbol is a name `include/hardware.inc` defines, and with `RGBDS_LINK_CHECK` a file that includes it `ASSERT`s every value (a wrong value fails); `test_no_hardware_strings_outside_hw` fails on a `hardware.inc` name or an address from `$8000` on written as a string (or a hex integer) in `gb_std`, `rust_boy` or the examples, outside their tests and the hand-written `unbricked.rs`. The 6 example ROMs, their asm, `.map` and `.sym`, are byte-identical |
 | Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
 | Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address once the program's variables are created (the variables `build()` adds go at the end of the last `WRAM0` section and move none; checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
+| Snapshot tests | ✅ since Phase 3 (`refactor-p3-tooling`) the asm each example prints is committed as `examples/<bin>/main.asm` (the old files were stale snapshots from `main`, regenerated), and `tests/snapshots.rs` fails with a unified diff when the output differs; `UPDATE_SNAPSHOTS=1 cargo test --test snapshots` rewrites them |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -1210,8 +1212,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine does not use the new instructions yet.
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
-- **Tooling:** CI exists now (fmt, clippy, tests, assembling every example); still missing: snapshot tests of
-  the generated asm and a one-command "build ROM and run".
+- **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
+  generated asm (Phase 3, `refactor-p3-tooling`); still missing: headless-emulator tests and a one-command
+  "build ROM and run".
 
 ---
 

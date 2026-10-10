@@ -8,31 +8,21 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# <binary>:<extra include directory for its INCBIN assets, if any>
-examples=(
-    "basic_usage:"
-    "unbricked:"
-    "unbricked_std:"
-    "unbricked_rustboy:"
-    "fosdem:examples/fosdem"
-    "coin-anim:examples/coin-anim"
-)
+# Every example binary. Its directory, examples/<bin>/, holds its committed assembly
+# (main.asm, the snapshot tests/snapshots.rs checks) and its INCBIN assets, if any: it goes on
+# the include path.
+examples=(basic_usage unbricked unbricked_std unbricked_rustboy fosdem coin-anim)
 
 out_root="${CARGO_TARGET_DIR:-target}/examples"
 failed=()
 
 cargo build --quiet --bins
 
-for entry in "${examples[@]}"; do
-    bin="${entry%%:*}"
-    assets="${entry#*:}"
+for bin in "${examples[@]}"; do
     out="$out_root/$bin"
     mkdir -p "$out"
 
-    include_flags=(-I include)
-    if [[ -n "$assets" ]]; then
-        include_flags+=(-I "$assets")
-    fi
+    include_flags=(-I include -I "examples/$bin")
 
     if cargo run --quiet --bin "$bin" > "$out/main.asm" &&
         rgbasm "${include_flags[@]}" -o "$out/main.o" "$out/main.asm" &&

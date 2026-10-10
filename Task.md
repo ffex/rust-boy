@@ -122,9 +122,13 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
 
 See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the reasoning.
 
-- [ ] `hw` module: pure data (registers, flags, OAM layout, VRAM map) emitted as `hardware.inc` symbol
-      names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine` (started: `src/hw.rs` since
-      [B22](CONTEXT.md#b22) holds the VRAM, WRAM and OAM layout the new code uses; the older strings are left)
+- [x] `hw` module: pure data (registers, flags, OAM layout, VRAM map) emitted as `hardware.inc` symbol
+      names; no more `"_OAMRAM+N"` / `"$9800"` / LCDC strings in `std` or `engine` (branch `refactor-p2-hw`:
+      `hw::Symbol`, a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM
+      layout and the screen sizes; `gb_std` turns one into an `Expr` by its name; `gb_std`, `rust_boy` and the examples
+      take every hardware fact from `hw`. Tests: each value `ASSERT`ed with RGBDS against `include/hardware.inc`, and a
+      guard that fails on a hardware name or address written as a string outside `hw` (the `unbricked.rs` tutorial
+      excepted). The 6 example ROMs, their asm, `.map` and `.sym` are byte-identical)
 - [x] Move `Emittable` into the asm layer; add a `Block` instruction buffer (stop using `Asm` + `get_main_instrs()` as scratch)
       (branch `refactor-p2-typed-operands-2b`: `gb_asm::Block` with the same builders as `Asm`, written once; `Emittable`
       and `boxed` in `gb_asm`, re-exported by `gb_std::flow`; `gb_std` and `rust_boy` build every snippet in a `Block`)

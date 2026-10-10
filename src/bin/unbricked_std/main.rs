@@ -6,7 +6,7 @@ use rust_boy::{
     gb_std::{
         flow::If,
         graphics::{
-            sprites::{SpriteManager, clear_objects_screen, initialize_objects_screen},
+            sprites::{Sprite, clear_objects_screen, draw_sprites, initialize_objects_screen},
             tile_ref::TileRef,
             utility::{
                 add_tilemap, add_tiles, cp_in_memory, get_tile_by_pixel, is_specific_tile, memcopy,
@@ -52,15 +52,14 @@ fn main() {
     asm.emit_all(initialize_objects_screen());
     asm.emit_all(clear_objects_screen(asm.labels()));
 
-    // Sprite management
-    let mut sprite_manager = SpriteManager::new();
-    sprite_manager.add_sprite(16, 128, 0, 0); // Paddle (id 0)
-    sprite_manager.add_sprite(32, 100, 1, 0); // Ball (id 1)
+    // Sprites: the paddle in OAM entry 0 (tile 0), the ball in entry 1 (tile 1)
+    let mut paddle = Sprite::new(0, 16, 128, 0, 0);
+    let mut ball = Sprite::new(1, 32, 100, 1, 0);
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumX");
     asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
-    asm.emit_all(sprite_manager.draw());
+    asm.emit_all(draw_sprites([&paddle, &ball]));
 
     asm.emit_all(turn_on_screen());
     asm.ld_a(0b11100100);
@@ -80,22 +79,12 @@ fn main() {
     asm.call("WaitVBlank");
 
     // Ball movement
-    asm.emit_all(
-        sprite_manager
-            .get_sprite_mut(1)
-            .unwrap()
-            .move_x_var("wBallMomentumX"),
-    );
-    asm.emit_all(
-        sprite_manager
-            .get_sprite_mut(1)
-            .unwrap()
-            .move_y_var("wBallMomentumY"),
-    );
+    asm.emit_all(ball.move_x_var("wBallMomentumX"));
+    asm.emit_all(ball.move_y_var("wBallMomentumY"));
 
     // Bounce on top. GetTileByPixel returns the tile index in a, which IsWallTile tests
     asm.label("BounceOnTop");
-    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, 1));
+    asm.emit_all(ball.get_pivot(0, 1));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnTopEnd");
@@ -105,7 +94,7 @@ fn main() {
 
     // Bounce on right
     asm.label("BounceOnRight");
-    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(-1, 0));
+    asm.emit_all(ball.get_pivot(-1, 0));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
@@ -115,7 +104,7 @@ fn main() {
 
     // Bounce on left
     asm.label("BounceOnLeft");
-    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(1, 0));
+    asm.emit_all(ball.get_pivot(1, 0));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
@@ -125,7 +114,7 @@ fn main() {
 
     // Bounce on bottom
     asm.label("BounceOnBottom");
-    asm.emit_all(sprite_manager.get_sprite(1).unwrap().get_pivot(0, -1));
+    asm.emit_all(ball.get_pivot(0, -1));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
     asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
@@ -136,9 +125,6 @@ fn main() {
     // Paddle bounce using the new simplified If API!
     asm.comment("Paddle bounce check");
     {
-        let paddle = sprite_manager.get_sprite(0).unwrap();
-        let ball = sprite_manager.get_sprite(1).unwrap();
-
         // Helper: get ball Y + 5 (for collision offset)
         let ball_y_plus_5 = {
             let mut a = Block::new();
@@ -192,14 +178,8 @@ fn main() {
     // Key checks and limited moves take their local labels from the program's allocator,
     // like the Ifs
     let labels = asm.labels().clone();
-    let left_pressed = sprite_manager
-        .get_sprite_mut(0)
-        .unwrap()
-        .move_left_limit(&labels, 1, 16);
-    let right_pressed = sprite_manager
-        .get_sprite_mut(0)
-        .unwrap()
-        .move_right_limit(&labels, 1, 104);
+    let left_pressed = paddle.move_left_limit(&labels, 1, 16);
+    let right_pressed = paddle.move_right_limit(&labels, 1, 104);
     asm.emit_all(check_key(
         &labels,
         rust_boy::gb_std::inputs::PadButton::Left,

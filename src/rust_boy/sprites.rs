@@ -5,8 +5,10 @@ use std::collections::BTreeMap;
 use super::memory::{MemoryAllocator, MemoryRegion};
 use super::tiles::TileId;
 use crate::{
-    gb_asm::{Block, Condition, Expr, Instr, LabelAllocator, Mem, R8, R16, is_identifier},
-    gb_std::graphics::sprites::{MoveDir, move_coord_limit, oam_address, pivot},
+    gb_asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, is_identifier},
+    gb_std::graphics::sprites::{
+        MoveDir, Sprite, draw_sprites, move_coord_limit, move_coord_var, oam_address, pivot,
+    },
     hw,
     rust_boy::animations::Animation,
 };
@@ -863,31 +865,18 @@ impl SpriteManager {
         )
     }
 
-    /// Generate the code that writes every sprite to OAM, at start-up
+    /// Generate the code that writes every sprite to OAM, at start-up: `gb_std`'s
+    /// [`draw_sprites`], in OAM order (the OAM was cleared before, with
+    /// `gb_std::graphics::sprites::clear_objects_screen`)
     pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
-        let mut asm = Block::new();
-
-        // Draw all sprites to OAM (sorted by oam_index to ensure correct order); the
-        // OAM was cleared before (gb_std::graphics::sprites::clear_objects_screen)
-        asm.ld(R16::HL, hw::OAMRAM);
         let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
         sorted_sprites.sort_by_key(|s| s.oam_index);
-        let write = |asm: &mut Block, value: u8| {
-            asm.ld_a(value);
-            asm.ld(Mem::Hli, R8::A);
-        };
-        for sprite in sorted_sprites {
-            // Y position (add 16 for screen offset; `add` checked that it fits, B17)
-            write(&mut asm, sprite.y + hw::OAM_Y_OFFSET);
-            // X position (add 8 for screen offset)
-            write(&mut asm, sprite.x + hw::OAM_X_OFFSET);
-            // Tile index
-            write(&mut asm, sprite.tile_index);
-            // Flags
-            write(&mut asm, sprite.flags);
-        }
-
-        asm.into_instrs()
+        // `add` checked that each position fits in OAM (B17)
+        let sprites: Vec<Sprite> = sorted_sprites
+            .into_iter()
+            .map(|s| Sprite::new(s.oam_index, s.x, s.y, s.tile_index, s.flags))
+            .collect();
+        draw_sprites(&sprites)
     }
 
     /// Generate movement code for a specific sprite: add the value of the variable
@@ -908,16 +897,9 @@ impl SpriteManager {
         self.move_var(id, Axis::Y, var_name)
     }
 
-    /// Add the variable `var_name` to the sprite's coordinate on `axis`
+    /// Add the variable `var_name` to the sprite's coordinate on `axis` (`gb_std`'s code)
     fn move_var(&self, id: SpriteId, axis: Axis, var_name: &str) -> Vec<Instr> {
-        let coord = axis.oam_address(self.sprite(id));
-        let mut asm = Block::new();
-        asm.ld_a_addr_def(var_name);
-        asm.ld(R8::B, R8::A);
-        asm.ld_a_addr_def(&coord);
-        asm.add(R8::B);
-        asm.ld_addr_def_a(coord);
-        asm.into_instrs()
+        move_coord_var(&axis.oam_address(self.sprite(id)), var_name)
     }
 
     /// Move a sprite left by `distance` pixels, but never left of `limit`

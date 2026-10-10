@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 259 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 279 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -55,7 +55,7 @@ rgbfix -v -p 0xFF main.gb
 | Sections | ✅ since Phase 2 (`refactor-p2-sections`) `SECTION` is a typed `gb_asm::Section`: a name, a memory type (`ROM0`, `ROMX`, `VRAM`, `SRAM`, `WRAM0`, `WRAMX`, `OAM`, `HRAM`), and optionally a fixed address, a bank, `ALIGN[n, offset]`, `UNION` or `FRAGMENT`; what RGBDS rejects panics when it is built, and code or data in a RAM section (which only reserves space, with `ds n` and no fill), or a section name used twice, panics when it is emitted (`Asm::emit`; since `refactor-p2-sections-layout`, before when the program was printed). Tests (`gb_asm::section`): every form prints the expected line and, with `RGBDS_LINK_CHECK`, RGBDS places it where it says (checked in the `.sym` file); every rejected form is rejected by RGBDS too |
 | Start-up code | ✅ `gb.init()` code runs after the variables (animation variables included) and palettes are set, so what it sets survives (was overwritten, fixed — [B11](#b11)); the OAM is always cleared and `rOBP1` is set (fixed — [B28](#b28)); unit tests run the start-up code on `gb_asm::test_cpu` |
 | Animations | ✅ any number of animated sprites and animations assemble (the dispatcher's `jr` went out of range from 3 sprites × 4 animations, fixed — [B9](#b9)); `Loop`, `PingPong` and `Once` all work (`PingPong`/`Once` played as `Loop`, fixed — [B10](#b10)); unit tests run the generated code frame by frame (`gb_asm::test_cpu`) |
-| Functions and routines | ✅ `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
+| Functions and routines | ✅ since Phase 2 (`refactor-p2-routines`) every function is a `gb_std::routine::Routine` value: a name, a body, the routines it depends on, the WRAM variables it needs, and its calling convention (`Regs` it reads, returns and clobbers; every other register is preserved), checked for every `gb_std` routine on the test CPU; a builtin is its `gb_std` routine, `RustBoy::define_routine` / `call_routine` register a routine with its dependencies (see [Key concepts](#key-concepts)). `build()` emits each builtin and user function the generated code refers to (`call`, `jp`, `Call`, `IfCall`, function bodies, raw code; a builtin reached through `Call`/`IfCall`/a function body was missing, fixed — [B26](#b26)), once, with the variables it needs, and only those (unused user functions were emitted, fixed — [B24](#b24)); `RustBoy::keep_function` forces one, `RustBoy::external_symbol` declares one defined outside (an `INCLUDE`d file, which `build()` does not read); one `GetTileByPixel` in the library, with one contract (fixed — [B23](#b23)); `Memcopy` copies nothing for a length of 0, and empty raw tile data gets no copy (fixed — [B27](#b27)); every chunk of `raw()` code is kept (fixed — [B15](#b15)) |
 | API safety | ✅ unknown sprite / composite ids, animation names and indices panic with a clear message (they gave no code, fixed — [B20](#b20)); VRAM tiles, WRAM0 variables and OAM entries are allocated through `MemoryAllocator` and panic when full, sprite positions and animation frames are checked (fixed — [B17](#b17)); a sprite's tile index comes from its VRAM address (fixed — [B18](#b18)); `Var::set`/`get` handle 16-bit variables (fixed — [B16](#b16)); `get_pivot` wraps around the map (fixed — [B22](#b22)); a tilemap can go to `$9C00` (fixed — [B19](#b19)) |
 | Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`). Typed operands since `refactor-p2-typed-operands`: no register or expression is a string any more (`Dst`, `Operand`, `Mem`, `AluOperand`, `IncDec`, and `Expr` for values), a value cannot be a destination, and `Instr::check` accepts exactly the `ld`/`ldh` operand pairs of the opcode table (`isa_tests`: all 91 load opcodes, `Expr` operands assembled by RGBDS, 554 instructions) |
 | Hardware facts | ✅ since Phase 2 (`refactor-p2-hw`) every register, flag, address, OAM offset and screen size that `gb_std`, `rust_boy` and the examples write comes from `hw` (see [Key concepts](#key-concepts)): 110 `hw::Symbol`s, each a `hardware.inc` name and its value, plus the facts `hardware.inc` has no name for. Tests: every symbol is a name `include/hardware.inc` defines, and with `RGBDS_LINK_CHECK` a file that includes it `ASSERT`s every value (a wrong value fails); `test_no_hardware_strings_outside_hw` fails on a `hardware.inc` name or an address from `$8000` on written as a string (or a hex integer) in `gb_std`, `rust_boy` or the examples, outside their tests and the hand-written `unbricked.rs`. The 6 example ROMs, their asm, `.map` and `.sym`, are byte-identical |
@@ -69,7 +69,7 @@ rgbfix -v -p 0xFF main.gb
 | Layer | Path | LOC | Role |
 |---|---|---|---|
 | **L1 `gb_asm`** | `src/gb_asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `asm.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
-| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`) | ~2800 | Stateless routines returning `Vec<Instr>` (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel…), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
+| **L2 `gb_std`** | `src/gb_std/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3300 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), a simple `SpriteManager`, `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
 | **L3 `rust_boy`** | `src/rust_boy/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`) | ~2800 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` |
 | **`hw`** (data) | `src/hw.rs` | ~390 | Hardware facts as pure data (since [B22](#b22); complete since Phase 2 `refactor-p2-hw`): `hw::Symbol`s, each a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM layout and the screen sizes (`hw::SYMBOLS` lists them), the facts with no `hardware.inc` name as plain numbers, and `oam_offset`; depends on nothing, used by `gb_std` (which turns a `Symbol` into an `Expr`, `src/gb_std/hw_symbols.rs`), `rust_boy` and the examples, not by `gb_asm` |
 | Examples | `src/bin/` | ~2410 | 6 binaries (raw `gb_asm`, `gb_std`, and `rust_boy` versions of the Unbricked tutorial, plus FOSDEM demo and coin animation) |
@@ -167,8 +167,46 @@ rgbfix -v -p 0xFF main.gb
   one `instruction_builders!` in `src/gb_asm/builders.rs`) and returned with `into_instrs()`. They used to create a
   fresh `Asm`, emit into its default `Chunk::Main` and return `asm.get_main_instrs()` (the scratch-`Asm` idiom). An
   `Asm` is now only a whole program: the one `Layout::program` makes for `RustBoy`, and the `gb_asm` example programs.
+- **Routines** (since `refactor-p2-routines`, `src/gb_std/routine.rs`): a `Routine` is a routine as a value, built
+  with `Routine::new(name, body)` (it panics unless `name` is an identifier and `body` defines the label `name:`) and
+  `with_dep`, `with_variable`, `with_reads`, `with_returns`, `with_clobbers`. Its **dependencies** are the routines it
+  calls, jumps to or reads, given as values, so a routine brings what it needs: `Routine::with_deps` lists it and every
+  dependency, each once, dependencies first (a name is one routine: two different routines with one name panic), and
+  `code_with_deps` is their code, the routine first. Its **variables** are the WRAM bytes it needs (`UpdateKeys`:
+  `wCurKeys`, `wNewKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
+  the flags `f`, printed `a, bc, f`): the registers it **reads**, **returns** and **clobbers**; every other register is
+  **preserved**. A routine whose convention is not given may change every register (`Regs::ALL`). Every `gb_std`
+  routine is a `Routine` (`memcopy()`, `wait_vblank()`, `wait_not_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
+  `gb_std::utility::delay()`, `is_specific_tile(..)`), and a `Routine` is its body too (`IntoIterator`, `Into<Vec<Instr>>`),
+  so `asm.emit_all(memcopy())` writes it as before. Their conventions:
 
-### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:489-680`, `build` prints the program of the `Layout` `build_asm` returns)
+  | Routine | Reads | Returns | Clobbers | Variables |
+  |---|---|---|---|---|
+  | `Memcopy` | `bc` (length), `de` (source), `hl` (destination) | `bc` = 0, `de`, `hl` after the bytes | `a`, `f` | |
+  | `WaitVBlank`, `WaitNotVBlank` | | | `a`, `f` | |
+  | `UpdateKeys` | | | `a`, `b`, `f` | `wCurKeys`, `wNewKeys` |
+  | `GetTileByPixel` | `b` (X), `c` (Y) | `a` (tile), `hl` (its address) | `bc`, `f` | |
+  | `Delay` | `bc` (count) | | `a`, `bc` (`$FFFF`), `f` | |
+  | `is_specific_tile` | `a` (tile) | `f` (Z: one of the tiles) | none | |
+
+  The tests (`src/gb_std/routine/tests.rs`) run each one on `gb_asm::test_cpu` from two CPUs whose registers all hold
+  known, different values: every register it changes must be listed (the others are preserved), and every register
+  it lists must change in some case (the list is exact). The test CPU models the Z and C flags, not N and H.
+  **In the engine** a builtin is its `gb_std` routine (`BuiltinFunction::routine`), and a user function is a routine
+  too: `define_function(name, body)` / `define_function_from` build one from its body, and **`RustBoy::define_routine`**
+  registers a `Routine` with its dependencies (each before the routines that need it, so it is emitted first), and
+  **`RustBoy::call_routine(&routine)`** returns `call Name` and registers the routine the same way. A dependency is
+  shared, not replaced: a `gb_std` routine of a builtin is that builtin (or the user function that replaces it), and a
+  dependency with the name and code of a function the program has is that function; other code under a taken name
+  panics. What a function needs is its dependencies and, for a user function, what its body refers to. A builtin's
+  dependencies are given in full, so its body is not read (`test_builtin_dependencies_are_complete` checks every
+  symbol of each builtin's body against its dependencies, its variables, its own labels and the `hardware.inc` names).
+  The symbols of code are read by `gb_asm::labels::symbols`: typed operands by their type (a jump or call target, the
+  symbols of an `Expr`), what is only text (a raw line, `db`, `dw`, `ds`, a `DEF` value, `Expr::raw`) as RGBDS reads
+  it (the scan of [B26](#b26), with all its rules). The variables of every emitted routine are created, as they were
+  for the builtins.
+
+### What `RustBoy::build()` emits (`src/rust_boy/rustboy.rs:575-766`, `build` prints the program of the `Layout` `build_asm` returns)
 
 1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
@@ -186,8 +224,9 @@ rgbfix -v -p 0xFF main.gb
    before LCD on, `MainLoop` before `jp Main`, see `RustBoy::raw`).
 6. **Functions** (since [B24](#b24)/[B26](#b26), worked out once all the code is known, before the variables): the
    builtins, then the user functions, that the code and the animation functions refer to, directly or through
-   other functions, plus the ones forced with `use_function` / `keep_function`; then the `Anim_*` functions. The
-   variables an emitted builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
+   other functions (their bodies and, since `refactor-p2-routines`, their dependencies), plus the ones forced with
+   `use_function` / `keep_function`; then the `Anim_*` functions. The variables an emitted routine needs (`wCurKeys`,
+   `wNewKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
    variable initialisation (step 3) and the Data chunk include them.
 7. **Tiles / Tilemap**: `Label:` + `dw`/`INCBIN` + `LabelEnd:`; **Data**: `SECTION "Variables", WRAM0` + `name: db/dw`.
 
@@ -305,8 +344,21 @@ The problems are where each layer reaches across the line:
    | `gb_std` `Sprite::new(40, …)` (any id), a 41st `SpriteManager::add_sprite` | panics: an id is an OAM entry, 0 to 39 (its code read and wrote `_OAMRAM+160` and beyond) |
 4. **L3 re-implements L2 instead of using it.** `src/rust_boy/functions.rs:152-311` (at `4601a5c`) duplicated Memcopy,
    WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel from `gb_std`, and they had already
-   diverged ([B23](#b23)). *Since B23* `rust_boy` emits the `gb_std` routines (only `Delay` is its own), and its
+   diverged ([B23](#b23)). *Since B23* `rust_boy` emits the `gb_std` routines (only `Delay` was its own), and its
    tile copies use `gb_std`'s `cp_in_memory`. L2 still contains its own `SpriteManager` that duplicates L3's.
+   *Since Phase 2 (`refactor-p2-routines`):* routines are values (`gb_std::routine::Routine`, see
+   [Key concepts](#key-concepts)) and `Delay` is `gb_std`'s too (`gb_std::utility::delay`), so the engine has no routine
+   of its own: a builtin is the `gb_std` value, with its dependencies, variables and calling convention. The output is
+   unchanged (the 6 example ROMs, their asm, `.map` and `.sym` are byte-identical). **Breaking**, with the migration:
+
+   | Before | After |
+   |---|---|
+   | `memcopy()`, `wait_vblank()`, `wait_not_vblank()`, `update_keys()`, `get_tile_by_pixel()`, `is_specific_tile(..)` returned `Vec<Instr>` | they return a `Routine`: `asm.emit_all(memcopy())` and `code.extend(memcopy())` work as before; `memcopy().body()` (a slice) or `Vec::<Instr>::from(memcopy())` for the instructions |
+   | `gb.define_function("IsWallTile", is_specific_tile("IsWallTile", ..))` | `gb.define_routine(is_specific_tile("IsWallTile", ..))` (it keeps the convention); `define_function` still takes a `Vec<Instr>` |
+   | `BuiltinFunction::variables()` returned `&'static [&'static str]` | it returns `Vec<String>` (`BuiltinFunction::routine().variables()`) |
+   | `Delay` was `rust_boy`'s (private) | `gb_std::utility::delay()` |
+   | `build()` read a builtin's body for the functions it calls | a builtin's dependencies are its `Routine::deps` (none today); a user function's body is still read, plus its dependencies |
+   | a function name such as `bc` or `ld` was found in `push bc`, `ld a, 1` (any word of the text) | typed instructions refer to their symbols only (raw text is read as before) |
 5. **No layer owns labels.** `gb_std` hardcodes global labels (`Left`, `CheckLeft`, `ClearOam`), `rust_boy`
    builds them with `format!`, `If` uses local labels — they collide and break scoping ([B7](#b7), [B25](#b25)).
    *Since B7/B25:* the asm layer has a `LabelAllocator` that numbers the local labels of snippets, and
@@ -348,7 +400,9 @@ The problems are where each layer reaches across the line:
 ```
 
 Rules: each layer depends only downward; the engine never formats register/hardware strings itself;
-every routine exists exactly once; every generated label comes from the allocator.
+every routine exists exactly once; every generated label comes from the allocator. Since `refactor-p2-routines` the
+std layer's routines are `Routine { name, body, deps, reads/returns/clobbers, variables }` values
+(`src/gb_std/routine.rs`).
 
 ---
 
@@ -751,12 +805,12 @@ label, two contracts. Memcopy, WaitVBlank, WaitNotVBlank and UpdateKeys are also
 (`src/rust_boy/functions.rs:152-266` vs `src/gb_std/graphics/utility.rs`, `src/gb_std/inputs.rs`), and
 `src/bin/unbricked.rs` has a third copy. *Fix:* one routine registry.
 **Status: fixed** on `refactor-p1-builtins`. There is one `GetTileByPixel`, in `gb_std`
-(`src/gb_std/graphics/utility.rs:134`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
+(`src/gb_std/graphics/utility.rs:159`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
 the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them);
 out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it changes `bc` and the flags and keeps
-`de` (documented on the function). `BuiltinFunction::generate` (`src/rust_boy/functions.rs:60`) returns the
+`de` (documented on the function). `BuiltinFunction::generate` (`src/rust_boy/functions.rs:83`, the code of `BuiltinFunction::routine`, `:71`, since `refactor-p2-routines`) returns the
 `gb_std` routine for Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel (the other four were
-identical), and `TileManager` copies with `gb_std`'s `cp_in_memory`; only `Delay` is `rust_boy`'s own. `gb_std`'s
+identical), and `TileManager` copies with `gb_std`'s `cp_in_memory`; only `Delay` was `rust_boy`'s own (it is `gb_std`'s since `refactor-p2-routines`). `gb_std`'s
 Memcopy passes its registers typed instead of as strings (same text). Every caller follows the contract:
 `unbricked_std` drops its four `ld a, [hl]` after `call GetTileByPixel` (its only change: −4 bytes, +1 in the
 routine; the same game in an emulator, 3000 frames compared, see the PR). **Decided by the maintainer (no longer pending):**
@@ -778,12 +832,12 @@ constants (`TestCpu::consts16`).
 every `user_functions` body; `used_user_functions` (`:71`) is written but never read. Note: filtering on it
 today would break linking, because calls made through `Call`/`IfCall` are not tracked ([B26](#b26)) — fix B26 first.
 **Status: fixed** on `refactor-p1-builtins`, with B26: `FunctionRegistry::generate_used`
-(`src/rust_boy/functions.rs:279`) emits only the user functions the program refers to, from the start-up code,
+(`src/rust_boy/functions.rs:361` since `refactor-p2-routines`) emits only the user functions the program refers to, from the start-up code,
 the main loop, `raw()` code or the animation functions, then from those functions, and so on; in registration
 order. A function called only from raw code (`raw()`, or an `Asm::raw` line, of one or several lines) needs
 nothing. To emit one that only code `build()` does not
 see calls (asm appended to its output, an `INCLUDE`d file), **`RustBoy::keep_function(name)`**
-(`src/rust_boy/rustboy.rs:314`; it takes a builtin name too, and panics on an unknown name, like `call`);
+(`src/rust_boy/rustboy.rs:318`; it takes a builtin name too, and panics on an unknown name, like `call`);
 `use_function(BuiltinFunction)` still forces a builtin. `used_user_functions` is gone. A function is found by
 its label, so `define_function(name, body)` panics if `body` does not define the label `name` (a body labelled
 otherwise used to be emitted anyway and could be called by its own label); another global label in a body (a
@@ -834,9 +888,10 @@ the `Call` doc example alone (`Call::with_args("GetTileByPixel", ..)`) → `call
 → rgblink "undefined symbol". `unbricked_rustboy` works only because it also calls `gb.call_args("GetTileByPixel", ..)`.
 *Fix:* routines as values with dependencies, or scan emitted `Call` targets in `build()`.
 **Status: fixed** on `refactor-p1-builtins` by scanning in `build()` (routines as values stay in Phase 2). The
-Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:617-651`): the global
-symbols of every other chunk and of the animation functions are looked up (`symbols`,
-`src/rust_boy/functions.rs:399`, reads the text of each instruction line by line as RGBDS does, with
+Functions chunk is worked out once all the code is known (`src/rust_boy/rustboy.rs:707-741`): the global
+symbols of every other chunk and of the animation functions are looked up (`symbols`, since `refactor-p2-routines`
+`src/gb_asm/labels.rs:440`; it read the text of every instruction, it now reads typed operands by their type and
+reads the text of each raw instruction line by line as RGBDS does, with
 `gb_asm::labels::code_lines`: `;` and `/* … */` comments (also over several lines) and the contents of strings
 are skipped, a line ending with `\` continues on the next, a line starting with `Name:` defines `Name`; so
 `call`, `jp`, `ld hl, Name`, `dw Name`, `LOW(Name)` and raw lines of one or several lines count, and sections
@@ -849,11 +904,11 @@ the code `build()` generates is not taken for a builtin (for a user function it 
 before, each of these also emitted the builtin `Delay:`, which rgbasm rejected as defined twice. Names defined
 where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path depends on the assembler's
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
-**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:349`): a function of that name is never emitted,
+**`RustBoy::external_symbol(name)`** (`src/rust_boy/rustboy.rs:353`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
 (`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
-and the Data chunk are emitted (`:653-673`), so `UpdateKeys` called without `add_inputs` links too. The scan is
+and the Data chunk are emitted (`:743-763`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
 global label of a body → its function, kept up to date as functions are defined) find a function, also for
 `call` and `keep_function`; each name is handled once (a 100-function, 5000-line program builds in about 6 ms in
@@ -871,6 +926,20 @@ or as a `u16`, a call in a block comment), `test_a_def_in_raw_code_is_not_a_func
 `gb_asm::label_check::assert_links`: no label error, and no symbol used but not defined (`undefined_symbols`:
 labels, variables, constants; `hardware.inc` names allowed; `assert_links_with` adds included files). With `RGBDS_LINK_CHECK` set it also assembles and
 links each program with rgbasm/rgblink; CI's `assemble` job runs `cargo test --lib` that way.
+**Since Phase 2 (`refactor-p2-routines`), routines as values:** every function is a `Routine` with explicit
+dependencies (see [Key concepts](#key-concepts)). A builtin's dependencies are given in full and its body is no longer
+read (a test checks them against the body); a user function needs its dependencies and what its body refers to;
+`RustBoy::define_routine` and `call_routine` register a routine with its dependencies, so a typed call brings what it
+calls even when nothing names it (a jump table in an `INCLUDE`d file). The scan stays, as the reading of raw text:
+`symbols` moved to `gb_asm::labels` and reads typed operands by type. The variables of every emitted routine are
+created (`Routine::variables`; they were the builtins' only). Every behaviour above is unchanged and its tests pass
+(`keep_function`, `external_symbol`, `use_function`, a user function replacing a builtin, second entry points, the
+name conflicts, `wCurKeys`/`wNewKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
+(each routine once, in a fixed order, linked), `test_a_dependency_nothing_names_is_emitted`,
+`test_a_routine_and_a_function_of_one_name`, `test_define_routine_replaces_a_builtin_with_its_variables`, and in
+`functions.rs` `test_a_routine_brings_its_dependencies`, `test_a_dependency_is_shared_not_replaced`,
+`test_two_routines_with_one_name_panic`, `test_a_routine_variable_is_created_once`,
+`test_builtin_dependencies_are_complete`.
 
 #### B27
 **`Memcopy` with length 0 copies 64 KiB.** (Lines at `4601a5c`.) Memcopy is a do-while loop (`src/gb_std/graphics/utility.rs:54-70`;

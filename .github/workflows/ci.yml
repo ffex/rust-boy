@@ -18,6 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
@@ -28,6 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test
 
   assemble:
@@ -36,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Cache RGBDS
         id: cache-rgbds
         uses: actions/cache@v4
@@ -54,12 +57,21 @@ jobs:
       - run: echo "$HOME/rgbds" >> "$GITHUB_PATH"
       - run: rgbasm --version
       - run: scripts/assemble-examples.sh
+      # The Blargg test ROMs that check the test emulator (tests/support/gameboy.rs)
+      - name: Cache the Blargg test ROMs
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/gb-test-roms
+          key: gb-test-roms-${{ hashFiles('scripts/fetch-test-roms.sh') }}
+      - run: scripts/fetch-test-roms.sh "$RUNNER_TEMP/gb-test-roms"
       # The unit tests that check a whole program with `assert_links` also assemble and
-      # link it with RGBDS
-      - name: Link the test programs with RGBDS
-        run: cargo test --lib
+      # link it with RGBDS; the emulator tests build ROMs with RGBDS and run them on the
+      # test emulator, which is checked against the Blargg ROMs first
+      - name: Link the test programs with RGBDS and run the ROMs
+        run: cargo test --lib --test emulator
         env:
           RGBDS_LINK_CHECK: 1
+          GB_TEST_ROMS: ${{ runner.temp }}/gb-test-roms
       - name: Upload example ROMs
         uses: actions/upload-artifact@v4
         with:

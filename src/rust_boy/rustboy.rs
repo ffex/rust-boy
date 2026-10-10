@@ -1517,9 +1517,12 @@ mod tests {
             "Variables",
         ];
         type Setup = fn(&mut RustBoy, &str);
-        let uses: [(&str, Setup); 22] = [
+        let uses: [(&str, Setup); 23] = [
             ("create_u8", |gb, n| {
                 gb.vars.create_u8(n, 0);
+            }),
+            ("create_hram_u8", |gb, n| {
+                gb.vars.create_hram_u8(n, 0);
             }),
             ("create_u16", |gb, n| {
                 gb.vars.create_u16(n, 0);
@@ -2976,6 +2979,20 @@ mod tests {
         function_of(&mut gb, "Touch", touch);
         function_of(&mut gb, "SetSpeed", vars[3].set(7));
         function_of(&mut gb, "GetSpeed", vars[3].get());
+        // An animated sprite and inputs: build() adds wFrameCounter, wAnim_Coin_Current
+        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys and wNewKeys (called through a
+        // function, so they are build()'s, not add_inputs'). The review of #32 found they
+        // went into the first section and moved the second one: `wHigh` was at $C001 by
+        // get_address, $C003 once linked
+        let coin = gb.add_sprite("Coin", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::PingPong);
+        gb.define_function("Poll", calling("Poll", &["UpdateKeys"]));
+        gb.keep_function("Poll");
+        let before: Vec<Option<u16>> = vars
+            .iter()
+            .map(|var| gb.vars.get_address(var.id()))
+            .collect();
         gb.raw(|asm| {
             asm.chunk(Chunk::Data)
                 .section(Section::wram0("Buffer"))
@@ -2990,8 +3007,9 @@ mod tests {
             data.starts_with(
                 "SECTION \"HRAM Variables\", HRAM[$FF80]\n    hSpeed: db\n    hDelta: dw\n    \
                  SECTION \"Variables\", WRAM0[$C000]\n    wLives: db\n    wScore: dw\n    \
-                 SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    \
-                 SECTION \"Buffer\", WRAM0\n"
+                 SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    wFrameCounter: db\n    \
+                 wAnim_Coin_Current: db\n    wAnim_Coin_Dir: db\n    wCurKeys: db\n    \
+                 wNewKeys: db\n    SECTION \"Buffer\", WRAM0\n"
             ),
             "{}",
             data
@@ -3001,6 +3019,11 @@ mod tests {
             .map(|var| gb.vars.get_address(var.id()).unwrap())
             .collect();
         assert_eq!(addresses, [0xC000, 0xC003, 0xC001, 0xFF80, 0xFF81]);
+        assert_eq!(
+            before,
+            addresses.iter().map(|a| Some(*a)).collect::<Vec<_>>(),
+            "build() moved a variable"
+        );
         assert_links(&out);
 
         // With RGBDS: the linked addresses, and the `ldh` opcodes in the ROM
@@ -3009,6 +3032,14 @@ mod tests {
         };
         for (var, address) in vars.iter().zip(&addresses) {
             assert_eq!(symbols[var.name()], (0, *address), "{}", var.name());
+        }
+        // And build()'s own, after them
+        for (name, address) in [
+            ("wFrameCounter", 0xC005),
+            ("wAnim_Coin_Current", 0xC006),
+            ("wNewKeys", 0xC009),
+        ] {
+            assert_eq!(symbols[name], (0, address), "{}", name);
         }
         let code_at = |label: &str, len: usize| {
             let start = usize::from(symbols[label].1);

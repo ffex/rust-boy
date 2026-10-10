@@ -60,7 +60,7 @@ rgbfix -v -p 0xFF main.gb
 | Instruction set | ✅ every SM83 instruction (`push`/`pop`, `halt`, `stop`, `di`/`ei`, `reti`, `rst`, `sbc`, `bit`/`set`/`res`, the rotates and shifts, `cpl`, `scf`/`ccf`, `ld [hld]`, `ld hl, sp + e`, `jp hl`, `add sp, e`, `call cc` were missing); one shape per family, the 8-bit ALU printed `op a, src` (`cp` and `adc` were printed without `a`); `Instr` derives `Debug` and `PartialEq`; `gb_asm::isa_tests` checks every instruction family, with all the operands of the regular families (541 instructions): text and size and, with `RGBDS_LINK_CHECK`, the bytes from rgbasm against the SM83 opcode table (Phase 2, `refactor-p2-isa`). Typed operands since `refactor-p2-typed-operands`: no register or expression is a string any more (`Dst`, `Operand`, `Mem`, `AluOperand`, `IncDec`, and `Expr` for values), a value cannot be a destination, and `Instr::check` accepts exactly the `ld`/`ldh` operand pairs of the opcode table (`isa_tests`: all 91 load opcodes, `Expr` operands assembled by RGBDS, 554 instructions) |
 | Hardware facts | ✅ since Phase 2 (`refactor-p2-hw`) every register, flag, address, OAM offset and screen size that `gb_std`, `rust_boy` and the examples write comes from `hw` (see [Key concepts](#key-concepts)): 110 `hw::Symbol`s, each a `hardware.inc` name and its value, plus the facts `hardware.inc` has no name for. Tests: every symbol is a name `include/hardware.inc` defines, and with `RGBDS_LINK_CHECK` a file that includes it `ASSERT`s every value (a wrong value fails); `test_no_hardware_strings_outside_hw` fails on a `hardware.inc` name or an address from `$8000` on written as a string (or a hex integer) in `gb_std`, `rust_boy` or the examples, outside their tests and the hand-written `unbricked.rs`. The 6 example ROMs, their asm, `.map` and `.sym`, are byte-identical |
 | Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
-| Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address (checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
+| Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address once the program's variables are created (the variables `build()` adds go at the end of the last `WRAM0` section and move none; checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, and the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -481,7 +481,10 @@ The problems are where each layer reaches across the line:
    sections and documenting rgblink's placement went to fixed addresses. `build()` prints each variable section at the
    address the allocator gives its first variable (`SECTION "HRAM Variables", HRAM[$FF80]`, then `SECTION "Variables",
    WRAM0[$C000]`, the next section after it, ...), so `VariableManager::get_address` is where rgblink puts the variable,
-   whatever else the program has: with floating sections rgblink placed them itself (by its own order, which puts bigger
+   whatever else the program has, once its variables are created. The variables `build()` adds itself (`wFrameCounter`,
+   `wAnim_*`, a routine's) go at the end of the last `WRAM0` section, after every variable of the program, so they move
+   none (the independent review found that they went to the first section and moved the others: with two sections and
+   an animation, `get_address` said $C001 and rgblink put the variable at $C003). Before, with floating sections rgblink placed them itself (by its own order, which puts bigger
    sections first), so the addresses held only for a program with one `WRAM0` section. The program's own sections
    (a `raw()` `SECTION`) float around the engine's; a `raw()` section fixed at an address the variables use is an
    rgblink error, as any overlap. The HRAM section comes first, so the `raw()` data still lands in the last `WRAM0`
@@ -493,8 +496,9 @@ The problems are where each layer reaches across the line:
    and the initialisation on the test CPU, each access an `ldh`), `test_the_test_cpu_rejects_ldh_outside_hram`,
    `test_hram_has_room_for_64_bytes_of_variables`, `test_a_variable_is_in_one_memory`, `test_hram_variables_in_a_program`
    (the start-up code on the test CPU; raw data with only HRAM variables; HRAM full), and
-   `test_variables_are_where_get_address_says` (WRAM0 in two sections, HRAM, and a bigger floating `raw()` section:
-   with `RGBDS_LINK_CHECK`, every variable's address in the `.sym` of RGBDS is its `get_address`, and the ROM holds
+   `test_variables_are_where_get_address_says` (WRAM0 in two sections, HRAM, a bigger floating `raw()` section, and the
+   variables `build()` adds for an animation and `UpdateKeys`: `get_address` is the same before and after the build,
+   and with `RGBDS_LINK_CHECK` every variable's address in the `.sym` of RGBDS is its `get_address`, and the ROM holds
    `E0 80` / `F0 80`, `ldh [$FF80], a` / `ldh a, [$FF80]`). **Breaking**, with the migration:
 
    | Before | After |

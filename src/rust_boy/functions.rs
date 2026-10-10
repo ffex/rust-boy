@@ -399,7 +399,9 @@ impl FunctionRegistry {
         }
         for function in &self.user_functions {
             let name = function.name();
-            let other = if let Some(var_type) = variables.get(name) {
+            let other = if generated.iter().any(|generated| generated == name) {
+                Definition::GeneratedFunction
+            } else if let Some(var_type) = variables.get(name) {
                 Definition::Variable(*var_type)
             } else if self.external_symbols.contains(name) {
                 Definition::ExternalSymbol

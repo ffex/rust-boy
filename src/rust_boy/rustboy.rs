@@ -1390,6 +1390,198 @@ mod tests {
         assert!(message.contains("invalid tile name \"hl\""), "{}", message);
     }
 
+    #[test]
+    fn test_names_build_writes_are_checked_at_the_call() {
+        // Review of #30: these panicked in build()
+        let message = panic_message(|| {
+            RustBoy::new()
+                .vars
+                .create_in_section("wX", VarType::U8, 0, "My\"Sec");
+        });
+        assert!(
+            message.contains("section name \"My\\\"Sec\""),
+            "{}",
+            message
+        );
+        for name in ["a", "LOW"] {
+            let message = panic_message(|| {
+                Routine::new("Uses", calling("Uses", &[])).with_variable(name);
+            });
+            assert!(
+                message.contains(&format!("invalid variable name \"{}\"", name)),
+                "{}",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_function_named_like_an_animation_function() {
+        // Review of #30: the conflict was described as "a constant or a label"
+        let mut gb = animated();
+        gb.define_function("Anim_Coin_Spin", calling("Anim_Coin_Spin", &[]));
+        let error = gb.build().unwrap_err();
+        assert_eq!(
+            error,
+            Error::NameConflict {
+                name: "Anim_Coin_Spin".to_string(),
+                first: Definition::Function,
+                second: Definition::GeneratedFunction,
+            }
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("also a function build() generates (an animation's)"),
+            "{}",
+            error
+        );
+    }
+
+    #[test]
+    fn test_build_does_not_panic_on_what_a_program_contains() {
+        // Review of #30: a section name with `"` (given to create_in_section) and a routine
+        // variable named like a register (Routine::with_variable) were accepted by their
+        // call and panicked in build(). Every bad name, through every way into the program:
+        // the call that takes it panics, or build() returns Ok or Err, never a panic.
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let names = [
+            "a",
+            "hl",
+            "LOW",
+            "SECTION",
+            "ld",
+            "my name",
+            "1st",
+            "x.y",
+            ".loc",
+            "w\"q",
+            "w\\q",
+            "w{q}",
+            "w\nq",
+            "",
+            "Main",
+            "EntryPoint",
+            "Memcopy",
+            "UpdateKeys",
+            "wCurKeys",
+            "wFrameCounter",
+            "Anim_Coin_Spin",
+            "Coin",
+            "CoinEnd",
+            "Tiles",
+            "Variables",
+        ];
+        type Setup = fn(&mut RustBoy, &str);
+        let uses: [(&str, Setup); 22] = [
+            ("create_u8", |gb, n| {
+                gb.vars.create_u8(n, 0);
+            }),
+            ("create_u16", |gb, n| {
+                gb.vars.create_u16(n, 0);
+            }),
+            ("create_in_section (section)", |gb, n| {
+                gb.vars.create_in_section("wX", VarType::U8, 0, n);
+            }),
+            ("define_const (name)", |gb, n| {
+                gb.define_const(n, 1);
+            }),
+            ("define_const (value)", |gb, n| {
+                gb.define_const("CONST", n);
+            }),
+            ("external_symbol", |gb, n| {
+                gb.external_symbol(n);
+            }),
+            ("keep_function", |gb, n| {
+                gb.keep_function(n);
+            }),
+            ("call", |gb, n| {
+                let call = gb.call(n);
+                gb.add_to_main_loop(call);
+            }),
+            ("call_args", |gb, n| {
+                gb.call_args(n, Vec::new());
+            }),
+            ("define_function", |gb, n| {
+                gb.define_function(n, calling(n, &[]));
+                gb.keep_function(n);
+            }),
+            ("define_function_from", |gb, n| {
+                gb.define_function_from(n, Vec::<Instr>::new());
+                gb.keep_function(n);
+            }),
+            ("Routine::with_variable", |gb, n| {
+                let routine = Routine::new("Uses", calling("Uses", &[])).with_variable(n);
+                let call = gb.call_routine(&routine);
+                gb.add_to_main_loop(call);
+            }),
+            ("tiles.add_background", |gb, n| {
+                gb.tiles.add_background(n, tiles(1));
+            }),
+            ("tiles.add_tilemap", |gb, n| {
+                gb.tiles.add_tilemap(n, &[[0u8; 32]]);
+            }),
+            ("add_sprite", |gb, n| {
+                gb.add_sprite(n, tiles(2), 0, 0, 0);
+            }),
+            ("add_animation", |gb, n| {
+                let coin = gb.add_sprite("Coin", tiles(2), 0, 0, 0);
+                gb.sprites.add_animation(coin, n, 0, 1, AnimationType::Loop);
+            }),
+            ("an animation, and a function", |gb, n| {
+                let coin = gb.add_sprite("Coin", tiles(2), 0, 0, 0);
+                gb.sprites
+                    .add_animation(coin, "Spin", 0, 1, AnimationType::PingPong);
+                gb.define_function(n, calling(n, &[]));
+                gb.keep_function(n);
+            }),
+            ("an animation, and a u16 variable", |gb, n| {
+                let coin = gb.add_sprite("Coin", tiles(2), 0, 0, 0);
+                gb.sprites
+                    .add_animation(coin, "Spin", 0, 1, AnimationType::Loop);
+                gb.vars.create_u16(n, 0);
+            }),
+            ("raw label in Data", |gb, n| {
+                gb.raw(|asm| {
+                    asm.chunk(Chunk::Data).label(n);
+                });
+            }),
+            ("raw line in Functions", |gb, n| {
+                gb.raw(|asm| {
+                    asm.chunk(Chunk::Functions).raw(n);
+                });
+            }),
+            ("raw section", |gb, n| {
+                gb.raw(|asm| {
+                    asm.chunk(Chunk::Data).section(Section::wram0(n));
+                });
+            }),
+            ("inputs, and a variable", |gb, n| {
+                let mut inputs = InputManager::new();
+                inputs.on_press(crate::gb_std::inputs::PadButton::A, Vec::new());
+                gb.add_inputs(inputs);
+                gb.vars.create_u16(n, 0);
+            }),
+        ];
+        let mut built = 0;
+        for (what, setup) in uses {
+            for name in names {
+                let program = catch_unwind(AssertUnwindSafe(|| {
+                    let mut gb = RustBoy::new();
+                    setup(&mut gb, name);
+                    gb
+                }));
+                // Rejected by its call: that is the rule
+                let Ok(gb) = program else { continue };
+                let result = catch_unwind(AssertUnwindSafe(|| gb.build()));
+                assert!(result.is_ok(), "build() panicked for {} {:?}", what, name);
+                built += 1;
+            }
+        }
+        assert!(built > 100, "only {} programs reached build()", built);
+    }
+
     /// A program whose one sprite has an animation, so `build()` adds `wFrameCounter` and
     /// `wAnim_Coin_Current`
     fn animated() -> RustBoy {

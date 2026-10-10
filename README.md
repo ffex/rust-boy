@@ -14,7 +14,7 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix�
 
 | Module | Level | What it gives you |
 |---|---|---|
-| `rust_boy::rust_boy` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
+| `rust_boy::rust_boy` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM and HRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
 | `rust_boy::gb_std` | routines | Ready-made routines as values (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …, each a `Routine` with its dependencies and calling convention) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
 | `rust_boy::gb_asm` | assembly | `Asm` (a whole program) and `Block` (a piece of code): one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
 
@@ -282,12 +282,12 @@ Open them in any Game Boy emulator.
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM variables
-  (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM and HRAM
+  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and routines (the builtins and
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too
   many tiles or sprites (40) panic with a clear message where they are added, as do unknown sprite ids and animation
-  names; variables that do not fit in WRAM0 make `build()` return `Error::MemoryFull` (a problem of the whole program,
+  names; variables that do not fit in WRAM0 or HRAM make `build()` return `Error::MemoryFull` (a problem of the whole program,
   like a name defined twice: `build()` returns an `Error` for those, and a wrong call panics where it is made). The output is deterministic: things appear in the order you created them.
 - **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
   there is no sound yet, and the engine puts everything in one ROM bank (`gb_asm` programs can open `ROMX` sections, but

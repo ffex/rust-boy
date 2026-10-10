@@ -840,7 +840,7 @@ impl RustBoy {
 
         asm.chunk(Chunk::Data);
         asm.emit_all(vars.generate_sections());
-        if !raw_data.is_empty() && vars.is_empty() && !opens_section(&raw_data) {
+        if !raw_data.is_empty() && !vars.has_wram0_sections() && !opens_section(&raw_data) {
             // No variable section before it: the raw data would land in the ROM0 section
             // of the code, so it gets a WRAM0 section of its own
             asm.section(Section::wram0(RAW_DATA_SECTION));
@@ -1517,9 +1517,12 @@ mod tests {
             "Variables",
         ];
         type Setup = fn(&mut RustBoy, &str);
-        let uses: [(&str, Setup); 22] = [
+        let uses: [(&str, Setup); 23] = [
             ("create_u8", |gb, n| {
                 gb.vars.create_u8(n, 0);
+            }),
+            ("create_hram_u8", |gb, n| {
+                gb.vars.create_hram_u8(n, 0);
             }),
             ("create_u16", |gb, n| {
                 gb.vars.create_u16(n, 0);
@@ -2938,6 +2941,166 @@ mod tests {
                 .build()
                 .unwrap();
         assert_eq!(lcdc_on(&out), "ld a, LCDCF_ON | LCDCF_OBJON | LCDCF_OBJ8");
+    }
+
+    // ==================== Variable addresses and HRAM ====================
+
+    use crate::gb_asm::label_check::rgbds_rom_and_symbols;
+    use crate::rust_boy::Var;
+
+    /// A function `name` whose body is `code` then `ret`
+    fn function_of(gb: &mut RustBoy, name: &str, code: Vec<Instr>) {
+        let mut body = Block::new();
+        body.label(name).emit_all(code).ret();
+        gb.define_function(name, body.into_instrs());
+        gb.keep_function(name);
+    }
+
+    #[test]
+    fn test_variables_are_where_get_address_says() {
+        // Variables in WRAM0 (two sections) and HRAM, set and read by the program, and a
+        // bigger WRAM0 section of the program's own, which rgblink places freely: each
+        // variable section is printed at the address the allocator gives, so the linked
+        // address of every variable is `get_address` (before, the sections floated and
+        // rgblink could put the bigger one first)
+        let mut gb = RustBoy::new();
+        let vars: Vec<Var> = vec![
+            gb.vars.create_u8("wLives", 3),
+            gb.vars
+                .create_in_section("wHigh", VarType::U16, 500, "Scores"),
+            gb.vars.create_u16("wScore", 0),
+            gb.vars.create_hram_u8("hSpeed", 2),
+            gb.vars.create_hram_i16("hDelta", -1),
+        ];
+        let touch: Vec<Instr> = vars
+            .iter()
+            .flat_map(|var| [var.set(1), var.get()].concat())
+            .collect();
+        function_of(&mut gb, "Touch", touch);
+        function_of(&mut gb, "SetSpeed", vars[3].set(7));
+        function_of(&mut gb, "GetSpeed", vars[3].get());
+        // An animated sprite and inputs: build() adds wFrameCounter, wAnim_Coin_Current
+        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys and wNewKeys (called through a
+        // function, so they are build()'s, not add_inputs'). The review of #32 found they
+        // went into the first section and moved the second one: `wHigh` was at $C001 by
+        // get_address, $C003 once linked
+        let coin = gb.add_sprite("Coin", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(coin, "Spin", 0, 1, AnimationType::PingPong);
+        gb.define_function("Poll", calling("Poll", &["UpdateKeys"]));
+        gb.keep_function("Poll");
+        let before: Vec<Option<u16>> = vars
+            .iter()
+            .map(|var| gb.vars.get_address(var.id()))
+            .collect();
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data)
+                .section(Section::wram0("Buffer"))
+                .label("wBuffer")
+                .ds("256");
+        });
+        let out = gb.build().unwrap();
+        let data = &out[out
+            .find("SECTION \"HRAM Variables\"")
+            .expect("an HRAM section")..];
+        assert!(
+            data.starts_with(
+                "SECTION \"HRAM Variables\", HRAM[$FF80]\n    hSpeed: db\n    hDelta: dw\n    \
+                 SECTION \"Variables\", WRAM0[$C000]\n    wLives: db\n    wScore: dw\n    \
+                 SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    wFrameCounter: db\n    \
+                 wAnim_Coin_Current: db\n    wAnim_Coin_Dir: db\n    wCurKeys: db\n    \
+                 wNewKeys: db\n    SECTION \"Buffer\", WRAM0\n"
+            ),
+            "{}",
+            data
+        );
+        let addresses: Vec<u16> = vars
+            .iter()
+            .map(|var| gb.vars.get_address(var.id()).unwrap())
+            .collect();
+        assert_eq!(addresses, [0xC000, 0xC003, 0xC001, 0xFF80, 0xFF81]);
+        assert_eq!(
+            before,
+            addresses.iter().map(|a| Some(*a)).collect::<Vec<_>>(),
+            "build() moved a variable"
+        );
+        assert_links(&out);
+
+        // With RGBDS: the linked addresses, and the `ldh` opcodes in the ROM
+        let Some((rom, symbols)) = rgbds_rom_and_symbols(&out) else {
+            return;
+        };
+        for (var, address) in vars.iter().zip(&addresses) {
+            assert_eq!(symbols[var.name()], (0, *address), "{}", var.name());
+        }
+        // And build()'s own, after them
+        for (name, address) in [
+            ("wFrameCounter", 0xC005),
+            ("wAnim_Coin_Current", 0xC006),
+            ("wNewKeys", 0xC009),
+        ] {
+            assert_eq!(symbols[name], (0, address), "{}", name);
+        }
+        let code_at = |label: &str, len: usize| {
+            let start = usize::from(symbols[label].1);
+            rom[start..start + len].to_vec()
+        };
+        // ld a, 7 / ldh [$FF80], a / ret
+        assert_eq!(code_at("SetSpeed", 5), [0x3E, 7, 0xE0, 0x80, 0xC9]);
+        // ldh a, [$FF80] / ret
+        assert_eq!(code_at("GetSpeed", 3), [0xF0, 0x80, 0xC9]);
+    }
+
+    #[test]
+    fn test_hram_variables_in_a_program() {
+        // Initialised at start-up with `ldh`, on the test CPU
+        let mut gb = RustBoy::new();
+        let speed = gb.vars.create_hram_u8("hSpeed", 9);
+        gb.vars.create_hram_u16("hScore", 0x0102);
+        let (code, mut cpu) = startup(&mut gb);
+        cpu.stubs.insert("Memcopy".to_string());
+        cpu.consts16.insert("hSpeed".to_string(), 0xFF80);
+        cpu.consts16.insert("hScore".to_string(), 0xFF81);
+        cpu.run(&code);
+        assert_mem(&cpu, "hSpeed", 9);
+        assert_mem(&cpu, "hScore", 2);
+        assert_mem(&cpu, "hScore+1", 1);
+        let out = gb.build().unwrap();
+        assert!(out.contains("ldh [hScore+1], a"), "{}", out);
+        assert_links(&out);
+
+        // Raw data with only HRAM variables still gets a WRAM0 section of its own (the last
+        // section of the variables is HRAM)
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).raw("wLonely: db");
+        });
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains("SECTION \"Raw Data\", WRAM0\n    wLonely: db"),
+            "{}",
+            out
+        );
+        assert_links(&out);
+
+        // HRAM full: an error of the program, and the WRAM0 variables are not affected
+        for i in 0..32 {
+            gb.vars.create_hram_u16(&format!("hWord{}", i), 0);
+        }
+        let error = gb.build().unwrap_err();
+        assert!(
+            matches!(&error, Error::MemoryFull { region: MemoryRegion::Hram, what, .. }
+                if what.starts_with("variable `hWord30`")),
+            "{:?}",
+            error
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("but Hram ($FF80-$FFBF, 64 bytes) has"),
+            "{}",
+            error
+        );
+        assert_eq!(gb.vars.get_address(speed.id()), Some(0xFF80));
     }
 
     // ==================== Functions (B23, B24, B26, B27) ====================

@@ -25,7 +25,7 @@ pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};
-pub use memory::MemoryRegion;
+pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
 pub use rustboy::RustBoy;
 pub use sprites::{ANIM_DISABLED, CompositeSpriteId, SpriteId, SpriteManager, SpriteSize};
 pub use tiles::{TileId, TileManager, TileSource, TilemapArea};

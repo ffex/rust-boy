@@ -194,8 +194,14 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
       `sprite_size`, `background_tilemap`, `palettes` (`Palettes`: `rBGP`, `rOBP0`, `rOBP1`), `lcdc` (`Lcdc`: background,
       objects), `builtins` (forced, as `use_function`), `animation_delay`; builder methods, and the setters kept
       (`set_palettes` new); the defaults give byte-identical output, and so do the 6 example ROMs)
-- [ ] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since
+- [x] Use `MemoryAllocator` for VRAM / WRAM / OAM / HRAM (done for VRAM tiles, WRAM0 and OAM since
       [B17](CONTEXT.md#b17); HRAM, and real addresses for the variables (rgblink places the sections), are left)
+      (branch `refactor-p2-engine-api-memory`: `create_hram_*` variables in `MemoryRegion::Hram`, $FF80-$FFBF (the stack
+      keeps the top of HRAM), read and written with `ldh`; every variable section is printed at the address the
+      allocator gives it, `WRAM0[$C000]`, `HRAM[$FF80]`, so `get_address` is the linked address once the program's
+      variables are created (`build()` adds its own at the end of the last `WRAM0` section; checked against the
+      `.sym` of RGBDS). The asm of the 3 `RustBoy` examples changes in that one line; their ROM, `.map` and `.sym` are
+      byte-identical)
 - [x] `If` that never clobbers user registers (or documents what it uses) (branch `refactor-p2-routines-if`: documented,
       in the clobber model of routines: `If::clobbers()` is `a`, `b` and the flags, `IfConst` `a` and the flags, `IfA` and
       `IfCall` the flags, each checked on the test CPU for every operator, with and without else. Not a `push`/`pop` of
@@ -246,7 +252,7 @@ See [CONTEXT.md §3](CONTEXT.md#3-are-the-levels-correct-assessment) for the rea
 - [ ] Scenes / game states
 - [ ] Entities: spawn / despawn
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
-- [ ] WRAM arrays, HRAM variables
+- [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)

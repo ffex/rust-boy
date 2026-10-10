@@ -250,7 +250,7 @@ scripts/run.sh fosdem          # target/examples/fosdem/main.gb, .sym, .map and 
 scripts/run.sh --run fosdem    # ... then runs it
 ```
 
-`--run` uses `$GB_EMULATOR` when it is set (a command, such as `GB_EMULATOR="wine ~/bgb/bgb.exe"`), or else the
+`--run` uses `$GB_EMULATOR` when it is set (a command, such as `GB_EMULATOR="wine $HOME/bgb/bgb.exe"`; a leading `~` works too), or else the
 first emulator it finds: `sameboy`, `mgba-qt`, `mgba`, `gambatte_qt`, `gambatte_sdl`, `bgb`, `bgb64`, `bgb.exe` or
 `bgb64.exe` through `wine`, `pyboy`; with none, it prints where the files are. `--emulator <command>` picks one for
 one run. The `.sym` file sits next to the ROM, so emulators with a debugger (SameBoy, bgb, Emulicious) show the

@@ -3,17 +3,22 @@
 #
 # Usage: scripts/run.sh [--run | -r] [--emulator <command>] <bin>
 #
-#   <bin>               a binary of this crate: basic_usage, unbricked, unbricked_std,
-#                       unbricked_rustboy, fosdem, coin-anim, or one of your own
-#   --run, -r           open the ROM in an emulator, the first one found of:
-#                       $GB_EMULATOR (a command, e.g. "wine ~/bgb/bgb.exe"), sameboy, mgba-qt, mgba,
-#                       gambatte_qt, gambatte_sdl, bgb, bgb64, bgb.exe / bgb64.exe on the PATH through
-#                       wine, pyboy; with none, it says so and prints where the files are
+#   <bin>               a binary of this crate (src/bin/<bin>.rs or src/bin/<bin>/main.rs):
+#                       basic_usage, unbricked, unbricked_std, unbricked_rustboy, fosdem,
+#                       coin-anim, or one of your own
+#   --run, -r           open the ROM in an emulator: $GB_EMULATOR when it is set, or else
+#                       the first found of sameboy, mgba-qt, mgba, gambatte_qt, gambatte_sdl,
+#                       bgb, bgb64, bgb.exe / bgb64.exe on the PATH through wine, pyboy; with
+#                       none, it says so and prints where the files are
 #   --emulator <cmd>    open it with <cmd> (implies --run)
 #
-# Output: target/examples/<bin>/main.{asm,o,gb,sym,map} (under $CARGO_TARGET_DIR when it is
-# set). The .sym file sits next to the ROM with the same name, so emulators with a debugger
-# (SameBoy, bgb, Emulicious) show the program's labels.
+# An emulator command ($GB_EMULATOR or <cmd>) is split on spaces, e.g. "wine ~/bgb/bgb.exe":
+# a leading ~ is $HOME, and a word with a / in it is a path from the current directory.
+#
+# Output: target/examples/<bin>/main.{asm,o,gb,sym,map}, under $CARGO_TARGET_DIR when it is
+# set (a relative one is from the current directory). The .sym file sits next to the ROM
+# with the same name, so emulators with a debugger (SameBoy, bgb, Emulicious) show the
+# program's labels.
 #
 # Needs rgbasm, rgblink and rgbfix (RGBDS >= 0.9) on PATH. examples/<bin>/ (the example's
 # assets) and include/ (hardware.inc) are on the include path.
@@ -49,8 +54,40 @@ while (($# > 0)); do
     shift
 done
 [[ -n "$bin" ]] || usage
+if [[ ! "$bin" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "not a binary name: $bin" >&2
+    exit 2
+fi
+
+# Paths the caller gave (CARGO_TARGET_DIR, the emulator command) are relative to the
+# caller's directory, not to the repository root this script works in
+caller="$PWD"
+if [[ -n "${CARGO_TARGET_DIR:-}" && "$CARGO_TARGET_DIR" != /* ]]; then
+    export CARGO_TARGET_DIR="$caller/$CARGO_TARGET_DIR"
+fi
+
+# The emulator command as words: a leading ~ is the home directory, and a relative path
+# (a word with a /, such as ./bgb.exe) is from the caller's directory
+command=()
+if [[ -n "$emulator" ]]; then
+    read -r -a words <<< "$emulator"
+    for word in "${words[@]}"; do
+        if [[ "$word" == "~" || "$word" == "~/"* ]]; then
+            word="$HOME${word:1}"
+        fi
+        if [[ "$word" == */* && "$word" != /* ]]; then
+            word="$caller/$word"
+        fi
+        command+=("$word")
+    done
+fi
 
 cd "$(dirname "$0")/.."
+
+if [[ ! -f "src/bin/$bin.rs" && ! -f "src/bin/$bin/main.rs" ]]; then
+    echo "no binary $bin: src/bin/$bin.rs or src/bin/$bin/main.rs" >&2
+    exit 2
+fi
 
 out="${CARGO_TARGET_DIR:-target}/examples/$bin"
 mkdir -p "$out"
@@ -60,7 +97,9 @@ if [[ -d "examples/$bin" ]]; then
     include_flags+=(-I "examples/$bin")
 fi
 
-cargo run --quiet --bin "$bin" > "$out/main.asm"
+# Through a temporary file, so a failed build leaves no empty main.asm
+cargo run --quiet --bin "$bin" > "$out/main.asm.tmp"
+mv "$out/main.asm.tmp" "$out/main.asm"
 rgbasm "${include_flags[@]}" -o "$out/main.o" "$out/main.asm"
 rgblink -n "$out/main.sym" -m "$out/main.map" -o "$out/main.gb" "$out/main.o"
 rgbfix -v -p 0xFF "$out/main.gb"
@@ -102,11 +141,7 @@ find_emulator() {
     return 1
 }
 
-command=()
-if [[ -n "$emulator" ]]; then
-    # A command with its arguments, split on spaces
-    read -r -a command <<< "$emulator"
-elif ! find_emulator; then
+if ((${#command[@]} == 0)) && ! find_emulator; then
     echo "built $bin; no emulator found (looked for \$GB_EMULATOR, sameboy, mgba-qt, mgba,"
     echo "gambatte_qt, gambatte_sdl, bgb, bgb64, bgb.exe / bgb64.exe through wine, pyboy):"
     files

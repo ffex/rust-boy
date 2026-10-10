@@ -119,7 +119,7 @@ const REGISTER_NAMES: [&str; 17] = [
 /// `Ok` if `name` can be an [`Expr::Sym`]: an RGBDS identifier (`wScore`), a local label
 /// (`.loop`) or a scoped one (`Main.loop`), and not a register or condition name nor
 /// another RGBDS keyword (`ld`, `LOW`, `DEF`, `SECTION`, …)
-fn check_symbol(name: &str) -> Result<(), String> {
+pub(crate) fn check_symbol(name: &str) -> Result<(), String> {
     let lower = name.to_ascii_lowercase();
     if REGISTER_NAMES.contains(&lower.as_str()) {
         return Err(format!(

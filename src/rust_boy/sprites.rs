@@ -25,6 +25,21 @@ pub(crate) fn check_name(kind: &str, name: &str) {
     }
 }
 
+/// Panics unless `name`, given by the user for a `kind` ("tile", ...), can be a global
+/// label of its own: a valid RGBDS identifier that is not a register or keyword name (the
+/// generated code names it as a symbol, `ld de, name`)
+#[track_caller]
+pub(crate) fn check_label(kind: &str, name: &str) {
+    if !is_identifier(name) || crate::gb_asm::expr::check_symbol(name).is_err() {
+        panic!(
+            "invalid {} name \"{}\": it becomes an assembly label, so it must start with a \
+             letter or '_', contain only letters, digits, '_', '#', '$' or '@', and not be a \
+             register or keyword name",
+            kind, name
+        );
+    }
+}
+
 /// Label of the function that plays animation `animation` of sprite `sprite`; the
 /// sprite name keeps two sprites with an animation of the same name apart (B25)
 fn animation_label(sprite: &str, animation: &str) -> String {
@@ -1001,6 +1016,19 @@ impl SpriteManager {
         self.sprites.values().any(|s| !s.animations.is_empty())
     }
 
+    /// The names of the animation functions `build()` generates, in their order
+    pub(crate) fn animation_function_names(&self) -> Vec<String> {
+        self.sprites
+            .values()
+            .flat_map(|sprite| {
+                sprite
+                    .animations
+                    .iter()
+                    .map(|animation| animation_label(&sprite.name, &animation.name))
+            })
+            .collect()
+    }
+
     /// Generate animation functions for all sprites with animations
     /// Returns a list of (function_name, function_body) pairs
     pub(crate) fn generate_animation_functions(&self) -> Vec<(String, Vec<Instr>)> {
@@ -1959,6 +1987,6 @@ mod tests {
         for (name, body) in gb.sprites.generate_animation_functions() {
             assert_eq!(jr_range_errors(&body), Vec::<String>::new(), "{}", name);
         }
-        assert_labels_ok(&gb.build());
+        assert_labels_ok(&gb.build().unwrap());
     }
 }

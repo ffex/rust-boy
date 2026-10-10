@@ -1,9 +1,9 @@
 use rust_boy::{
     gb_std::inputs::PadButton,
-    rust_boy::{AnimationType, InputManager, RustBoy, TileSource},
+    rust_boy::{AnimationType, Error, InputManager, RustBoy, TileSource},
 };
 
-fn main() {
+fn main() -> Result<(), Error> {
     let mut gb = RustBoy::new();
 
     // Add sprite with coin animation tiles (7 frames: 0-6)
@@ -19,5 +19,6 @@ fn main() {
     inputs.on_press(PadButton::A, gb.sprites.enable_animation(coin, coin_anim));
     inputs.on_press(PadButton::B, gb.sprites.disable_animation(coin));
     gb.add_inputs(inputs);
-    println!("{}", gb.build());
+    println!("{}", gb.build()?);
+    Ok(())
 }

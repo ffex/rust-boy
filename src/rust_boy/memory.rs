@@ -2,6 +2,8 @@
 
 use crate::hw;
 
+use super::error::Error;
+
 /// Memory regions on the Game Boy
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryRegion {
@@ -51,9 +53,9 @@ impl MemoryRegion {
 
 /// Allocator for tracking memory usage in a region
 ///
-/// The tile manager allocates the sprite and background tiles with it, the variable
-/// manager the WRAM0 variables, the sprite manager the OAM entries (B17). HRAM is a
-/// Phase 2 item.
+/// The tile manager allocates the sprite and background tiles with it and the sprite
+/// manager the OAM entries, when they are added (B17); `build()` lays out the WRAM0
+/// variables with it.
 #[derive(Debug)]
 pub struct MemoryAllocator {
     region: MemoryRegion,
@@ -83,29 +85,29 @@ impl MemoryAllocator {
         Some(addr)
     }
 
-    /// Allocate `size` bytes for `what` (e.g. `sprite tiles "Coin" (4 tiles)`) and
-    /// return the start address
-    ///
-    /// # Panics
-    /// If they do not fit in the region: the message names `what`, the region and how
-    /// many bytes are left.
-    pub(crate) fn allocate_or_panic(&mut self, size: usize, what: &str) -> u16 {
+    /// Allocate `size` bytes for `what` (e.g. ``variable `wScore` (2 bytes)``) and return
+    /// the start address, or [`Error::MemoryFull`] (naming `what`, the region and how many
+    /// bytes are left) if they do not fit; nothing is allocated then
+    pub(crate) fn try_allocate(&mut self, size: usize, what: &str) -> Result<u16, Error> {
         u16::try_from(size)
             .ok()
             .and_then(|size| self.allocate(size))
-            .unwrap_or_else(|| {
-                panic!(
-                    "no room for {}: {} bytes needed, but {:?} (${:04X}-${:04X}, {} bytes) has \
-                     {} bytes left",
-                    what,
-                    size,
-                    self.region,
-                    self.region.start_address(),
-                    self.region.end_address() - 1,
-                    self.region.size(),
-                    self.bytes_remaining()
-                )
+            .ok_or_else(|| Error::MemoryFull {
+                region: self.region,
+                what: what.to_string(),
+                needed: size,
+                available: self.bytes_remaining().into(),
             })
+    }
+
+    /// [`try_allocate`](Self::try_allocate) for an allocation the call that asks for it
+    /// needs at once (VRAM tiles, OAM entries)
+    ///
+    /// # Panics
+    /// If they do not fit in the region, with the message of [`Error::MemoryFull`].
+    pub(crate) fn allocate_or_panic(&mut self, size: usize, what: &str) -> u16 {
+        self.try_allocate(size, what)
+            .unwrap_or_else(|error| panic!("{}", error))
     }
 
     /// Get the current allocation pointer

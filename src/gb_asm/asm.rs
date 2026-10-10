@@ -109,11 +109,29 @@ impl Asm {
         if let Err(error) = instr.check() {
             panic!("invalid instruction: {}", error);
         }
-        if let Err(error) = self.sections.add(&instr) {
+        if let Err(error) = self.try_emit(instr) {
             panic!("invalid program: {}", error);
         }
-        self.instrs.push(instr);
         self
+    }
+
+    /// [`Asm::emit`] for an instruction already checked against its operands: `Err` with
+    /// what is wrong, instead of a panic, if it does not belong in the section it lands in
+    /// (code or data in a RAM section, a section name used twice); the program is then
+    /// unchanged
+    ///
+    /// ```
+    /// use rust_boy::gb_asm::{Asm, Instr, Section};
+    ///
+    /// let mut asm = Asm::new();
+    /// asm.section(Section::wram0("Variables"));
+    /// let error = asm.try_emit(Instr::Nop).err().unwrap();
+    /// assert!(error.contains("a RAM section holds no code"), "{}", error);
+    /// ```
+    pub fn try_emit(&mut self, instr: Instr) -> Result<&mut Self, String> {
+        self.sections.add(&instr)?;
+        self.instrs.push(instr);
+        Ok(self)
     }
 
     /// Emit multiple instructions at the end of the program: a `Vec<Instr>`, a

@@ -40,9 +40,9 @@ A sprite that moves with the D-pad:
 
 ```rust
 use rust_boy::gb_std::inputs::PadButton;
-use rust_boy::rust_boy::{InputManager, RustBoy, SpriteSize, TileSource};
+use rust_boy::rust_boy::{Error, InputManager, RustBoy, SpriteSize, TileSource};
 
-fn main() {
+fn main() -> Result<(), Error> {
     let mut gb = RustBoy::new();
 
     // Sprites are 8x8 by default; choose 8x16 before adding any sprite
@@ -61,7 +61,10 @@ fn main() {
     inputs.on_press(PadButton::Down, gb.sprites.move_down_limit(player, 1, 144));
     gb.add_inputs(inputs);
 
-    println!("{}", gb.build());
+    // The program as RGBDS assembly; an `Err` says what is wrong with the program as a
+    // whole (a name defined twice, variables that do not fit in WRAM, ...)
+    println!("{}", gb.build()?);
+    Ok(())
 }
 ```
 
@@ -99,8 +102,9 @@ gb.vars.create_u16("wScore", 0);
 gb.vars.create_u16("wSavedScore", 0);
 let call = gb.call_routine(&copy_score); // `call CopyScore`, and the program gets the routine
 gb.add_to_main_loop(call);
-let out = gb.build();
+let out = gb.build()?;
 assert!(out.contains("CopyScore:") && out.contains("Memcopy:"));
+# Ok::<(), rust_boy::rust_boy::Error>(())
 ```
 
 Control flow uses the same model: `If` uses `a`, `b` and the flags (`If::clobbers()`; the bodies start with `a` = left
@@ -179,7 +183,8 @@ RGBDS would reject panics when the section is built: a bank on a memory type wit
 `HRAM`) or out of its range, an address outside the memory type, an alignment no address of it has, `UNION` in ROM.
 A RAM section (every type but `ROM0` and `ROMX`) holds no code or data, it only reserves space: labels and `ds n`
 (`asm.ds("2")`; `ds_fill(n, fill)` fills ROM). Code or data in a RAM section, or a section name used twice (except by
-`UNION`s or `FRAGMENT`s of one memory type), panics where it is written (`Asm::emit`; in a `RustBoy` program, in `build()`).
+`UNION`s or `FRAGMENT`s of one memory type), panics where it is written (`Asm::emit`; `Asm::try_emit` returns it as an
+`Err`); in a `RustBoy` program, `build()` returns `Error::Section`.
 
 ```rust
 use rust_boy::gb_asm::{Asm, MemoryType, Section};
@@ -280,8 +285,10 @@ Open them in any Game Boy emulator.
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM variables
   (`u8`/`i8`/`u16`/`i16`), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and routines (the builtins and
-  your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too many tiles, sprites (40) or variables panic with a clear message, as do unknown
-  sprite ids and animation names. The output is deterministic: things appear in the order you created them.
+  your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too
+  many tiles or sprites (40) panic with a clear message where they are added, as do unknown sprite ids and animation
+  names; variables that do not fit in WRAM0 make `build()` return `Error::MemoryFull` (a problem of the whole program,
+  like a name defined twice: `build()` returns an `Error` for those, and a wrong call panics where it is made). The output is deterministic: things appear in the order you created them.
 - **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
   there is no sound yet, and the engine puts everything in one ROM bank (`gb_asm` programs can open `ROMX` sections, but
   nothing switches banks yet). The full list, with fixes planned, is in

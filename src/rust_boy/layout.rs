@@ -162,13 +162,24 @@ impl Layout {
     /// or data in a RAM section, a section name used twice (see [`Asm::emit`]).
     #[track_caller]
     pub fn program(&self) -> Asm {
+        self.try_program()
+            .unwrap_or_else(|error| panic!("invalid program: {}", error))
+    }
+
+    /// [`Layout::program`], with `Err` (the asm layer's message) instead of a panic when an
+    /// instruction does not belong in the section it lands in
+    pub fn try_program(&self) -> Result<Asm, String> {
         let mut asm = Asm::with_labels(self.labels.clone());
         for chunk in Chunk::ORDER {
             if let Some(code) = self.chunks.get(&chunk) {
-                asm.emit_all(code.iter().cloned()).blank_line();
+                // Every instruction was checked against its operands when it was written
+                for instr in code {
+                    asm.try_emit(instr.clone())?;
+                }
+                asm.blank_line();
             }
         }
-        asm
+        Ok(asm)
     }
 
     instruction_builders!();

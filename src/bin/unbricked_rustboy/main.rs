@@ -13,10 +13,10 @@ use rust_boy::{
         graphics::{tile_ref::TileRef, utility::is_specific_tile},
         inputs::PadButton,
     },
-    rust_boy::{InputManager, RustBoy, TileSource},
+    rust_boy::{Error, InputManager, RustBoy, TileSource},
 };
 
-fn main() {
+fn main() -> Result<(), Error> {
     let mut gb = RustBoy::new();
 
     // ========================================
@@ -148,5 +148,6 @@ fn main() {
     // ========================================
     // BUILD AND OUTPUT
     // ========================================
-    println!("{}", gb.build());
+    println!("{}", gb.build()?);
+    Ok(())
 }

@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 309 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 312 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -418,16 +418,21 @@ The problems are where each layer reaches across the line:
    program were separate setters. *Since Phase 2 (`refactor-p2-engine-api-errors`):* `build(&self) -> Result<String,
    Error>`. `rust_boy::Error` lists what can go wrong at build time: `UnknownFunction` (a name given to `call`,
    `call_args` or `keep_function` that is no function when the program is built), `NameConflict` (a name with two
-   `Definition`s: a function and a variable, a constant or raw label, an external symbol; a variable `build()` needs,
+   `Definition`s: a function and a variable, a constant or raw label, an external symbol, an animation function `build()`
+   generates; a variable `build()` needs,
    `wFrameCounter` or `wAnim_*`, created by the program with another type), `MemoryFull` (the variables, laid out by
    `build()` with the ones it adds, do not fit in WRAM0), `Section` (code or data in a RAM section, a section name used
    twice; the asm layer's message, from `Asm::try_emit` / `Layout::try_program`). **The rule** (documented on `Error`):
    a method panics when the call itself is wrong (an invalid argument, an unknown id, a contradiction with an earlier
    call on the same object; VRAM tiles and OAM entries, which the call needs at once, are allocated there and panic when
    full), and `build()` returns an `Err` for what only the whole program shows; `build()` itself does not panic on what a
-   program contains. For that, what used to panic inside `build()` is checked where it enters: a variable name and a
-   tile name must be symbols (not a register or keyword name), and an instruction built by hand is checked by `init`,
-   `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` and `add_inputs`. Building changes
+   program contains. For that, what used to panic inside `build()` is checked where it enters: a variable name, a
+   routine's variable (`Routine::with_variable`) and a tile name must be symbols (not a register or keyword name), the
+   section of `create_in_section` must be a section name, and an instruction built by hand is checked by `init`,
+   `add_to_main_loop`, `call_args`, `define_function`, `define_routine`, `call_routine` and `add_inputs`
+   (`test_build_does_not_panic_on_what_a_program_contains` gives 25 bad names through 22 ways into a program: each
+   call panics, or `build()` returns `Ok` or `Err`; the independent review found the section name and the routine
+   variable, which it caught, still panicking in `build()`). Building changes
    nothing, so building twice gives the same text (`test_build_changes_nothing`). Every variant is reached through
    `build()` in `test_every_error_variant_is_reachable_through_build`. The 6 example ROMs, their asm, `.map` and `.sym`
    are byte-identical. **Breaking**, with the migration:

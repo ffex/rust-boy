@@ -100,6 +100,8 @@ pub enum Definition {
     /// A variable `build()` creates for the code it generates, of this type (the
     /// animations' `wFrameCounter` and `wAnim_*`)
     GeneratedVariable(VarType),
+    /// A function `build()` generates (an animation's, `Anim_{sprite}_{animation}`)
+    GeneratedFunction,
     /// A symbol defined outside the generated code (`RustBoy::external_symbol`)
     ExternalSymbol,
     /// A constant or a label of the program's code (`define_const`, a `DEF` or a label in
@@ -114,6 +116,9 @@ impl fmt::Display for Definition {
             Definition::Variable(var_type) => write!(f, "a {:?} variable", var_type),
             Definition::GeneratedVariable(var_type) => {
                 write!(f, "a {:?} variable that build() needs", var_type)
+            }
+            Definition::GeneratedFunction => {
+                write!(f, "a function build() generates (an animation's)")
             }
             Definition::ExternalSymbol => write!(
                 f,

@@ -340,8 +340,9 @@ impl VariableManager {
     /// Create a variable in a specific section
     ///
     /// # Panics
-    /// If `initial` is out of the range of `var_type` (see [`VarType::range`]), and as
-    /// [`create_u8`](Self::create_u8).
+    /// If `initial` is out of the range of `var_type` (see [`VarType::range`]), if
+    /// `section` cannot be a section name (`"`, `\`, `{` or a line break: see
+    /// [`Section::new`]), and as [`create_u8`](Self::create_u8).
     #[track_caller]
     pub fn create_in_section(
         &mut self,
@@ -350,6 +351,8 @@ impl VariableManager {
         initial: i32,
         section: &str,
     ) -> Var {
+        // `build()` writes it as `SECTION "section", WRAM0`: checked here, not there
+        Section::wram0(section);
         let (min, max) = var_type.range();
         if !(min..=max).contains(&initial) {
             panic!(

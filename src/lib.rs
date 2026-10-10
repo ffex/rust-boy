@@ -1,13 +1,13 @@
 #![doc = include_str!("../README.md")]
 
-pub mod gb_asm;
-pub mod gb_std;
+pub mod asm;
+pub mod engine;
 pub mod hw;
-pub mod rust_boy;
+pub mod stdlib;
 
 #[cfg(test)]
 mod tests {
-    use super::gb_asm::{Asm, Condition, Section};
+    use super::asm::{Asm, Condition, Section};
 
     #[test]
     fn test_basic_assembly_generation() {

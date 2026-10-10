@@ -14,9 +14,9 @@ your_game.rs ──cargo run──▶ main.asm ──rgbasm / rgblink / rgbfix�
 
 | Module | Level | What it gives you |
 |---|---|---|
-| `rust_boy::rust_boy` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
-| `rust_boy::gb_std` | routines | Ready-made routines as values (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …, each a `Routine` with its dependencies and calling convention) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
-| `rust_boy::gb_asm` | assembly | `Asm` (a whole program) and `Block` (a piece of code): one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
+| `rust_boy::engine` | engine | `RustBoy`: sprites (OAM), tiles (VRAM), variables (WRAM), joypad bindings, animations and functions. `build()` writes the whole program. |
+| `rust_boy::stdlib` | routines | Ready-made routines as values (Memcopy, WaitVBlank, UpdateKeys, GetTileByPixel, …, each a `Routine` with its dependencies and calling convention) and control flow (`If`, `IfConst`, `IfA`, `IfCall`). |
+| `rust_boy::asm` | assembly | `Asm` (a whole program) and `Block` (a piece of code): one method per instruction or directive, with typed operands (`R8`, `R16`, `Mem`) and expressions (`Expr`), printed in RGBDS syntax. |
 
 Each level is built on the one below it, and you can mix them. Beside them, `rust_boy::hw` holds the hardware facts
 as plain data: the registers, their flags, the memory map, the OAM layout and the screen sizes, each with its
@@ -39,8 +39,8 @@ rust-boy = { git = "https://github.com/ffex/rust-boy" }
 A sprite that moves with the D-pad:
 
 ```rust
-use rust_boy::gb_std::inputs::PadButton;
-use rust_boy::rust_boy::{Error, InputManager, RustBoy, SpriteSize, TileSource};
+use rust_boy::stdlib::inputs::PadButton;
+use rust_boy::engine::{Error, InputManager, RustBoy, SpriteSize, TileSource};
 
 fn main() -> Result<(), Error> {
     let mut gb = RustBoy::new();
@@ -70,17 +70,17 @@ fn main() -> Result<(), Error> {
 
 ## Routines
 
-A routine is a value, `gb_std::routine::Routine`: its name, its code, the routines it depends on, the WRAM variables
+A routine is a value, `stdlib::routine::Routine`: its name, its code, the routines it depends on, the WRAM variables
 it needs, and its calling convention, the registers it reads, returns and clobbers (every other register is kept).
-The `gb_std` routines are `Routine`s (`memcopy()`, `wait_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
+The `stdlib` routines are `Routine`s (`memcopy()`, `wait_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
 `delay()`, …), and so is a routine of your own. `RustBoy` emits a routine, with its dependencies and variables, when the
 program uses it:
 
 ```rust
-use rust_boy::gb_asm::{Block, R16};
-use rust_boy::gb_std::graphics::utility::memcopy;
-use rust_boy::gb_std::routine::{Regs, Routine};
-use rust_boy::rust_boy::RustBoy;
+use rust_boy::asm::{Block, R16};
+use rust_boy::stdlib::graphics::utility::memcopy;
+use rust_boy::stdlib::routine::{Regs, Routine};
+use rust_boy::engine::RustBoy;
 
 // Memcopy reads bc, de and hl, returns them moved past the copy, and clobbers a and the flags
 assert_eq!(memcopy().clobbers(), Regs::A | Regs::F);
@@ -104,21 +104,21 @@ let call = gb.call_routine(&copy_score); // `call CopyScore`, and the program ge
 gb.add_to_main_loop(call);
 let out = gb.build()?;
 assert!(out.contains("CopyScore:") && out.contains("Memcopy:"));
-# Ok::<(), rust_boy::rust_boy::Error>(())
+# Ok::<(), rust_boy::engine::Error>(())
 ```
 
 Control flow uses the same model: `If` uses `a`, `b` and the flags (`If::clobbers()`; the bodies start with `a` = left
 and `b` = right), `IfConst` `a` and the flags, `IfA` and `IfCall` the flags. Left code that may change `b` (a call, for
 example) is wrapped in `push bc` / `pop bc`, so the compare always reads the right value.
 
-## Low level (`gb_asm`)
+## Low level (`asm`)
 
 The same building blocks the engine uses, one instruction at a time. An `Asm` is a program: it is printed in the
 order it is written, and knows instructions and sections, not how a game is laid out (the engine puts its parts in
-order with `rust_boy::Layout`, by `Chunk`):
+order with `engine::Layout`, by `Chunk`):
 
 ```rust
-use rust_boy::gb_asm::{Asm, Condition, Section};
+use rust_boy::asm::{Asm, Condition, Section};
 use rust_boy::hw;
 
 fn main() {
@@ -154,7 +154,7 @@ variables, `DEF` constants) and arithmetic on them. A Rust integer or a symbol n
 can a `hw` symbol, which is written by its `hardware.inc` name:
 
 ```rust
-use rust_boy::gb_asm::{Block, Expr, Mem, R8, R16};
+use rust_boy::asm::{Block, Expr, Mem, R8, R16};
 use rust_boy::hw;
 
 // A Block is a piece of code, built with the same methods as an Asm
@@ -186,7 +186,7 @@ A RAM section (every type but `ROM0` and `ROMX`) holds no code or data, it only 
 `UNION`s or `FRAGMENT`s of one memory type), panics where it is written (`Asm::emit`; in a `RustBoy` program, in `build()`).
 
 ```rust
-use rust_boy::gb_asm::{Asm, MemoryType, Section};
+use rust_boy::asm::{Asm, MemoryType, Section};
 
 let mut asm = Asm::new();
 asm.section(Section::romx("Level 2").bank(2).align(8)) // SECTION "Level 2", ROMX, BANK[2], ALIGN[8]
@@ -207,7 +207,7 @@ assert!(text.contains("    ds 1\n"));
 
 Generated code never clashes with itself: every label it makes up (the `.end_if_N` of an `If`, key checks, sprite
 moves, the animation dispatcher, …) is a local label numbered by one `LabelAllocator` per program, which the program's
-`Asm` owns: `asm.labels()`, or `gb.labels()` in a `RustBoy` program (pass it to the `gb_std` snippets that take one,
+`Asm` owns: `asm.labels()`, or `gb.labels()` in a `RustBoy` program (pass it to the `stdlib` snippets that take one,
 such as `check_key`). Control flow (`If`, `IfConst`, `IfA`, `IfCall`) is `Emittable`: `asm.emit_code(code)` emits it
 with the program's labels, and `RustBoy` does the same in `init`, `add_to_main_loop` and `define_function_from`.
 
@@ -223,8 +223,8 @@ is printed as written, so rgbasm reports a `jr` out of range as it always did. A
 more than a `jr`, so code whose size or timing is fixed should write jumps that reach.
 
 ```rust
-use rust_boy::gb_asm::{Asm, Block, Section};
-use rust_boy::gb_std::flow::IfA;
+use rust_boy::asm::{Asm, Block, Section};
+use rust_boy::stdlib::flow::IfA;
 
 let mut body = Block::new();
 for _ in 0..200 {
@@ -261,16 +261,16 @@ Open them in any Game Boy emulator.
 
 | Binary | Level | What it shows |
 |---|---|---|
-| `basic_usage` | `gb_asm` | A minimal program: header, main loop, VBlank wait |
-| `unbricked` | `gb_asm` | The [gbdev.io](https://gbdev.io/gb-asm-tutorial/) "Unbricked" tutorial, written instruction by instruction |
-| `unbricked_std` | `gb_std` | The same game with `gb_std` routines and `If` |
-| `unbricked_rustboy` | `rust_boy` | The same game with `RustBoy` |
-| `fosdem` | `rust_boy` | A 16×16 walking character with four animations (FOSDEM demo) |
-| `coin-anim` | `rust_boy` | An animated coin: A starts the animation, B stops it |
+| `basic_usage` | `asm` | A minimal program: header, main loop, VBlank wait |
+| `unbricked` | `asm` | The [gbdev.io](https://gbdev.io/gb-asm-tutorial/) "Unbricked" tutorial, written instruction by instruction |
+| `unbricked_std` | `stdlib` | The same game with `stdlib` routines and `If` |
+| `unbricked_rustboy` | `engine` | The same game with `RustBoy` |
+| `fosdem` | `engine` | A 16×16 walking character with four animations (FOSDEM demo) |
+| `coin-anim` | `engine` | An animated coin: A starts the animation, B stops it |
 
 ## What is supported
 
-- **Instructions** (`gb_asm`): the whole SM83 instruction set, printed in RGBDS syntax: loads (`ld`, `ldh`,
+- **Instructions** (`asm`): the whole SM83 instruction set, printed in RGBDS syntax: loads (`ld`, `ldh`,
   `ld [hli]`/`[hld]`, `ld hl, sp + e`, `push`/`pop`), the 8-bit ALU on `a` (`add`, `adc`, `sub`, `sbc`, `and`, `xor`,
   `or`, `cp`, one source each: `asm.cp(144)` prints `cp a, 144`), `inc`/`dec`, `add hl, r16`,
   `add sp, e`, the rotates and shifts (`rlca`… and `rlc`, `rrc`, `rl`, `rr`, `sla`, `sra`, `swap`, `srl` on a register
@@ -287,7 +287,7 @@ Open them in any Game Boy emulator.
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too many tiles, sprites (40) or variables panic with a clear message, as do unknown
   sprite ids and animation names. The output is deterministic: things appear in the order you created them.
 - **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
-  there is no sound yet, and the engine puts everything in one ROM bank (`gb_asm` programs can open `ROMX` sections, but
+  there is no sound yet, and the engine puts everything in one ROM bank (`asm` programs can open `ROMX` sections, but
   nothing switches banks yet). The full list, with fixes planned, is in
   [CONTEXT.md](CONTEXT.md).
 
@@ -295,9 +295,9 @@ Open them in any Game Boy emulator.
 
 ```text
 src/
-├── gb_asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
-├── gb_std/        # routines as values (Routine: dependencies, calling convention), graphics, inputs, variables, flow control (If, …)
-├── rust_boy/      # RustBoy: sprites, tiles, variables, functions, animations, inputs, the program layout (chunks)
+├── asm/        # Instr, typed operands and Expr, typed sections, the Asm and Block builders, unique labels, jr → jp relaxation, RGBDS output
+├── stdlib/        # routines as values (Routine: dependencies, calling convention), graphics, inputs, variables, flow control (If, …)
+├── engine/        # RustBoy: sprites, tiles, variables, functions, animations, inputs, the program layout (chunks)
 ├── hw.rs          # hardware facts as data: registers, flags, memory map, OAM layout, screen sizes (hardware.inc names and values)
 ├── bin/           # the example programs
 └── lib.rs

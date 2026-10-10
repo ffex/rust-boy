@@ -2,8 +2,9 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::{Asm, Block, Expr, R8, Section},
-    gb_std::{
+    asm::{Asm, Block, Expr, R8, Section},
+    hw,
+    stdlib::{
         flow::If,
         graphics::{
             sprites::{Sprite, clear_objects_screen, draw_sprites, initialize_objects_screen},
@@ -17,7 +18,6 @@ use rust_boy::{
         utility::header_section,
         variables::VariableSection,
     },
-    hw,
 };
 
 fn main() {
@@ -87,7 +87,7 @@ fn main() {
     asm.emit_all(ball.get_pivot(0, 1));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
-    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnTopEnd");
+    asm.jp_cond(rust_boy::asm::Condition::NZ, "BounceOnTopEnd");
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumY");
     asm.label("BounceOnTopEnd");
@@ -97,7 +97,7 @@ fn main() {
     asm.emit_all(ball.get_pivot(-1, 0));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
-    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnRightEnd");
+    asm.jp_cond(rust_boy::asm::Condition::NZ, "BounceOnRightEnd");
     asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumX");
     asm.label("BounceOnRightEnd");
@@ -107,7 +107,7 @@ fn main() {
     asm.emit_all(ball.get_pivot(1, 0));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
-    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnLeftEnd");
+    asm.jp_cond(rust_boy::asm::Condition::NZ, "BounceOnLeftEnd");
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumX");
     asm.label("BounceOnLeftEnd");
@@ -117,7 +117,7 @@ fn main() {
     asm.emit_all(ball.get_pivot(0, -1));
     asm.call("GetTileByPixel");
     asm.call("IsWallTile");
-    asm.jp_cond(rust_boy::gb_asm::Condition::NZ, "BounceOnBottomEnd");
+    asm.jp_cond(rust_boy::asm::Condition::NZ, "BounceOnBottomEnd");
     asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
     asm.label("BounceOnBottomEnd");
@@ -182,12 +182,12 @@ fn main() {
     let right_pressed = paddle.move_right_limit(&labels, 1, 104);
     asm.emit_all(check_key(
         &labels,
-        rust_boy::gb_std::inputs::PadButton::Left,
+        rust_boy::stdlib::inputs::PadButton::Left,
         left_pressed,
     ));
     asm.emit_all(check_key(
         &labels,
-        rust_boy::gb_std::inputs::PadButton::Right,
+        rust_boy::stdlib::inputs::PadButton::Right,
         right_pressed,
     ));
 

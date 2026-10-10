@@ -1,4 +1,4 @@
-use rust_boy::gb_asm::{Asm, Condition, Expr, Mem, R8, Section};
+use rust_boy::asm::{Asm, Condition, Expr, Mem, R8, Section};
 use rust_boy::hw;
 
 fn program() -> Asm {

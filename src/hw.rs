@@ -13,7 +13,7 @@
 //! The code writes a symbol by its name and computes with its value:
 //!
 //! ```
-//! use rust_boy::gb_asm::{Block, Expr, R8};
+//! use rust_boy::asm::{Block, Expr, R8};
 //! use rust_boy::hw;
 //!
 //! let mut asm = Block::new();
@@ -29,12 +29,12 @@
 //! assert_eq!(hw::LCDC.value, 0xFF40);
 //! ```
 //!
-//! Layering: this module depends on nothing. `gb_std` and `rust_boy` use it, and `gb_std`
-//! turns a [`Symbol`] into an [`Expr`](crate::gb_asm::Expr) (or an operand) by its name;
-//! `gb_asm` does not know it. A unit test assembles every symbol with RGBDS against
+//! Layering: this module depends on nothing. `stdlib` and `engine` use it, and `stdlib`
+//! turns a [`Symbol`] into an [`Expr`](crate::asm::Expr) (or an operand) by its name;
+//! `asm` does not know it. A unit test assembles every symbol with RGBDS against
 //! `include/hardware.inc` and asserts that its value is the one there; another fails if a
-//! `hardware.inc` name or a hardware address is written as a string in `gb_std`, `rust_boy`
-//! or the examples (the raw-`gb_asm` tutorial `src/bin/unbricked.rs` excepted) instead of
+//! `hardware.inc` name or a hardware address is written as a string in `stdlib`, `engine`
+//! or the examples (the raw-`asm` tutorial `src/bin/unbricked.rs` excepted) instead of
 //! coming from here.
 
 #[cfg(test)]
@@ -44,21 +44,21 @@ mod tests;
 /// (`u16` for an address, `u8` for a flag or a small count)
 ///
 /// It does not implement `Display` on purpose: a message writes `.name` or `.value`, so
-/// it never prints the one it did not mean. `gb_std` makes it an [`Expr`](crate::gb_asm::Expr), an
-/// [`Operand`](crate::gb_asm::Operand) or an [`AluOperand`](crate::gb_asm::AluOperand)
+/// it never prints the one it did not mean. `stdlib` makes it an [`Expr`](crate::asm::Expr), an
+/// [`Operand`](crate::asm::Operand) or an [`AluOperand`](crate::asm::AluOperand)
 /// (the symbol by its name), so it can be passed wherever the builders take one:
 /// `ld_addr_def_a(hw::LCDC)` writes `ld [rLCDC], a`. The 8-bit ALU takes only a
 /// `Symbol<u8>`: an address there does not compile.
 ///
 /// ```compile_fail
-/// use rust_boy::gb_asm::Block;
+/// use rust_boy::asm::Block;
 /// use rust_boy::hw;
 ///
 /// Block::new().cp(hw::LCDC); // rLCDC is an address, `Symbol<u16>`
 /// ```
 ///
 /// ```
-/// use rust_boy::gb_asm::Block;
+/// use rust_boy::asm::Block;
 /// use rust_boy::hw;
 ///
 /// Block::new().cp(hw::SCRN_Y).and(hw::PADF_LEFT); // `Symbol<u8>`s

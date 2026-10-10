@@ -7,13 +7,13 @@ mod tilemap;
 mod tiles;
 
 use rust_boy::{
-    gb_asm::Block,
-    gb_std::{
+    asm::Block,
+    engine::{Error, InputManager, RustBoy, TileSource},
+    stdlib::{
         flow::{Call, If, IfA, IfCall, IfConst, InstrOps, boxed},
         graphics::{tile_ref::TileRef, utility::is_specific_tile},
         inputs::PadButton,
     },
-    rust_boy::{Error, InputManager, RustBoy, TileSource},
 };
 
 fn main() -> Result<(), Error> {

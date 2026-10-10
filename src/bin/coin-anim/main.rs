@@ -1,6 +1,6 @@
 use rust_boy::{
-    gb_std::inputs::PadButton,
-    rust_boy::{AnimationType, Error, InputManager, RustBoy, TileSource},
+    engine::{AnimationType, Error, InputManager, RustBoy, TileSource},
+    stdlib::inputs::PadButton,
 };
 
 fn main() -> Result<(), Error> {

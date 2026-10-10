@@ -1,9 +1,9 @@
 use rust_boy::{
-    gb_std::inputs::PadButton,
-    rust_boy::{
+    engine::{
         ANIM_DISABLED, AnimationType, Error, InputManager, RustBoy, RustBoyConfig, SpriteSize,
         TileSource,
     },
+    stdlib::inputs::PadButton,
 };
 
 fn main() -> Result<(), Error> {

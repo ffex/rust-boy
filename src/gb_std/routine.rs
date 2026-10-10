@@ -151,13 +151,17 @@ impl Regs {
     }
 
     /// The registers `code` may write, read from its instructions; `None` when that cannot be
-    /// told from them: a `call`, `rst` or `jp hl` (to code it does not see), a raw line or an
-    /// `INCLUDE` (code it does not read), a change of `sp`
+    /// told from them:
+    /// - a `call`, `rst` or `jp hl`, or a jump to a label `code` does not define (or to an
+    ///   address, or `@+n`): it runs code `written_by` does not see;
+    /// - a raw line or an `INCLUDE` (code it does not read);
+    /// - data in the code (`db`, `dw`, `ds`, `INCBIN`) or a `SECTION`: the CPU may run the
+    ///   data as instructions, or the code goes on elsewhere;
+    /// - a change of `sp`.
     ///
     /// It is an upper bound: a register a `push` saved and a `pop` restored counts as
     /// written, and so does one an instruction would write on a path that is never taken.
-    /// Labels, comments, data and the other directives write nothing; a jump stays in
-    /// `code`, and `ret` leaves it.
+    /// Labels, comments and `DEF`s write nothing, and `ret` leaves the code.
     ///
     /// # Example
     /// ```
@@ -184,6 +188,14 @@ impl Regs {
             Mem::Hli | Mem::Hld => Regs::HL,
             _ => Regs::NONE,
         };
+        // The labels `code` defines: a jump to one of them stays in it
+        let labels: std::collections::BTreeSet<&str> = code
+            .iter()
+            .filter_map(|instr| match instr {
+                Instr::Label { name } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
         let mut written = Regs::NONE;
         for instr in code {
             written |= match instr {
@@ -237,13 +249,16 @@ impl Regs {
                 Instr::Daa | Instr::Cpl => Regs::AF,
                 Instr::Scf | Instr::Ccf => Regs::F,
                 Instr::Nop | Instr::Halt | Instr::Stop | Instr::Di | Instr::Ei => Regs::NONE,
-                Instr::Jp { .. }
-                | Instr::JpCond { .. }
-                | Instr::Jr { .. }
-                | Instr::JrCond { .. }
-                | Instr::Ret
-                | Instr::RetCond { .. }
-                | Instr::Reti => Regs::NONE,
+                Instr::Jp { target }
+                | Instr::JpCond { target, .. }
+                | Instr::Jr { target }
+                | Instr::JrCond { target, .. } => match target {
+                    crate::gb_asm::JumpTarget::Label(name) if labels.contains(name.as_str()) => {
+                        Regs::NONE
+                    }
+                    _ => return None,
+                },
+                Instr::Ret | Instr::RetCond { .. } | Instr::Reti => Regs::NONE,
                 Instr::JpHl | Instr::Call { .. } | Instr::CallCond { .. } | Instr::Rst { .. } => {
                     return None;
                 }
@@ -256,14 +271,12 @@ impl Regs {
                         return None;
                     }
                 }
-                Instr::Label { .. }
-                | Instr::Comment { .. }
-                | Instr::Def { .. }
-                | Instr::Section(_)
+                Instr::Section(_)
                 | Instr::Incbin { .. }
                 | Instr::Db { .. }
                 | Instr::Dw { .. }
-                | Instr::Ds { .. } => Regs::NONE,
+                | Instr::Ds { .. } => return None,
+                Instr::Label { .. } | Instr::Comment { .. } | Instr::Def { .. } => Regs::NONE,
             };
         }
         Some(written)

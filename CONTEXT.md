@@ -44,7 +44,7 @@ rgbfix -v -p 0xFF main.gb
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 289 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 290 library unit tests (and one in the `basic_usage` bin) and the doctests (README examples, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -503,7 +503,10 @@ Unbricked examples for no bug. The latent bug is fixed instead where it is: left
 `rst`, `jp hl`, raw code, or an instruction that writes `b`, read by `Regs::written_by`) is wrapped in `push bc` /
 `pop bc`, so the compare reads the right value (the left code's changes to `b` and `c` are undone). Left code that
 cannot change `b` gets no `push`/`pop`: no example's does, so the 6 example ROMs, their asm, `.map` and `.sym` are
-byte-identical. Tests: `test_each_if_kind_changes_only_what_it_lists` (every kind and operator, with and without
+byte-identical. `Regs::written_by` does not guess: data in the code (`db`, `dw`, `ds`, `INCBIN`), a `SECTION`, or a jump
+to a label the code does not define makes it unknown, so `bc` is saved (fixed after the independent review, which found
+they counted as writing nothing). The left code must leave the stack balanced: with `bc` saved, a `pop bc` in it would
+take the `If`'s saved value (documented on `If`). Tests: `test_each_if_kind_changes_only_what_it_lists` (every kind and operator, with and without
 else, on the test CPU: the changed registers are exactly the listed ones), `test_if_left_code_that_changes_b` (it
 failed before: left code writing `b`), `test_if_left_code_that_calls_a_routine` (a left `Call` to `GetTileByPixel`),
 `test_if_left_code_that_keeps_b_is_emitted_as_before`, and `test_written_by_covers_what_each_instruction_changes`

@@ -68,6 +68,10 @@ impl ComparisonOp {
 /// cannot change `b` ([`Regs::written_by`]), such as a load of a variable or of a sprite
 /// coordinate, gets no `push` / `pop`.
 ///
+/// The left code must leave the stack as it found it, as any operand code must: when the
+/// `If` saved `bc`, a `pop bc` in the left code would take the `If`'s saved value (and the
+/// `If`'s own `pop bc` the left code's), and a `ret` there would return to it.
+///
 /// # Example
 /// ```ignore
 /// // Simple if

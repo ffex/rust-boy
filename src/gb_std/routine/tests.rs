@@ -462,3 +462,54 @@ fn test_written_by_covers_what_each_instruction_changes() {
     sp.inc(R16::SP);
     assert_eq!(Regs::written_by(&sp), None);
 }
+
+#[test]
+fn test_written_by_does_not_guess_about_data_or_far_jumps() {
+    // Review of #29: data, sections and jumps out of the code counted as writing nothing
+    use crate::gb_asm::{Condition, Section};
+
+    type Case<'a> = (&'a str, &'a dyn Fn(&mut Block));
+    let unknown: [Case; 8] = [
+        ("db", &|c| {
+            c.db("$3E, 1");
+        }),
+        ("dw", &|c| {
+            c.dw("$1234");
+        }),
+        ("ds", &|c| {
+            c.ds_fill("2", "0");
+        }),
+        ("INCBIN", &|c| {
+            c.incbin("code.bin");
+        }),
+        ("SECTION", &|c| {
+            c.section(Section::rom0("Elsewhere"));
+        }),
+        ("jp to a label outside", &|c| {
+            c.jp("Outside");
+        }),
+        ("jr cc to a label outside", &|c| {
+            c.jr_cond(Condition::NZ, ".outside");
+        }),
+        ("jr to @+n", &|c| {
+            c.jr("@+4");
+        }),
+    ];
+    for (what, code) in unknown {
+        let mut block = Block::new();
+        block.ld_a(1);
+        code(&mut block);
+        assert_eq!(Regs::written_by(&block), None, "{}", what);
+    }
+
+    // A jump to a label of the code stays in it; labels, comments and DEFs write nothing
+    let mut inside = Block::new();
+    inside
+        .label(".top")
+        .def("COUNT", "3")
+        .comment("loop")
+        .ld(R8::C, 1)
+        .jr_cond(Condition::NZ, ".top")
+        .jp(".top");
+    assert_eq!(Regs::written_by(&inside), Some(Regs::C));
+}

@@ -161,19 +161,26 @@ type Findings = Vec<(usize, String)>;
 
 /// The hardware names and addresses that `text`, Rust source, writes in its string
 /// literals, and the hardware addresses it writes as hexadecimal integers, outside
-/// comments and before its test module (the first `#[cfg(test)]` at the start of a line:
-/// tests spell out the text they expect)
+/// comments and outside every item marked `#[cfg(test)]` (tests spell out the text they
+/// expect)
 ///
-/// A hardware name is any name `hardware.inc` defines (`names`), as a whole word; a
-/// hardware address is a hexadecimal number from `$8000` on (VRAM, cartridge RAM, WRAM,
-/// OAM, I/O, HRAM), written `$9800` or `0x9800` in a string, or `0x9800` in code.
+/// What it flags:
+/// - in a string literal, any name `hardware.inc` defines (`names`), as a whole word
+///   (`"rLCDC"`, `"_OAMRAM+4"`, `"LCDCF_ON | LCDCF_BGON"`), and any hexadecimal number from
+///   `$8000` on, written `$9800` or `0x9800` (VRAM, cartridge RAM, WRAM, OAM, I/O, HRAM);
+/// - in code, any hexadecimal integer from `0x8000` on (`Expr::hex(0x9800)`). This
+///   includes values that are not addresses, such as a mask `0xFF00` or the two's
+///   complement `0xFFE0` (-32): write those from `hw` or as arithmetic
+///   (`u16::from(hw::SCRN_VX_B.value).wrapping_neg()`), or in decimal.
+///
+/// What it does not see: decimal, octal and binary numbers (`144`, `0o177`, `0b1000_0000`,
+/// `65344`), short hex strings below `$8000` (`"$41"` for an `ldh` offset, `"$FF"`), text
+/// built at run time (`format!` pieces, `concat!`, a `char` pushed onto a `String`), and
+/// comments, doc comments included. Those are left to review.
 fn hardware_literals(text: &str, names: &BTreeSet<&str>) -> Findings {
-    let code = match text.find("\n#[cfg(test)]") {
-        Some(end) => &text[..end],
-        None => text,
-    };
+    let (strings, integers) = scan(text);
     let mut findings = Vec::new();
-    for (line, literal) in string_literals(code) {
+    for (line, literal) in strings {
         for word in literal.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
             if names.contains(word) {
                 findings.push((line, format!("\"{}\" names {}", literal, word)));
@@ -186,7 +193,7 @@ fn hardware_literals(text: &str, names: &BTreeSet<&str>) -> Findings {
             ));
         }
     }
-    for (line, number) in hex_integers(code) {
+    for (line, number) in integers {
         findings.push((line, format!("the integer {} is an address", number)));
     }
     findings
@@ -211,32 +218,34 @@ fn hex_numbers(text: &str, prefixes: &[&str]) -> Vec<String> {
     found
 }
 
-/// The contents of the string literals of Rust source `code`, with their line, outside
-/// comments (escapes are kept as written)
-fn string_literals(code: &str) -> Findings {
-    scan(code).0
-}
-
-/// The hexadecimal integer literals of Rust source `code` (`0x9800`) from `0x8000` on,
-/// with their line, outside comments and strings
-fn hex_integers(code: &str) -> Findings {
-    scan(code).1
+/// Where the scan is in a `#[cfg(test)]` item: the brace depth of the attribute, and
+/// whether the item's `{ … }` body has opened
+#[derive(Clone, Copy)]
+struct TestItem {
+    depth: usize,
+    in_body: bool,
 }
 
 /// Read Rust source: (string literals, hexadecimal integers from `0x8000` on), each with
-/// its line. Comments are skipped (`//` to the end of the line, `/* */`), strings (`"…"`
-/// with escapes, raw `r#"…"#`) and character literals are read whole, so a quote or a
-/// `//` in them does not confuse it.
+/// its line, outside comments and outside `#[cfg(test)]` items
+///
+/// Comments are skipped (`//` to the end of the line, `/* */`, nested too), strings
+/// (`"…"` with escapes, raw `r#"…"#`) and character literals are read whole, so a quote,
+/// a brace or a `//` in them does not confuse it. The item after a `#[cfg(test)]` (a
+/// `mod tests { … }`, a helper `fn … { … }`, a `mod tests;`, a `use …;`) is skipped up to
+/// its matching `}`, or its `;` when it has no body; the code after it is read again.
 fn scan(code: &str) -> (Findings, Findings) {
+    let cfg_test: Vec<char> = "#[cfg(test)]".chars().collect();
     let chars: Vec<char> = code.chars().collect();
     let (mut strings, mut integers) = (Vec::new(), Vec::new());
-    let mut line = 1;
-    let mut i = 0;
+    let (mut line, mut i, mut depth) = (1, 0, 0usize);
+    let mut test_item: Option<TestItem> = None;
     let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
     while i < chars.len() {
         let c = chars[i];
         let next = chars.get(i + 1).copied();
         let after_ident = i > 0 && is_ident(chars[i - 1]);
+        let recording = test_item.is_none();
         if c == '\n' {
             line += 1;
             i += 1;
@@ -245,12 +254,50 @@ fn scan(code: &str) -> (Findings, Findings) {
                 i += 1;
             }
         } else if c == '/' && next == Some('*') {
-            i += 2;
-            while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
-                line += usize::from(chars[i] == '\n');
-                i += 1;
+            // Block comments nest: `/* /* */ */` is one comment
+            let mut nesting = 0;
+            while i < chars.len() {
+                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                    nesting += 1;
+                    i += 2;
+                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                    nesting -= 1;
+                    i += 2;
+                    if nesting == 0 {
+                        break;
+                    }
+                } else {
+                    line += usize::from(chars[i] == '\n');
+                    i += 1;
+                }
             }
-            i += 2;
+        } else if c == '#' && chars[i..].starts_with(&cfg_test) {
+            if recording {
+                test_item = Some(TestItem {
+                    depth,
+                    in_body: false,
+                });
+            }
+            i += cfg_test.len();
+        } else if c == '{' {
+            depth += 1;
+            if let Some(item) = test_item.as_mut() {
+                if !item.in_body && depth == item.depth + 1 {
+                    item.in_body = true;
+                }
+            }
+            i += 1;
+        } else if c == '}' {
+            depth = depth.saturating_sub(1);
+            if test_item.is_some_and(|item| item.in_body && depth == item.depth) {
+                test_item = None;
+            }
+            i += 1;
+        } else if c == ';' {
+            if test_item.is_some_and(|item| !item.in_body && depth == item.depth) {
+                test_item = None;
+            }
+            i += 1;
         } else if c == 'r' && !after_ident && matches!(next, Some('"' | '#')) {
             // A raw string, r"…" or r#"…"#
             let hashes = chars[i + 1..].iter().take_while(|c| **c == '#').count();
@@ -267,7 +314,9 @@ fn scan(code: &str) -> (Findings, Findings) {
                 line += usize::from(chars[j] == '\n');
                 j += 1;
             }
-            strings.push((start_line, chars[open + 1..j].iter().collect()));
+            if recording {
+                strings.push((start_line, chars[open + 1..j].iter().collect()));
+            }
             i = j + closing.len();
         } else if c == '"' {
             let (start_line, mut j) = (line, i + 1);
@@ -278,13 +327,15 @@ fn scan(code: &str) -> (Findings, Findings) {
                 line += chars[j..end].iter().filter(|c| **c == '\n').count();
                 j = end;
             }
-            strings.push((
-                start_line,
-                chars[i + 1..j.min(chars.len())].iter().collect(),
-            ));
+            if recording {
+                strings.push((
+                    start_line,
+                    chars[i + 1..j.min(chars.len())].iter().collect(),
+                ));
+            }
             i = j + 1;
         } else if c == '\'' {
-            // A character literal ('"', '\''), or a lifetime ('a)
+            // A character literal ('"', '\'', '{'), or a lifetime ('a)
             if next == Some('\\') {
                 // `'\''`, `'\n'`, `'\u{..}'`: past the escaped character, to the quote
                 i += 3;
@@ -300,12 +351,13 @@ fn scan(code: &str) -> (Findings, Findings) {
         } else if c.is_ascii_digit() && !after_ident {
             let token: String = chars[i..].iter().take_while(|c| is_ident(**c)).collect();
             i += token.len();
-            integers.extend(
-                hex_numbers(&token, &["0x"])
-                    .into_iter()
-                    .filter(|_| token.starts_with("0x"))
-                    .map(|number| (line, number)),
-            );
+            if recording && token.starts_with("0x") {
+                integers.extend(
+                    hex_numbers(&token, &["0x"])
+                        .into_iter()
+                        .map(|number| (line, number)),
+                );
+            }
         } else {
             i += 1;
         }
@@ -332,9 +384,10 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// No `hardware.inc` name and no hardware address is written as text (or as a hex
-/// integer) in `gb_std`, `rust_boy` or the examples: they take them from `hw`. Tests are
-/// not checked (they spell out the text they expect), nor is the raw-`gb_asm` tutorial
-/// `src/bin/unbricked.rs`, written by hand on purpose (CLAUDE.md).
+/// integer) in `gb_std`, `rust_boy` or the examples: they take them from `hw`. Items
+/// marked `#[cfg(test)]` are not checked (tests spell out the text they expect), nor is the
+/// raw-`gb_asm` tutorial `src/bin/unbricked.rs`, written by hand on purpose (CLAUDE.md).
+/// What it flags, and what it does not see: [`hardware_literals`].
 #[test]
 fn test_no_hardware_strings_outside_hw() {
     let names = hardware_inc_names();
@@ -365,8 +418,9 @@ fn test_no_hardware_strings_outside_hw() {
     );
 }
 
-/// The guard finds what it should, where it should, and nothing in comments, tests or
-/// other text
+/// The guard finds what it should, where it should, and nothing in comments (nested
+/// too), `#[cfg(test)]` items (a module, a helper in the middle of a file, a method, a
+/// `use`, a `mod x;`) or other text
 #[test]
 fn test_the_guard_finds_hardware_literals() {
     let names = hardware_inc_names();
@@ -386,20 +440,47 @@ fn f() {
     let message = "a message \
                    on two lines, rSCX";
     let after = "_HRAM";
+    /* nested /* "rLY" */ still a comment "rWX" */ let braces = ("}", '{', '}');
 }
 #[cfg(test)]
 mod tests {
     fn g() { assert_eq!(text, "ld [rLCDC], a"); }
 }
+#[cfg(test)]
+fn helper() -> &'static str { if x { "rLY" } else { "_SCRN0" } }
+fn after_the_helper() { let x = "rSTAT"; }
+#[cfg(test)]
+use y::{a, b};
+#[cfg(test)]
+mod more;
+const Z: u16 = 0xFF41;
+impl S {
+    #[cfg(test)]
+    pub(crate) fn get(&self) -> u8 { "rIE" }
+    fn real(&self) { "rIF" }
+}
 "##;
     let found: Findings = hardware_literals(source, &names);
     let lines: Vec<usize> = found.iter().map(|(line, _)| *line).collect();
-    assert_eq!(lines, [5, 6, 8, 9, 11, 14, 16, 7], "{:#?}", found);
+    // Strings first, then integers: only the test items are skipped, not the code after
+    assert_eq!(
+        lines,
+        [5, 6, 8, 9, 11, 14, 16, 25, 34, 7, 30],
+        "{:#?}",
+        found
+    );
+    assert!(found[7].1.contains("names rSTAT"), "{:?}", found[7]);
+    assert!(found[8].1.contains("names rIF"), "{:?}", found[8]);
+    assert!(
+        found[10].1.contains("the integer 0xFF41"),
+        "{:?}",
+        found[10]
+    );
     assert!(found[0].1.contains("names rLCDC"), "{:?}", found[0]);
     assert!(
         found[2].1.contains("holds the address $9000"),
         "{:?}",
         found[2]
     );
-    assert!(found[7].1.contains("the integer 0x9800"), "{:?}", found[7]);
+    assert!(found[9].1.contains("the integer 0x9800"), "{:?}", found[9]);
 }

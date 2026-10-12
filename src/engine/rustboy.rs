@@ -204,7 +204,8 @@ impl RustBoy {
 
     /// Move the background camera by signed pixel deltas, wrapping at 256.
     /// Positive X/Y moves the viewport right/down. Changes A and flags.
-    /// Emit during LCD-off initialization or VBlank to avoid tearing.
+    /// Emit during LCD-off initialization or VBlank to avoid tearing. A soft reset keeps the
+    /// scroll: call [`RustBoy::set_background_scroll`] in init to start from a known camera.
     pub fn scroll_background_by(&self, dx: i8, dy: i8) -> Vec<Instr> {
         crate::stdlib::graphics::scroll::scroll_by(dx, dy)
     }

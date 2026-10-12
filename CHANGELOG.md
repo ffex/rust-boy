@@ -59,7 +59,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
-  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates.
+  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
+  keeps the scroll: set it in init.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

@@ -279,6 +279,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
+- [ ] Follow-up of the sprite attributes (from the review of #49): a composite-level `set_flags`, and an X flip of a
+      16x16 composite that also swaps its halves (today per member sprite; documented)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score

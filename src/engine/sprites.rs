@@ -901,7 +901,10 @@ impl SpriteManager {
     }
 
     /// Set a sprite's runtime attributes in shadow OAM; startup attributes are unchanged.
-    /// Changes A only. Panics for an unknown sprite id.
+    /// Changes A only.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager.
     pub fn set_flags(
         &self,
         id: SpriteId,

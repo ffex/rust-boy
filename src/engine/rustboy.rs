@@ -1657,7 +1657,8 @@ impl RustBoy {
     /// * `right_tiles` - Tile source for the right 8x16 half
     /// * `x` - X position of the left edge
     /// * `y` - Y position
-    /// * `flags` - OAM flags for both sprites
+    /// * `flags` - OAM flags for both sprites (raw or [`SpriteFlags`](crate::stdlib::graphics::sprites::SpriteFlags)). An X flip mirrors
+    ///   each half in place: swap `left_tiles` and `right_tiles` to mirror the whole sprite
     ///
     /// # Returns
     /// A `CompositeSpriteId` that can be used with composite sprite methods

@@ -59,8 +59,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
-  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
-  keeps the scroll: set it in init.
+  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. Startup resets the camera to
+  (0, 0), including after soft reset; init can set a custom position.
 - **Scrolled tile collision** (Phase 3): `GetTileByScreenPixel` adds the current `rSCX`/`rSCY` to screen-pixel
   coordinates before the shared `GetTileByPixel` routine; use in VBlank or with the LCD off.
 - **Window** (Phase 3): optional `RustBoyConfig::window(Window::new(map, x, y))` or `RustBoy::set_window`,

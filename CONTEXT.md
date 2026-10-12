@@ -281,7 +281,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and
   flags, and leave sprites in screen coordinates. `follow_background_point` keeps the world pixel (B, C) at a screen
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
-  Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
+  Start-up resets SCX/SCY to 0 on power-on and soft reset; `init` can set a custom camera. Sprites stay screen-space:
+  programs that need world positions track them and use `follow_background_point`.
 
 - **VRAM write queue** (since `refactor-codex-p3-vram-queue`):
   `stdlib::graphics::vram_queue` owns the `QueueVramWrite` and `FlushVramQueue` routines.

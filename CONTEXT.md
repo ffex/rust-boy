@@ -232,6 +232,14 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Window layer** (since `refactor-p3-window`): `stdlib::graphics::window` has stateless snippets (position with the
+  WX + 7 conversion and its bounds in `screen_to_raw`, raw WX/WY, show/hide, window map), reused by
+  `RustBoy::set_window_position`, `show_window` and `select_window_tilemap`; they change only A and flags and keep the
+  other LCDC bits. `RustBoyConfig::window(Window::new(map, x, y))` (or `RustBoy::set_window`) makes start-up write
+  WX/WY with the LCD off, before user init code, and add `LCDCF_WINON` (and `LCDCF_WIN9C00`) to the LCD-on value. The
+  window shares the background tiles and BGP and needs LCDC bit 0 on DMG. `show_window(true)` without a configured
+  window writes no position: it shows at the boot values WX=0, WY=0 unless the program sets one.
+
 - **Background camera** (since `refactor-p3-scrolling`): `stdlib::graphics::scroll` has three stateless snippets,
   reused by `RustBoy::set_background_scroll`, `scroll_background_by` and `follow_background_point`. They write
   `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and

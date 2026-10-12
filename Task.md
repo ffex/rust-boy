@@ -259,6 +259,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today)
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
+- [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
+      `#[non_exhaustive]` like `Lcdc` (its public `wx`/`wy` fields allow raw start-up values today); whether `build()`
+      should reject or warn about a configured window with `Lcdc.background` off (invisible on DMG, documented today)
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
       (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))
 - [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its

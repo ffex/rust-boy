@@ -236,7 +236,10 @@ impl RustBoy {
     }
 
     /// Show or hide the window, preserving the other LCDC bits. Emit in VBlank.
-    /// The background/window enable bit must also be set on DMG.
+    /// The background/window enable bit must also be set on DMG. Showing it writes neither
+    /// its position nor its map: without a [`Window`] configured, set them first
+    /// ([`RustBoy::set_window_position`], [`RustBoy::select_window_tilemap`]), or it shows at
+    /// WX=0, WY=0 (the values after the boot ROM).
     pub fn show_window(&self, shown: bool) -> Vec<Instr> {
         crate::stdlib::graphics::window::set_enabled(shown)
     }

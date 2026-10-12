@@ -260,7 +260,12 @@ pub struct Window {
 }
 
 impl Window {
-    /// Visible window at screen `(x, y)`. X must be 0..=158, Y 0..=143.
+    /// Visible window at screen `(x, y)`. X must be 0..=158, Y 0..=143
+    /// (see [`crate::stdlib::graphics::window::screen_to_raw`]).
+    ///
+    /// # Panics
+    /// If X is not 0..=158 or Y not 0..=143.
+    ///
     /// ```
     /// use rust_boy::prelude::*;
     /// let mut gb = RustBoy::with_config(RustBoyConfig::default()
@@ -270,11 +275,22 @@ impl Window {
     /// # gb.build().unwrap();
     /// ```
     pub fn new(tilemap: TilemapArea, x: u8, y: u8) -> Self {
-        crate::stdlib::graphics::window::set_position(x, y);
-        Self {
-            tilemap,
-            wx: x + crate::hw::WINDOW_X_OFFSET,
-            wy: y,
+        let (wx, wy) = crate::stdlib::graphics::window::screen_to_raw(x, y);
+        Self { tilemap, wx, wy }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_new_converts_and_checks_screen_coordinates() {
+        let window = Window::new(TilemapArea::Map9C00, 158, 143);
+        assert_eq!((window.wx, window.wy), (165, 143));
+        assert_eq!(Window::new(TilemapArea::Map9800, 0, 0).wx, 7);
+        for (x, y) in [(159, 0), (0, 144)] {
+            assert!(std::panic::catch_unwind(|| Window::new(TilemapArea::Map9800, x, y)).is_err());
         }
     }
 }

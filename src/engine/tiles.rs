@@ -109,7 +109,7 @@ pub(crate) struct TileData {
 /// One of the two background tilemaps in VRAM, 32 x 32 tiles each (B19)
 ///
 /// The background shows one of them (LCDC bit 3, `RustBoy::set_background_tilemap`);
-/// the window layer, not supported yet, can show the other.
+/// the window can independently show either map (`RustBoyConfig::window`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TilemapArea {
     /// The map at `$9800` (`_SCRN0`), the one the background shows by default

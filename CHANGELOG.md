@@ -59,7 +59,17 @@ together: every breaking change of the refactoring is in this release, so a prog
   (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
-  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates.
+  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
+  keeps the scroll: set it in init.
+- **Window** (Phase 3): optional `RustBoyConfig::window(Window::new(map, x, y))` or `RustBoy::set_window`,
+  `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
+  `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded because
+  WX=166 glitches on DMG. Raw coordinates are available for clipping/off-screen placement. Window
+  and background share tiles/BGP and require LCDC bit 0 on DMG. `show_window(true)` writes no
+  position: without a configured window, set one first. Existing output is unchanged.
+- **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
+  LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
+  or `$9C00`; map-pixel coordinates and the calling convention are unchanged.
 - **Runtime tilemaps** (Phase 3): `tiles.add_tilemap_rom` keeps multiple levels/screens
   in ROM without startup copies or VRAM reservations; `tiles.copy_tilemap(id, area)`
   loads a map into either VRAM destination using Memcopy. Copy full maps with the LCD

@@ -842,11 +842,11 @@ HIGH(wShadowOAM)`, `call hOAMDMA`), through the standard routine (`ldh [rDMA], a
 M-cycles) that `InitOamDma` copies at start-up to `hOAMDMA`, the top 8 bytes of the variables' HRAM (`$FFB8`): during a
 DMA the CPU reaches only HRAM. The start-up clears the shadow OAM, writes the sprites and runs one DMA before the LCD is
 turned on, so the first frame shows them. A program without sprites has none of this (it clears OAM as before, [B28](#b28)).
-On `refactor-codex-p3-sprites`, the recovered implementation also rejects definitions of
-`wShadowOAM` or `hOAMDMA` supplied as variables, constants, raw labels, emitted routine labels,
-or external symbols with `Error::NameConflict`: a DMA call must reach the reserved HRAM code,
-and the DMA source must be the reserved WRAM buffer. A regression test covers each entry point,
-both with sprites and with an explicitly requested `InitOamDma`.
+`build()` rejects a definition of `wShadowOAM` or `hOAMDMA` by the program (a variable, a constant, a raw label, a
+function's label, an external symbol) with `Error::NameConflict` (`GeneratedBuffer`): a DMA call must reach the HRAM
+code, and the DMA source must be the WRAM buffer. With the builtin `InitOamDma`, the labels of the code it copies,
+`OamDmaCode` and `OamDmaCodeEnd`, are reserved the same way (`BuiltinLabel`). Tests cover each kind of definition, with
+sprites and with `InitOamDma` requested alone.
 The cost: the handler takes 193 M-cycles with nothing of the program's (`push af`, the DMA and its call, the frame flag,
 `pop af`, `reti`), so the main loop starts about 220 M-cycles after line 144 (44 before); a sprite moved in frame N
 shows from frame N + 2 (N + 1 before: the DMA of the next VBlank copies it). `stdlib` has the pieces

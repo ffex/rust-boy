@@ -917,6 +917,35 @@ impl RustBoy {
                 }
             }
         }
+        let init_oam_dma = BuiltinFunction::InitOamDma.label();
+        if functions.names.iter().any(|name| name == init_oam_dma)
+            && !self.functions.is_user_function(init_oam_dma)
+        {
+            // The builtin InitOamDma defines the labels of the DMA code it copies: a second
+            // definition would fail in rgbasm, or copy other bytes to HRAM
+            for name in [oam::OAM_DMA_CODE, oam::OAM_DMA_CODE_END] {
+                // InitOamDma defines it once; another function's definition is a second one
+                let in_functions = functions
+                    .code
+                    .iter()
+                    .filter(|instr| defines(std::slice::from_ref(*instr), name))
+                    .count();
+                let first = if self.functions.is_external_symbol(name) {
+                    Some(super::error::Definition::ExternalSymbol)
+                } else if code.iter().any(|body| defines(body, name)) || in_functions > 1 {
+                    Some(super::error::Definition::CodeSymbol)
+                } else {
+                    None
+                };
+                if let Some(first) = first {
+                    return Err(Error::NameConflict {
+                        name: name.to_string(),
+                        first,
+                        second: super::error::Definition::BuiltinLabel,
+                    });
+                }
+            }
+        }
         asm.chunk(Chunk::Functions);
         asm.emit_all(functions.code);
 
@@ -3287,6 +3316,75 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_dma_code_labels_cannot_be_defined_by_the_program() {
+        // InitOamDma's own labels: a second definition fails in rgbasm, or (an external
+        // symbol) makes InitOamDma copy other bytes to HRAM
+        type Setup = fn(&mut RustBoy, &str);
+        let setups: [(Setup, Definition); 4] = [
+            (
+                |gb, name| {
+                    gb.raw(|asm| {
+                        asm.label(name);
+                    });
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_const(name, 1);
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.external_symbol(name);
+                },
+                Definition::ExternalSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_function_from(
+                        "Other",
+                        vec![Instr::Label {
+                            name: name.to_string(),
+                        }],
+                    );
+                    gb.keep_function("Other");
+                },
+                Definition::CodeSymbol,
+            ),
+        ];
+        for name in [oam::OAM_DMA_CODE, oam::OAM_DMA_CODE_END] {
+            for (setup, first) in setups {
+                for with_sprite in [false, true] {
+                    let mut gb = RustBoy::new();
+                    if with_sprite {
+                        gb.add_sprite("Dot", tiles(1), 8, 8, 0);
+                    } else {
+                        gb.use_function(BuiltinFunction::InitOamDma);
+                    }
+                    setup(&mut gb, name);
+                    assert_eq!(
+                        gb.build(),
+                        Err(Error::NameConflict {
+                            name: name.to_string(),
+                            first,
+                            second: Definition::BuiltinLabel,
+                        }),
+                        "{name}, sprites: {with_sprite}"
+                    );
+                }
+            }
+        }
+        // Without the builtin InitOamDma the names are free
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.label(oam::OAM_DMA_CODE);
+        });
+        assert!(gb.build().is_ok());
     }
 
     #[test]

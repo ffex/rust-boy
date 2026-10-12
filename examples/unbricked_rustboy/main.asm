@@ -256,7 +256,7 @@
     .knowret:
     ret
     ; Convert a pixel position to a tilemap address and read the tile there
-    ; hl = $9800 + X / 8 + (Y / 8) * 32
+    ; hl = active background map + X / 8 + (Y / 8) * 32
     ; @param b: X
     ; @param c: Y
     ; @return hl: tile address
@@ -279,6 +279,11 @@
     sub a, l
     ld h, a
     ld bc, $9800
+    ld a, [rLCDC]
+    and a, LCDCF_BG9C00
+    jr z, .map_selected
+    ld bc, $9C00
+    .map_selected:
     add hl, bc
     ld a, [hl]
     ret

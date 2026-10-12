@@ -3,6 +3,78 @@ use crate::hw;
 
 pub use super::oam::OamTarget;
 
+/// The DMG object palette selected by a sprite's attribute byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectPalette {
+    /// OBP0.
+    Palette0,
+    /// OBP1.
+    Palette1,
+}
+
+/// Sprite priority relative to nonzero background/window colour indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpritePriority {
+    /// Draw over the background and window.
+    AboveBackground,
+    /// Draw behind nonzero background/window colour indices (colour 0 stays behind sprites).
+    BehindBackground,
+}
+
+/// Typed DMG OAM attributes. Defaults to no flips, OBP0 and foreground priority.
+/// Raw u8 conversion retains every bit for existing callers and custom CGB code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpriteFlags(u8);
+impl SpriteFlags {
+    /// No flips, OBP0, foreground priority.
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    /// Hardware attribute byte.
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    fn with_bit(mut self, bit: u8, enabled: bool) -> Self {
+        self.0 = if enabled { self.0 | bit } else { self.0 & !bit };
+        self
+    }
+
+    /// Flip this hardware sprite horizontally.
+    pub fn flip_x(self, enabled: bool) -> Self {
+        self.with_bit(hw::OAMF_XFLIP.value, enabled)
+    }
+
+    /// Flip this hardware sprite vertically (both tiles in 8x16 mode).
+    pub fn flip_y(self, enabled: bool) -> Self {
+        self.with_bit(hw::OAMF_YFLIP.value, enabled)
+    }
+
+    /// Select OBP0 or OBP1.
+    pub fn palette(self, palette: ObjectPalette) -> Self {
+        self.with_bit(hw::OAMF_PAL1.value, palette == ObjectPalette::Palette1)
+    }
+
+    /// Set background/window priority.
+    pub fn priority(self, priority: SpritePriority) -> Self {
+        self.with_bit(
+            hw::OAMF_PRI.value,
+            priority == SpritePriority::BehindBackground,
+        )
+    }
+}
+impl From<u8> for SpriteFlags {
+    fn from(bits: u8) -> Self {
+        Self(bits)
+    }
+}
+impl From<SpriteFlags> for u8 {
+    fn from(flags: SpriteFlags) -> Self {
+        flags.bits()
+    }
+}
+
 /// Clear the OAM loop: write `a` to `b` bytes from `[hl]` on. Set the registers with
 /// [`initialize_objects_screen`] first, which clears the whole OAM (every sprite at Y 0,
 /// so hidden).
@@ -239,7 +311,7 @@ impl Sprite {
     /// If `id` is not an OAM entry (0 to 39): its code would read and write past OAM
     /// (`_OAMRAM+160` and beyond).
     #[track_caller]
-    pub fn new(id: u8, x: u8, y: u8, tile: u8, flags: u8) -> Self {
+    pub fn new(id: u8, x: u8, y: u8, tile: u8, flags: impl Into<SpriteFlags>) -> Self {
         assert!(
             id < hw::OAM_COUNT.value,
             "Sprite::new: sprite id {} is not an OAM entry: OAM holds {} sprites, ids 0 to {}",
@@ -252,7 +324,7 @@ impl Sprite {
             x,
             y,
             tile,
-            flags,
+            flags: flags.into().bits(),
             oam: OamTarget::Oam,
         }
     }
@@ -278,6 +350,16 @@ impl Sprite {
             .ld_a(self.flags)
             .ld(Mem::Hli, R8::A);
         asm.into_instrs()
+    }
+
+    /// Set runtime OAM attributes. Changes A only; preserves coordinates and tile.
+    /// Direct OAM needs LCD-off/VBlank; shadow OAM can be written at any time.
+    /// This emits code without changing the sprite's startup attributes.
+    pub fn set_flags(&self, flags: impl Into<SpriteFlags>) -> Vec<Instr> {
+        let mut code = Block::new();
+        code.ld_a(flags.into().bits())
+            .ld_addr_def_a(self.oam.entry(self.id, hw::OAMA_FLAGS));
+        code.into_instrs()
     }
 
     /// Move the sprite left by `distance` pixels, with no limit
@@ -705,5 +787,73 @@ pub(crate) mod tests {
             code.extend(if_stmt.emit(&labels));
         }
         assert_code_labels_ok(&code);
+    }
+}
+
+#[cfg(test)]
+mod typed_flags_tests {
+    use super::*;
+    use crate::asm::test_cpu::TestCpu;
+    use crate::stdlib::routine::Regs;
+
+    #[test]
+    fn typed_flags_encode_each_combination_and_clear_bits() {
+        for bits in 0..16 {
+            let flags = SpriteFlags::new()
+                .flip_x(bits & 1 != 0)
+                .flip_y(bits & 2 != 0)
+                .palette(if bits & 4 != 0 {
+                    ObjectPalette::Palette1
+                } else {
+                    ObjectPalette::Palette0
+                })
+                .priority(if bits & 8 != 0 {
+                    SpritePriority::BehindBackground
+                } else {
+                    SpritePriority::AboveBackground
+                });
+            let expected = (if bits & 1 != 0 {
+                hw::OAMF_XFLIP.value
+            } else {
+                0
+            }) | (if bits & 2 != 0 {
+                hw::OAMF_YFLIP.value
+            } else {
+                0
+            }) | (if bits & 4 != 0 {
+                hw::OAMF_PAL1.value
+            } else {
+                0
+            }) | (if bits & 8 != 0 { hw::OAMF_PRI.value } else { 0 });
+            assert_eq!(flags.bits(), expected);
+            assert_eq!(
+                flags
+                    .flip_x(false)
+                    .flip_y(false)
+                    .palette(ObjectPalette::Palette0)
+                    .priority(SpritePriority::AboveBackground)
+                    .bits(),
+                0
+            );
+        }
+        for bits in 0..=255 {
+            assert_eq!(SpriteFlags::from(bits).bits(), bits);
+            assert_eq!(
+                SpriteFlags::from(bits).flip_x(false).bits(),
+                bits & !hw::OAMF_XFLIP.value
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_flags_write_only_attributes_and_preserve_flags() {
+        let sprite = Sprite::new(2, 24, 32, 4, SpriteFlags::default()).in_shadow_oam();
+        let code = sprite.set_flags(SpriteFlags::new().flip_y(true));
+        assert_eq!(Regs::written_by(&code), Some(Regs::A));
+        let mut cpu = TestCpu::default();
+        cpu.run(&code);
+        assert_eq!(cpu.trace.len(), 1);
+        let address = OamTarget::Shadow.entry(2, hw::OAMA_FLAGS).to_string();
+        assert_eq!(cpu.mem[&address], hw::OAMF_YFLIP.value);
     }
 }

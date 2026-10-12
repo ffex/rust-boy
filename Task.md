@@ -284,6 +284,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
       lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
+- [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
+      off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation
@@ -293,6 +295,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
 - [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
       overrides, independent selection clocks, default/global fallback, composite setters)
+- [ ] Follow-up of the per-animation speed (from the review of the #50 chain, maintainer decision): the name
+      `SpriteManager::set_animation_delay(sprite, index, frames)` is the global `RustBoy::set_animation_delay(frames)`'s,
+      with another meaning; `set_animation_period` would tell them apart (an API rename)
 - [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
       coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
 

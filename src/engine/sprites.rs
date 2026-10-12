@@ -62,7 +62,8 @@ pub(crate) const SHADOW: OamTarget = OamTarget::Shadow;
 pub struct SpriteId(pub(crate) usize);
 
 /// A hardware-sprite part of an arbitrary metasprite, relative to its screen anchor.
-/// Part order determines OAM priority; offsets may be negative.
+/// Parts take OAM entries in list order; offsets may be negative. On DMG, where parts overlap,
+/// the smaller X draws on top and OAM order only breaks ties (and picks the 10 objects of a line).
 #[derive(Debug, Clone)]
 pub struct MetaspritePart {
     /// Tiles for this part; two per frame in 8x16 mode.
@@ -710,7 +711,10 @@ impl SpriteManager {
     /// The sprite gains an independent clock; other animations on it use the global
     /// period unless overridden too. Switching selection resets its clock; repeatedly
     /// enabling the already selected animation does not reset or stall it.
-    /// Panics for an unknown sprite/index or a zero period.
+    ///
+    /// # Panics
+    /// If `sprite_id` is not a sprite of this manager, it has no animation `animation_index`,
+    /// or `delay` is 0.
     pub fn set_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8, delay: u8) {
         assert!(delay > 0, "per-animation delay must be 1..=255");
         let sprite = self.sprite_mut(sprite_id);
@@ -719,7 +723,10 @@ impl SpriteManager {
     }
 
     /// Remove an override. With no overrides left on this sprite it returns to the
-    /// shared global clock. Panics for an unknown sprite/index.
+    /// shared global clock.
+    ///
+    /// # Panics
+    /// If `sprite_id` is not a sprite of this manager, or it has no animation `animation_index`.
     pub fn clear_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8) {
         let sprite = self.sprite_mut(sprite_id);
         sprite.check_animation_index(animation_index);
@@ -728,7 +735,11 @@ impl SpriteManager {
 
     /// Apply an animation period to every part of a composite/metasprite. Normal
     /// composite enable/disable calls keep all parts synchronized. Validate all parts
-    /// before changing any of them. Panics for zero delay or unknown ids/indices.
+    /// before changing any of them.
+    ///
+    /// # Panics
+    /// If `composite_id` is unknown, a part has no animation `animation_index`, or `delay` is 0;
+    /// no part is changed then.
     pub fn set_composite_animation_delay(
         &mut self,
         composite_id: CompositeSpriteId,
@@ -746,6 +757,10 @@ impl SpriteManager {
     }
 
     /// Remove an override from all parts, validating first.
+    ///
+    /// # Panics
+    /// If `composite_id` is unknown or a part has no animation `animation_index`; no part is
+    /// changed then.
     pub fn clear_composite_animation_delay(
         &mut self,
         composite_id: CompositeSpriteId,
@@ -2498,6 +2513,34 @@ mod tests {
         assert_eq!(shown_frame(&sm, &cpu, timed), 0);
         cpu.run(&code);
         assert_eq!(shown_frame(&sm, &cpu, timed), 1);
+    }
+
+    #[test]
+    fn a_selection_change_mid_period_restarts_the_clock() {
+        // Five frames into a 200-frame period, switching to a 3-frame animation counts
+        // its period from the switch: without the reset the old count (5 >= 3) would
+        // step it on the very next frame.
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let timed = sm.add_for_test("Timed", 0, 0, 0, 2);
+        sm.add_animation(timed, "Slow", 0, 1, AnimationType::Loop);
+        sm.add_animation(timed, "Quick", 0, 1, AnimationType::Loop);
+        sm.set_initial_animation(timed, 0);
+        sm.set_animation_delay(timed, 0, 200);
+        sm.set_animation_delay(timed, 1, 3);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        for _ in 0..5 {
+            cpu.run(&code);
+            assert_eq!(shown_frame(&sm, &cpu, timed), 0);
+        }
+        cpu.run(&sm.enable_animation(timed, 1));
+        let shown: Vec<u8> = (0..3)
+            .map(|_| {
+                cpu.run(&code);
+                shown_frame(&sm, &cpu, timed)
+            })
+            .collect();
+        assert_eq!(shown, [0, 0, 1]);
     }
 
     #[test]

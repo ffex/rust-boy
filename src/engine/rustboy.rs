@@ -1613,13 +1613,15 @@ impl RustBoy {
 
     /// Create an arbitrary metasprite from hardware parts at offsets from screen (x, y).
     /// Supports either configured sprite size and up to the available 40 OAM entries.
-    /// Part order is OAM priority; each part gets `{name}_partN` tile/animation labels.
+    /// Parts take OAM entries in list order (on DMG overlapping objects draw by smaller X first,
+    /// OAM order breaks ties); each part gets `{name}_partN` tile/animation labels.
     /// Composite movement preserves the layout and tests its leading part at limits.
     ///
     /// # Panics
     /// If parts are empty, names collide, tiles/OAM are full, a part has no tiles or
     /// violates 8x16 alignment, or an offset position is outside supported screen coordinates
     /// (X 0..=247, Y 0..=239). Invalid layout/capacity is checked before registration.
+    #[track_caller]
     pub fn add_metasprite(
         &mut self,
         name: &str,
@@ -1633,6 +1635,7 @@ impl RustBoy {
         self.add_metasprite_named(name, x, y, parts, &names)
     }
 
+    #[track_caller]
     fn add_metasprite_named(
         &mut self,
         name: &str,

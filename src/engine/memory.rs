@@ -6,9 +6,11 @@ use super::error::Error;
 
 /// The end (exclusive) of the HRAM `RustBoy` gives to variables: $FF80-$FFBF (64 bytes)
 ///
-/// The stack is where the boot ROM puts it, `SP` = $FFFE (`RustBoy` does not move it), and
-/// it grows down into HRAM: the top 63 bytes ($FFC0-$FFFE) are left to it, 31 nested
-/// calls or pushes.
+/// The stack starts where the boot ROM puts it, `SP` = $FFFE (`RustBoy`'s start-up code sets
+/// it there again, for a soft reset), and it grows down into HRAM: the top 63 bytes
+/// ($FFC0-$FFFE) are left to it, 31 nested calls or pushes. That budget holds the main
+/// loop's calls and pushes plus one interrupt handler (handlers do not nest): its return
+/// address, up to 4 saved pairs (10 bytes in all), and what its code calls and pushes.
 pub const HRAM_VARIABLES_END: u16 = hw::HRAM.value + 64;
 
 /// Memory regions on the Game Boy

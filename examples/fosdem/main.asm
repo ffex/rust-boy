@@ -261,6 +261,9 @@
     ret
     ; Wait for the next VBlank, asleep: the VBlank handler sets wVBlankFlag
     WaitFrame:
+    ldh a, [rIE]
+    or a, IEF_VBLANK
+    ldh [rIE], a
     xor a, a
     ld [wVBlankFlag], a
     .wait:

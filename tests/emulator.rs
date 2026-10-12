@@ -1168,6 +1168,98 @@ fn engine_handlers_preserve_the_registers() {
     );
 }
 
+/// An interrupt set up by hand (its own vector in `raw()` code, the timer started and its
+/// bit enabled in `init()` code): with its bit ORed into `rIE`, as documented, the timer
+/// and the main loop both run; writing `rIE` (`IEF_TIMER` only, VBlank left out) still
+/// leaves the main loop running, because `WaitFrame` enables VBlank again
+#[test]
+fn engine_interrupt_set_up_by_hand_in_init() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let program = |or_in: bool| {
+        let mut gb = RustBoy::new();
+        gb.vars.create_u8("wLoops", 0);
+        gb.vars.create_u8("wTicks", 0);
+        gb.add_to_main_loop(count("wLoops"));
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Header)
+                .section(Section::rom0("My timer").at(0x50))
+                .push(R16Stack::AF)
+                .ld_a_addr_def("wTicks")
+                .inc(R8::A)
+                .ld_addr_def_a("wTicks")
+                .pop(R16Stack::AF)
+                .reti();
+        });
+        let mut init = Block::new();
+        init.emit_all(rust_boy::stdlib::interrupts::start_timer(Timer::new(
+            TimerClock::Hz4096,
+            0xC0,
+        )));
+        if or_in {
+            init.ldh(R8::A, Mem::addr(hw::IE))
+                .or(hw::IEF_TIMER)
+                .ldh(Mem::addr(hw::IE), R8::A);
+        } else {
+            init.ld(R8::A, hw::IEF_TIMER).ldh(Mem::addr(hw::IE), R8::A);
+        }
+        gb.init(init);
+        engine_rom(&gb).boot()
+    };
+    for or_in in [true, false] {
+        let mut gb = program(or_in);
+        gb.run_frames(5);
+        let (loops, ticks) = (gb.read_symbol("wLoops"), gb.read_symbol("wTicks"));
+        gb.run_frames(30);
+        assert_eq!(
+            gb.read_symbol("wLoops"),
+            loops + 30,
+            "the main loop, rIE {}",
+            if or_in { "ORed" } else { "written" }
+        );
+        // Every 16384 M-cycles: about 1 a frame
+        let ran = gb.read_symbol("wTicks") - ticks;
+        assert!((31..=33).contains(&ran), "{} timer interrupts", ran);
+        assert_eq!(gb.read(0xFFFF) & 0x05, 0x05, "VBlank and timer enabled");
+    }
+}
+
+/// The VBlank handler keeps the registers of the code it interrupts, its own `a` included:
+/// the main loop loads `a` and the flags, sleeps in a `halt` of its own until the VBlank
+/// interrupt (whose handler writes `a` for its flag), then stores them
+#[test]
+fn engine_vblank_handler_preserves_a_and_the_flags() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wA", 0);
+    gb.vars.create_u8("wF", 0);
+    gb.vars.create_u8("wLoops", 0);
+    gb.add_to_main_loop(count("wLoops"));
+    let mut code = Block::new();
+    code.ld_a(0x5A)
+        .or(R8::A)
+        .scf() // f: carry only
+        .halt() // the next VBlank's handler runs here
+        .nop()
+        .ld_addr_def_a("wA")
+        .push(R16Stack::AF)
+        .pop(R16Stack::BC)
+        .ld(R8::A, R8::C)
+        .ld_addr_def_a("wF");
+    gb.add_to_main_loop(code);
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(10);
+    assert!(gb.read_symbol("wLoops") >= 4, "the main loop ran");
+    assert_eq!(
+        (gb.read_symbol("wA"), gb.read_symbol("wF")),
+        (0x5A, 0x10),
+        "a and the flags after the VBlank handler"
+    );
+}
+
 /// `disable_interrupt` stops a handler while the program runs, `enable_interrupt` starts it
 /// again: the main loop disables the timer on its 10th frame and enables it on its 20th
 #[test]

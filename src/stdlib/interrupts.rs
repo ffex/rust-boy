@@ -219,10 +219,12 @@ pub fn signal_frame() -> Vec<Instr> {
 
 /// The `WaitFrame` routine: wait for the next VBlank, asleep (`halt`)
 ///
-/// It clears [`VBLANK_FLAG`], then sleeps until the VBlank handler has set it again
-/// ([`signal_frame`]), so it returns after the handler of the first VBlank that starts
-/// after the call (one frame later at most). The other interrupts wake the `halt` too:
-/// their handlers run, and it goes back to sleep.
+/// It makes sure the VBlank interrupt is enabled (it sets `IEF_VBLANK` in `rIE`, keeping
+/// the other bits), clears [`VBLANK_FLAG`], then sleeps until the VBlank handler has set it
+/// again ([`signal_frame`]). So it returns after the handler of the first VBlank that
+/// starts once it has cleared the flag: about one frame later at most (a VBlank that starts
+/// during its first instructions is not that one, as with the `rLY` polling it replaces).
+/// The other interrupts wake the `halt` too: their handlers run, and it goes back to sleep.
 ///
 /// It checks the flag with interrupts off and sleeps with them off, so a VBlank that comes
 /// between the check and the `halt` is not missed: with interrupts off, `halt` ends as soon
@@ -231,14 +233,19 @@ pub fn signal_frame() -> Vec<Instr> {
 /// the DMG's halt bug runs the `ei` after the `halt` twice, which changes nothing.) A
 /// check-then-`halt` loop with interrupts on would sleep through that frame.
 ///
-/// - Needs: the VBlank interrupt enabled in `rIE` with a handler that sets the flag, and
-///   the LCD on; otherwise it never returns.
+/// - Needs: a VBlank handler that sets the flag, and the LCD on; otherwise it never
+///   returns. It enables the VBlank interrupt itself, so code that wrote `rIE` without
+///   `IEF_VBLANK` does not stop the main loop.
 /// - Returns with interrupts on (`ei`), whatever their state at the call.
 /// - Reads and returns nothing; clobbers `a` and the flags.
 pub fn wait_frame() -> Routine {
     let mut asm = Block::new();
     asm.comment("Wait for the next VBlank, asleep: the VBlank handler sets wVBlankFlag");
     asm.label("WaitFrame");
+    // The frame clock: whatever wrote rIE, VBlank stays enabled
+    asm.ldh(R8::A, Mem::addr(hw::IE));
+    asm.or(hw::IEF_VBLANK);
+    asm.ldh(Mem::addr(hw::IE), R8::A);
     asm.xor(R8::A);
     asm.ld_addr_def_a(VBLANK_FLAG);
     asm.label(".wait");
@@ -400,6 +407,11 @@ impl Stat {
 
 /// Code that selects the conditions of `stat`: `rLYC` (if it has a line), then `rSTAT`.
 /// Uses `a`.
+///
+/// On the DMG, a write to `rSTAT` in mode 0 or 1 (HBlank, VBlank), or while `LY` = `LYC`,
+/// requests a STAT interrupt of its own (a hardware quirk): with the STAT interrupt
+/// enabled, its handler runs once more. Write it with the LCD off, or drop the request
+/// ([`clear_pending`]) before interrupts are on, as `RustBoy`'s start-up code does.
 pub fn configure_stat(stat: Stat) -> Vec<Instr> {
     let mut asm = Block::new();
     if let Some(line) = stat.lyc {
@@ -607,6 +619,9 @@ mod tests {
             code,
             [
                 "WaitFrame:",
+                "ldh a, [rIE]",
+                "or a, IEF_VBLANK",
+                "ldh [rIE], a",
                 "xor a, a",
                 "ld [wVBlankFlag], a",
                 ".wait:",

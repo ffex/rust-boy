@@ -243,6 +243,13 @@ impl RustBoy {
     /// `build()` sets it after this code to turn the LCD on. A soft reset
     /// ([`RustBoy::set_soft_reset`]) runs the whole start-up again, this code too.
     ///
+    /// `rIE` holds `IEF_VBLANK` and the interrupts that have a handler when this code runs.
+    /// To enable another one, use the API ([`RustBoy::on_interrupt`] and the `on_*` methods,
+    /// or [`RustBoy::enable_interrupt`], whose code ORs its bit in); code written by hand
+    /// must OR its bits in too (`ldh a, [rIE]`, `or a, ...`, `ldh [rIE], a`): writing
+    /// `rIE` turns off what it leaves out. (The main loop's `WaitFrame` enables VBlank again
+    /// on its own, but a handler left out stops running.)
+    ///
     /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
     /// off, `rLY` stays 0 and the wait never ends.
     ///
@@ -1071,9 +1078,17 @@ impl RustBoy {
     /// dependencies, as with [`RustBoy::call_routine`].
     ///
     /// # Panics
-    /// As [`RustBoy::call_routine`].
+    /// If the routine reads registers ([`Routine::reads`]): a handler interrupts any code,
+    /// so they would hold whatever that code left there. As [`RustBoy::call_routine`].
     #[track_caller]
     pub fn on_interrupt_routine(&mut self, interrupt: Interrupt, routine: &Routine) -> &mut Self {
+        assert!(
+            routine.reads().is_empty(),
+            "on_interrupt_routine: routine `{}` reads {}, but a handler interrupts any code, so \
+             they would hold what that code left there; give it a routine that reads no register",
+            routine.name(),
+            routine.reads()
+        );
         let call = self.call_routine(routine);
         self.add_handler_code(interrupt, call, routine.changes());
         self
@@ -1088,6 +1103,12 @@ impl RustBoy {
 
     /// Run `code` in the STAT handler, on the conditions of `stat` (`LY` = `LYC` on a line,
     /// PPU modes), which the start-up code selects ([`RustBoyConfig::stat`])
+    ///
+    /// On the DMG, a write to `rSTAT` in mode 0 or 1 (HBlank, VBlank), or while `LY` =
+    /// `LYC`, requests a STAT interrupt of its own: changing the conditions while the
+    /// program runs ([`interrupts::configure_stat`]) from the main loop, which runs in
+    /// VBlank, runs the handler once more. The start-up code writes `rSTAT` with the LCD
+    /// off and drops the requests before `ei`.
     ///
     /// # Panics
     /// If the program has other STAT conditions already (another `on_stat`, or its
@@ -4763,8 +4784,8 @@ mod interrupt_tests {
         // A call: every register
         let call = gb.call("Delay");
         gb.on_interrupt(Interrupt::Joypad, call);
-        // A routine: its convention (Delay changes a, bc, f)
-        gb.on_interrupt_routine(Interrupt::Timer, &crate::stdlib::utility::delay());
+        // A routine: its convention (UpdateKeys changes a, b, f)
+        gb.on_interrupt_routine(Interrupt::Timer, &crate::stdlib::inputs::update_keys());
         // VBlank: a for the flag, and what the code changes
         let mut vblank = Block::new();
         vblank.ld_e(3);
@@ -4774,7 +4795,7 @@ mod interrupt_tests {
             "SerialHandler:\n    push bc\n    push hl\n    ld b, 1\n    ld l, 2\n    pop hl\n    \
              pop bc\n    reti",
             "JoypadHandler:\n    push af\n    push bc\n    push de\n    push hl\n    call Delay\n",
-            "TimerHandler:\n    push af\n    push bc\n    call Delay\n    pop bc\n    pop af\n",
+            "TimerHandler:\n    push af\n    push bc\n    call UpdateKeys\n    pop bc\n    pop af\n",
             "VBlankHandler:\n    push af\n    push de\n    ld e, 3\n    ld a, 1\n",
         ] {
             assert!(out.contains(expected), "{}\nnot in:\n{}", expected, out);
@@ -4918,6 +4939,46 @@ mod interrupt_tests {
             out
         );
         assert!(out.contains("ld a, P1F_GET_BTN & P1F_GET_DPAD\n    ldh [rP1], a\n    jp Main"));
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_a_routine_handler_reads_no_register() {
+        // GetTileByPixel reads b and c: in a handler they hold what the interrupted code
+        // left there
+        let mut gb = RustBoy::new();
+        let routine = crate::stdlib::graphics::utility::get_tile_by_pixel();
+        let message = panic_message(|| gb.on_interrupt_routine(Interrupt::Timer, &routine));
+        assert!(
+            message.contains("routine `GetTileByPixel` reads bc"),
+            "{}",
+            message
+        );
+        // One that reads nothing is fine
+        gb.on_interrupt_routine(Interrupt::Timer, &crate::stdlib::interrupts::wait_frame());
+    }
+
+    #[test]
+    fn test_the_frame_flag_cannot_be_an_hram_variable() {
+        // In HRAM, a program without WRAM0 variables would put its raw Data code (without a
+        // SECTION) in the HRAM section (review of #37)
+        let mut gb = RustBoy::new();
+        let message = panic_message(|| gb.vars.create_hram_u8("wVBlankFlag", 0));
+        assert!(message.contains("main loop's frame flag"), "{}", message);
+        // In WRAM0 it is the program's, and build() uses it
+        gb.vars.create_u8("wVBlankFlag", 0);
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).raw("wLonely: db");
+        });
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains(
+                "SECTION \"Variables\", WRAM0[$C000]\n    wVBlankFlag: db\n    wLonely: db"
+            ),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("wVBlankFlag: db").count(), 1);
         assert_links(&out);
     }
 

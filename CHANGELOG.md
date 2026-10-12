@@ -99,7 +99,7 @@ together: every breaking change of the refactoring is in this release, so a prog
   runtime, preserving coordinates and tile indices. Default/example output is unchanged.
 - **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
-  per-part tiles/flags and creation-order OAM priority. Composite movement and animation
+  per-part tiles/flags and OAM entries in creation order. Composite movement and animation
   apply to the whole group. Existing 16x16 calls retain names and generated output.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
@@ -130,7 +130,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 

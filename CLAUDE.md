@@ -7,7 +7,8 @@ rust-boy is a Rust DSL that generates Game Boy assembly in RGBDS syntax (`cargo 
 - [`CONTEXT.md`](CONTEXT.md) — architecture, levels assessment, bug catalogue B1–B30 and branch analysis.
 - [`AGENTS.md`](AGENTS.md) — Codex's implementation and git/PR workflow.
 
-Read these before reviewing or fixing a PR, and keep them up to date in the same branch as the change.
+Read these before starting a task (reviewing, fixing or writing a PR), and keep them up to date in the same branch
+as the change.
 
 ## Roles
 
@@ -16,7 +17,8 @@ Read these before reviewing or fixing a PR, and keep them up to date in the same
 - **Claude** owns the PR from then on: it has the PR reviewed, fixes the findings on the PR branch,
   has the new head reviewed again, and merges the PR into `refactor` when everything is OK.
 - **The maintainer** is asked only for the final PR `refactor` → `main`, which Claude never merges,
-  and for questions Claude cannot answer itself (see "Questions" below).
+  and for questions Claude cannot answer itself (see "Questions" below). The maintainer may also pass
+  Codex's handoffs (a PR number) along; that is not a question.
 
 ## Working style
 
@@ -110,7 +112,8 @@ without asking first. Do not mention or link AI sessions in commit messages or P
 **Finding Codex's PRs.** Codex hands a PR over through the maintainer, who gives Claude its number,
 or Claude picks up the open PRs into `refactor` whose *Independent review* section says "pending".
 A PR Claude writes itself (a follow-up, a docs change) follows the git workflow of
-[`AGENTS.md`](AGENTS.md) (branch names, small commits, ticking `Task.md`) and the same steps below.
+[`AGENTS.md`](AGENTS.md) (branch names, small commits, ticking `Task.md`, `CHANGELOG.md`) but skips its
+handoff: it starts at step 1 below with its *Independent review* section "pending".
 
 For each Codex PR (or chain of stacked PRs):
 
@@ -122,8 +125,8 @@ For each Codex PR (or chain of stacked PRs):
    2. Run the CI checks from `.github/workflows/ci.yml` on the merged result: `cargo fmt --check`,
       `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
       `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` after
-      `scripts/fetch-test-roms.sh <dir>`; with Rust 1.85 too when it is installed. Report any check
-      that could not run.
+      `scripts/fetch-test-roms.sh <dir>`; and `cargo +1.85 test` when Rust 1.85 is installed (CI's
+      MSRV job). Report any check that could not run.
    3. Compare each PR description with the code it really changes; flag false or unverified claims,
       including claims about unchanged ROMs or generated asm.
    4. Review for bugs, regressions, missing regression tests and violations of the rules in this file.
@@ -138,7 +141,8 @@ For each Codex PR (or chain of stacked PRs):
 3. **Re-review.** A review applies only to the commit ids it recorded: after fixes, start a new
    context-free review of the new head. Repeat 2–3 until the reviewer has no findings that block.
 4. **Merge.** Merge only when CI is green on the reviewed head, there are no conflicts and no
-   finding is left open without a written disposition. Update the PR description (template
+   finding is left open without a written disposition. If `refactor` moved since the review, merge it
+   into the PR branch and go back to step 3. Update the PR description (template
    below), including the *Independent review* section: what each review found and which commit
    fixed it. Then merge into `refactor` with a merge commit pinned to the reviewed head SHA (the
    merge tool's expected head SHA, or `gh pr merge N --merge --match-head-commit <sha>`), and check

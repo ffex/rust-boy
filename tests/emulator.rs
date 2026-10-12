@@ -1982,7 +1982,7 @@ fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
                 .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
             game.sprites.set_initial_animation(sprite, 0);
         }
-        game.sprites.set_animation_delay(fast, 0, 1);
+        game.sprites.set_animation_period(fast, 0, 1);
         let parts: Vec<_> = (0..3)
             .map(|i| MetaspritePart::new(tiles.clone(), i * 8, 0, 0u8))
             .collect();
@@ -1990,7 +1990,7 @@ fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
         game.sprites
             .add_composite_animation(meta, "Walk", 0, 1, AnimationType::Loop);
         game.sprites.set_composite_initial_animation(meta, 0);
-        game.sprites.set_composite_animation_delay(meta, 0, 2);
+        game.sprites.set_composite_animation_period(meta, 0, 2);
         // Repeated enable is normal for held-key bindings; it must not stall a clock.
         game.add_to_main_loop(game.sprites.enable_composite_animation(meta, 0));
         let rom = engine_rom(&game);

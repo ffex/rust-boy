@@ -4,9 +4,11 @@
 //! VBlank handler for a stable whole-frame camera; main-loop writes can tear.
 //! They change A and flags, preserving all other registers. Screen coordinates
 //! are world coordinates minus the scroll, modulo 256. Sprites are not moved.
-//! `scroll_by` reads the current SCX/SCY: when an `on_stat` handler changes them mid-frame
+//! [`scroll_by`] reads the current SCX/SCY: when an `on_stat` handler changes them mid-frame
 //! (a split screen), VBlank code reads the value of the last split, not the camera.
 //! `GetTileByPixel` takes map pixels: add SCX/SCY to screen coordinates while scrolled.
+//! `RustBoy`'s start-up code does not write SCX/SCY: after a soft reset the camera keeps its
+//! scroll unless init code calls [`set_scroll`].
 
 use crate::asm::{Block, Instr, Mem, R8};
 use crate::hw;

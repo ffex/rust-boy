@@ -87,6 +87,15 @@ pub enum Error {
     /// RAM section (it only reserves space), or a section name used twice; the message is
     /// the asm layer's
     Section(String),
+    /// Code of an interrupt handler reaches a routine that only start-up and main-loop code
+    /// may run: `QueueVramWrite`, since the VRAM queue has one producer (an interrupt in the
+    /// middle of the main loop's write would fill the same entry)
+    MainLoopOnly {
+        /// The routine, e.g. `QueueVramWrite`
+        routine: String,
+        /// The handler whose code reaches it, e.g. `TimerHandler`
+        handler: String,
+    },
 }
 
 /// What a name is defined as, in an [`Error::NameConflict`]
@@ -184,6 +193,12 @@ impl fmt::Display for Error {
                 available
             ),
             Error::Section(message) => write!(f, "invalid program: {}", message),
+            Error::MainLoopOnly { routine, handler } => write!(
+                f,
+                "`{}` reaches `{}`, which only start-up and main-loop code may call: an \
+                 interrupt in the middle of the main loop's call would lose a write",
+                handler, routine
+            ),
         }
     }
 }

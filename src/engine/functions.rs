@@ -221,6 +221,34 @@ impl FunctionRegistry {
         self.external_symbols.contains(name)
     }
 
+    /// Whether `code` refers to `target`, directly or through the user functions it refers
+    /// to (by their name or another of their global labels)
+    pub(crate) fn reaches(&self, code: &[Instr], target: &str) -> bool {
+        let (mut refs, mut defs) = (Vec::new(), BTreeSet::new());
+        for instr in code {
+            symbols(instr, &mut refs, &mut defs);
+        }
+        let mut seen = BTreeSet::new();
+        while let Some(name) = refs.pop() {
+            if name == target {
+                return true;
+            }
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let functions = self.by_name.get(&name).into_iter().copied().chain(
+                self.by_label
+                    .get(&name)
+                    .into_iter()
+                    .flat_map(|indexes| indexes.iter().copied()),
+            );
+            for index in functions {
+                refs.extend(self.user_functions[index].refs.iter().cloned());
+            }
+        }
+        false
+    }
+
     /// Whether `name` is a user function (one that replaces a builtin included)
     pub(crate) fn is_user_function(&self, name: &str) -> bool {
         self.by_name.contains_key(name)

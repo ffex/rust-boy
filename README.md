@@ -122,7 +122,8 @@ A `RustBoy` program runs once a frame, woken by the VBlank interrupt:
   then the code given to `on_vblank`, then it
   tells the main loop that a frame started;
 - the **main loop** waits for that asleep (`call WaitFrame`, a `halt`), then runs the animations and the
-  `add_to_main_loop` code, so it starts in VBlank too, once a frame;
+  `add_to_main_loop` code, so it starts in VBlank too, once a frame (how much of VBlank is left depends on the
+  handler: see [Queued VRAM writes](#queued-vram-writes-rustboy)'s cost);
 - the **other handlers** (`on_stat`, `on_timer`, `on_joypad`, or `on_interrupt` for any of them) run when their
   interrupt fires. Every handler saves the registers its code changes (what the code writes, or a routine's calling
   convention with `on_interrupt_routine`) and returns with `reti`, so the code it interrupts is not disturbed.
@@ -191,12 +192,17 @@ in `hl` and the byte in `a`, useful after `TileRef::load_address()` or a runtime
 Both helpers generate code that changes all registers and flags and preserves IME. Carry is clear when accepted;
 carry is set when the queue is full or a runtime address is outside VRAM. A rejected write is not queued: retry it
 later if it must arrive. Constant addresses outside VRAM and values outside a byte panic at the API call. Producer
-code must run only in initialization or the main loop, **never in an interrupt handler**. VBlank can safely interrupt
-it: the write cursor is published only when all entry bytes are ready.
+code must run only in initialization or the main loop, **never in an interrupt handler**: `build()` returns
+`Error::MainLoopOnly` when handler code reaches `QueueVramWrite`, directly or through a function. VBlank can safely
+interrupt it: the write cursor is published only when all entry bytes are ready.
 
 The consumer begins writes only on lines 144–152, leaving the last VBlank line as headroom. A late handler defers
 entries rather than writing during display rendering. On the test emulator, a full queue plus OAM DMA takes
 967 M-cycles of handler work, within the 1,140 M-cycle VBlank window; arbitrary user handlers can still exceed it.
+That time comes out of the main loop's VBlank. Measured on the test emulator, the main loop starts with about 920 M-cycles of VBlank left with a sprite
+and an empty queue, but only about 150 with 12 queued writes: main-loop code that touches VRAM directly (`GetTileByPixel`,
+`TileRef::set_tile`) then runs while the screen is drawn, where VRAM reads return `$FF` and writes are lost. A program
+that fills the queue should send all its VRAM writes through it, or do its direct VRAM work in `on_vblank`.
 `stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
 Programs that never request the queue emit no queue code or storage.
 

@@ -894,6 +894,16 @@ impl RustBoy {
         code.extend(handlers.iter().map(Routine::body));
         let mut generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
         generated.extend(handlers.iter().map(|handler| handler.name().to_string()));
+        // The VRAM queue has one producer, the main loop: no handler may enqueue
+        let enqueue = vram_queue::enqueue();
+        for (interrupt, handler) in &self.handlers {
+            if self.functions.reaches(&handler.code, enqueue.name()) {
+                return Err(Error::MainLoopOnly {
+                    routine: enqueue.name().to_string(),
+                    handler: interrupt.handler_label().to_string(),
+                });
+            }
+        }
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
@@ -1394,7 +1404,10 @@ impl RustBoy {
     /// by the caller if required. Changes all registers and flags, preserving IME.
     ///
     /// Do not call the generated code from interrupt handlers: the queue has one
-    /// producer. A late VBlank handler defers entries; arbitrary user handler work is
+    /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it.
+    /// Its flush takes VBlank time from the main loop (with 12 queued writes, about 150
+    /// M-cycles of VBlank are left of 920): with the queue, direct VRAM access from the
+    /// main loop can miss VBlank, so send VRAM writes through the queue or `on_vblank`. A late VBlank handler defers entries; arbitrary user handler work is
     /// outside the queue's timing budget.
     ///
     /// # Panics
@@ -3441,6 +3454,50 @@ mod tests {
                 panic_message(|| gb.queue_vram_write(hw::SCRN0, 1)).contains("another routine")
             );
         }
+    }
+
+    #[test]
+    fn test_vram_queue_is_rejected_in_interrupt_handlers() {
+        // One producer: a handler that enqueues, directly or through a function, could
+        // fill the entry the main loop is writing
+        let direct = |gb: &mut RustBoy| {
+            let write = gb.queue_vram_write(hw::SCRN0, 1);
+            gb.on_vblank(write);
+        };
+        let through_function = |gb: &mut RustBoy| {
+            let write = gb.queue_vram_write(hw::SCRN0, 1);
+            let mut body = Block::new();
+            body.label("Inner").emit_all(write);
+            body.ret();
+            gb.define_function("Inner", body.into_instrs());
+            let mut outer = Block::new();
+            outer.label("Outer").call("Inner").ret();
+            gb.define_function("Outer", outer.into_instrs());
+            let call = gb.call("Outer");
+            gb.on_timer(
+                Timer::new(crate::stdlib::interrupts::TimerClock::Hz4096, 0),
+                call,
+            );
+        };
+        for (setup, handler) in [
+            (direct as fn(&mut RustBoy), "VBlankHandler"),
+            (through_function, "TimerHandler"),
+        ] {
+            let mut gb = RustBoy::new();
+            setup(&mut gb);
+            assert_eq!(
+                gb.build(),
+                Err(Error::MainLoopOnly {
+                    routine: "QueueVramWrite".to_string(),
+                    handler: handler.to_string(),
+                })
+            );
+        }
+        // From the main loop it builds
+        let mut gb = RustBoy::new();
+        let write = gb.queue_vram_write(hw::SCRN0, 1);
+        gb.add_to_main_loop(write);
+        assert!(gb.build().is_ok());
     }
 
     #[test]

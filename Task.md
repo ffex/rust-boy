@@ -243,9 +243,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       2300 `Delay` iterations (the old engine fails it); the 4 examples with sprites change by design, their tests pass,
       with every DMA in VBlank)
 - [x] VRAM write queue flushed during VBlank (tilemap edits, score)
-      (branch `refactor-codex-p3-vram-queue`, stacked on #39: `RustBoy::queue_vram_write` and
+      (branch `refactor-codex-p3-vram-queue`: `RustBoy::queue_vram_write` and
       `queue_vram_write_from_registers`, 12 pending byte writes in 41 WRAM bytes; carry reports rejection
-      on full/invalid runtime address. Single producer in init/main, cursor published last, IME preserved;
+      on full/invalid runtime address. Single producer in init/main (`Error::MainLoopOnly` from a handler), cursor
+      published last, IME preserved;
       flush after OAM DMA, before user VBlank code, late entries deferred. Emulator tests inject VBlank at every
       enqueue instruction boundary and check delayed main-loop writes, late flush and the full queue plus DMA
       handler (967 M-cycles, within 1140); standalone routines in `stdlib::graphics::vram_queue`)

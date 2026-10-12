@@ -181,7 +181,7 @@ impl RustBoy {
     /// (`LCDCF_BG9C00`) when it turns the LCD on (B19)
     ///
     /// Put a tilemap there with `tiles.add_tilemap_at`. `GetTileByPixel` (and so
-    /// `get_pivot` + `GetTileByPixel` collisions) reads the `$9800` map only.
+    /// `get_pivot` + `GetTileByPixel` collisions) reads the currently selected background map.
     pub fn set_background_tilemap(&mut self, area: TilemapArea) -> &mut Self {
         self.config.background_tilemap = area;
         self
@@ -4518,6 +4518,9 @@ mod tests {
             (BLANK_TILE, [0, 0]),
         ] {
             let mut cpu = TestCpu::default();
+            cpu.mem.insert(hw::LCDC.name.to_string(), 0);
+            cpu.consts
+                .insert(hw::LCDCF_BG9C00.name.to_string(), hw::LCDCF_BG9C00.value);
             cpu.mem.insert("wShadowOAM+4".to_string(), 57);
             cpu.mem.insert("wShadowOAM+5".to_string(), 48);
             cpu.mem.insert(map(hit), tile);

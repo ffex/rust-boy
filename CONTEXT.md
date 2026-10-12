@@ -232,6 +232,11 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Tile lookup** (since `refactor-p3-tilemap-lookup`): the shared `GetTileByPixel` reads LCDC bit 3 at runtime and
+  returns the tile address and index from the current background map, at `$9800` or `$9C00`. Coordinates remain map
+  pixels (callers add SCX/SCY when starting from screen pixels); the calling convention is unchanged. Unit tests on the
+  test CPU and emulator tests cover both maps, pixel boundaries and a map change in a VBlank handler.
+
 - **Background camera** (since `refactor-p3-scrolling`): `stdlib::graphics::scroll` has three stateless snippets,
   reused by `RustBoy::set_background_scroll`, `scroll_background_by` and `follow_background_point`. They write
   `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and
@@ -1053,8 +1058,8 @@ the two maps; `TileManager::add_tilemap_at(name, area, rows)` puts a tilemap at 
 start of its map, so one would replace the other), and so does a tilemap of more than 32 rows (it ran into the next map,
 or out of VRAM from `$9C00`). **`RustBoy::set_background_tilemap(area)`** chooses the map the background shows: `build()`
 adds `| LCDCF_BG9C00` to the LCD-on value for `Map9C00` (for `Map9800`, the default, the LCDC line is unchanged: the flag
-is 0). Not done: the window layer, which could show the other map (Phase 3), and `GetTileByPixel`, which still reads the
-`$9800` map (documented on `set_background_tilemap`). No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
+is 0). Not done: the window layer, which could show the other map (Phase 3). Since `refactor-p3-tilemap-lookup`,
+`GetTileByPixel` follows LCDC bit 3 at runtime. No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
 and `test_a_tilemap_has_at_most_32_rows` (both failed before: no panic), `test_a_tilemap_at_9c00` (the start-up code with
 the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCDC value; linked with RGBDS).
 
@@ -1109,7 +1114,7 @@ label, two contracts. Memcopy, WaitVBlank, WaitNotVBlank and UpdateKeys are also
 `src/bin/unbricked.rs` has a third copy. *Fix:* one routine registry.
 **Status: fixed** on `refactor-p1-builtins`. There is one `GetTileByPixel`, in `gb_std`
 (`src/stdlib/graphics/utility.rs:159`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
-the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them);
+the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them; since `refactor-p3-tilemap-lookup`, on the map LCDC bit 3 selects);
 out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it changes `bc` and the flags and keeps
 `de` (documented on the function). `BuiltinFunction::generate` (`src/engine/functions.rs:83`, the code of `BuiltinFunction::routine`, `:71`, since `refactor-p2-routines`) returns the
 `gb_std` routine for Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel (the other four were

@@ -9,10 +9,13 @@ file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working 
 - Codex implements changes and opens PRs; Claude only reviews them. Codex fixes review findings,
   and the maintainer decides whether to merge.
 
-- `refactor` is the integration branch (created from `main` at `4601a5c`).
-- Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
+- `refactor` is the shared integration branch (created from `main` at `4601a5c`).
+- Codex branches from `refactor-codex-entry` and opens feature PRs into that branch. After Claude
+  review and maintainer merges, small batches are promoted with a PR `refactor-codex-entry` →
+  `refactor`. Bring changes from `refactor` back regularly through synchronization PRs.
+- Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor-codex-entry`,
   named `refactor-<phase>-<topic>` (e.g. `refactor-p1-if-semantics`), and merged through a **PR into
-  `refactor`** for review.
+  `refactor-codex-entry`** for review.
 - Tick the boxes in this file **in the same PR** that completes the task.
 - When all phases are done: one PR `refactor` → `main`.
 

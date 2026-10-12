@@ -889,6 +889,34 @@ impl RustBoy {
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
+        if self.uses_shadow_oam()
+            || functions
+                .names
+                .iter()
+                .any(|name| name == BuiltinFunction::InitOamDma.label())
+        {
+            // These names are generated data, not user-defined functions or raw symbols.
+            // Reject all competing definitions before emitting duplicate labels or calling
+            // a user function in place of the HRAM DMA routine.
+            for name in [oam::SHADOW_OAM, oam::OAM_DMA] {
+                let first = if self.functions.is_external_symbol(name) {
+                    Some(super::error::Definition::ExternalSymbol)
+                } else if code.iter().any(|body| defines(body, name))
+                    || defines(&functions.code, name)
+                {
+                    Some(super::error::Definition::CodeSymbol)
+                } else {
+                    None
+                };
+                if let Some(first) = first {
+                    return Err(Error::NameConflict {
+                        name: name.to_string(),
+                        first,
+                        second: super::error::Definition::GeneratedBuffer,
+                    });
+                }
+            }
+        }
         asm.chunk(Chunk::Functions);
         asm.emit_all(functions.code);
 
@@ -3183,6 +3211,82 @@ mod tests {
             assert_mem(&cpu, &oam(i), 0);
         }
         assert_labels_ok(&gb.build().unwrap());
+    }
+
+    #[test]
+    fn test_dma_buffer_names_cannot_be_defined_by_the_program() {
+        type Setup = fn(&mut RustBoy, &str);
+        let setups: [(Setup, Definition); 6] = [
+            (
+                |gb, name| {
+                    gb.vars.create_u8(name, 0);
+                },
+                Definition::Variable(VarType::U8),
+            ),
+            (
+                |gb, name| {
+                    gb.define_const(name, 1);
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.raw(|asm| {
+                        asm.label(name);
+                    });
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_function_from(name, Vec::<Instr>::new());
+                    gb.keep_function(name);
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.external_symbol(name);
+                },
+                Definition::ExternalSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_function_from(
+                        "Other",
+                        vec![Instr::Label {
+                            name: name.to_string(),
+                        }],
+                    );
+                    gb.keep_function("Other");
+                },
+                Definition::CodeSymbol,
+            ),
+        ];
+        for name in [oam::SHADOW_OAM, oam::OAM_DMA] {
+            for (setup, first) in setups {
+                // Both automatic sprite DMA and explicitly requested DMA initialization
+                // reserve these names; an alias would call ROM instead of the HRAM code.
+                for with_sprite in [false, true] {
+                    let mut gb = RustBoy::new();
+                    if with_sprite {
+                        gb.add_sprite("Dot", tiles(1), 8, 8, 0);
+                    } else {
+                        gb.use_function(BuiltinFunction::InitOamDma);
+                    }
+                    setup(&mut gb, name);
+                    assert_eq!(
+                        gb.build(),
+                        Err(Error::NameConflict {
+                            name: name.to_string(),
+                            first,
+                            second: Definition::GeneratedBuffer,
+                        }),
+                        "{name}, sprites: {with_sprite}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

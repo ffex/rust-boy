@@ -217,6 +217,10 @@ impl FunctionRegistry {
         self.external_symbols.insert(name.to_string());
     }
 
+    pub(crate) fn is_external_symbol(&self, name: &str) -> bool {
+        self.external_symbols.contains(name)
+    }
+
     /// Register a user-defined function, from its body: what it needs is read from the body
     ///
     /// Registering the same name again replaces the function and keeps its position.

@@ -46,9 +46,12 @@ together: every breaking change of the refactoring is in this release, so a prog
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
 - **Sprites** (Phase 3): every sprite of a `RustBoy` program lives in a shadow OAM in WRAM, which the VBlank handler
   copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
+  The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,
+  constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
+  - the pinned test-ROM download script verifies checksums with both macOS and GNU `sha256sum`.
 
 ### Toolchain
 

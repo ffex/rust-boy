@@ -36,17 +36,25 @@ roms=(
     "2e9067c670ff8b45916bf321677ad04a6896d06a057dbcb82ae9f208a1ae9c34  mem_timing/individual/03-modify_timing.gb"
 )
 
+# macOS's sha256sum lacks GNU's --check/--status options. Compare the digest directly;
+# both versions print it as the first field, including for paths containing spaces.
+checksum_matches() {
+    local actual
+    actual="$(sha256sum "$2")" || return 1
+    [[ "${actual%% *}" == "$1" ]]
+}
+
 for entry in "${roms[@]}"; do
     sum="${entry%%  *}"
     path="${entry#*  }"
     file="$dir/$path"
-    if [[ -f "$file" ]] && echo "$sum  $file" | sha256sum --check --status; then
+    if [[ -f "$file" ]] && checksum_matches "$sum" "$file"; then
         continue
     fi
     mkdir -p "$(dirname "$file")"
     url="$base/${path// /%20}"
     curl --fail --silent --show-error --location --retry 3 --output "$file" "$url"
-    if ! echo "$sum  $file" | sha256sum --check --status; then
+    if ! checksum_matches "$sum" "$file"; then
         echo "checksum mismatch: $path" >&2
         rm -f "$file"
         exit 1

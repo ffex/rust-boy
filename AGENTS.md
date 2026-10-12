@@ -10,7 +10,7 @@ Read both before starting a task, and keep them up to date in the same branch as
 
 ## Role: implementation with Codex
 
-Codex owns implementation, tests, documentation, branches, commits and PRs into `refactor`.
+Codex owns implementation, tests, documentation, branches, commits and feature PRs into `refactor-codex-entry`.
 Claude only reviews Codex's PRs, following [`CLAUDE.md`](CLAUDE.md). Codex fixes review findings;
 the maintainer decides whether to merge. Do not treat a Codex self-review as Claude's independent review.
 
@@ -94,18 +94,22 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 
 ## Git workflow
 
-- `refactor` is the integration branch. Never commit directly to `main` or `refactor`.
-- For each phase, or each major edit, create a branch from an up-to-date `refactor`:
+- `refactor-codex-entry` is Codex's integration branch; `refactor` is the shared integration branch.
+  Never commit directly to `main`, `refactor` or `refactor-codex-entry`.
+- For each phase, or each major edit, create a branch from an up-to-date `refactor-codex-entry`:
   `refactor-<phase>-<topic>`, e.g. `refactor-p1-if-semantics`, `refactor-p2-typed-operands`.
   (Use a dash, not a slash: git cannot have both a `refactor` branch and `refactor/...` branches.)
 - If the work needs a PR that is not merged yet, branch from that PR's branch instead (stacked PR),
-  still target `refactor`, and start the PR description with "Depends on #N".
+  still target `refactor-codex-entry`, and start the PR description with "Depends on #N".
 - Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
 - Before pushing, run what CI runs (`.github/workflows/ci.yml`): `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
   `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`).
-- Push the branch and open a **PR into `refactor`** (never straight into `main`). When everything is done,
-  `refactor` → `main` is a final PR.
+- Push the feature branch and open a **PR into `refactor-codex-entry`**. Claude reviews it,
+  Codex addresses findings, and the maintainer merges it. Promote coherent, small batches with a
+  separate PR `refactor-codex-entry` → `refactor`, reviewed by Claude and merged by the maintainer.
+  Regularly merge updated `refactor` into the Codex integration branch through a synchronization PR
+  to keep conflicts small. When everything is done, `refactor` → `main` is the final release PR.
 - Never force-push, rewrite published history or delete branches without asking first.
 - Do not mention or link AI sessions in commit messages or PR descriptions.
 
@@ -116,7 +120,7 @@ handoff for a fresh Claude review session following [`CLAUDE.md`](CLAUDE.md). Gi
 the PR numbers, their branches and the merge order, not implementation-session context or your
 own conclusions. The reviewer reads the repository instructions and PRs independently.
 
-Claude simulates the merge in its own worktree, runs the CI checks, checks the PR descriptions,
+Claude simulates the merge into the PR's actual base in its own worktree, runs the CI checks, checks the PR descriptions,
 reviews for bugs and regressions, and checks that `Task.md` and `CONTEXT.md` agree with the code.
 Claude is read-only towards GitHub and reports findings to the maintainer; Codex implements fixes
 on the PR branch and requests another review of the updated commits when needed.

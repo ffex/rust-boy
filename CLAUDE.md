@@ -95,13 +95,15 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 
 ## Review workflow
 
-`refactor` is the integration branch; Codex's PRs target it. The final release PR targets `main`
-from `refactor`. Review stacked PRs in their declared dependency order.
+`refactor-codex-entry` is Codex's integration branch: feature PRs target it. Promotion PRs
+from `refactor-codex-entry` target the shared integration branch `refactor`. The maintainer manages
+promotion and merges; Claude reviews both stages. The final release PR targets `main` from
+`refactor`. Review stacked PRs in their declared dependency order.
 
 Start a fresh review session with only the PR numbers, branches and merge order, without Codex's
 implementation-session context or conclusions. Read the PR descriptions and diffs yourself.
 
-1. Record the base and PR head commit ids. Simulate merging the PRs into `refactor` in order in
+1. Record the base and PR head commit ids. Simulate merging the PRs into their actual target branch in order in
    the separate worktree (never push), and report conflicts. If a merge cannot be simulated, state
    which checks of the merged result are blocked.
 2. Run the CI checks from `.github/workflows/ci.yml` on the merged result: `cargo fmt --check`,

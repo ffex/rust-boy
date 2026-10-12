@@ -28,9 +28,12 @@
 //!   ROM, cartridge RAM, WRAM); a read there gives `$FF`, a write is dropped. Each
 //!   blocked access is counted, and every CPU write to OAM is logged ([`OamWrite`]), so a
 //!   test can see when a program touches OAM outside VBlank and HBlank ([B12]).
-//! - The joypad (`P1`), the serial port (the bytes a program sends are collected, as
-//!   Blargg's ROMs print through it), and the cartridge: ROM only (with RAM for types
-//!   `$08` and `$09`), MBC1 and MBC5 ROM banking, 32 KiB of cartridge RAM.
+//! - The joypad (`P1`), whose interrupt comes when one of its four lines goes from high to
+//!   low: a button pressed in a group `P1` selects, or a group selected while one of its
+//!   buttons is held (nothing with no group selected); the serial port (the bytes a program
+//!   sends are collected, as Blargg's ROMs print through it); the cartridge: ROM only
+//!   (with RAM for types `$08` and `$09`), MBC1 and MBC5 ROM banking, 32 KiB of cartridge
+//!   RAM.
 //!
 //! Known limits (not modelled):
 //! - The picture: no pixels, no sprite or background fetch, so mode 3 always lasts its
@@ -552,18 +555,29 @@ impl Bus {
         }
     }
 
+    /// The four input lines of `P1` (bits 0-3, 0 = low): a line is low when a button of a
+    /// selected group on it is held
+    fn p1_lines(&self) -> u8 {
+        let mut low = 0x0F;
+        if self.p1_select & 0x10 == 0 {
+            low &= !self.buttons & 0x0F;
+        }
+        if self.p1_select & 0x20 == 0 {
+            low &= !(self.buttons >> 4) & 0x0F;
+        }
+        low
+    }
+
+    /// Request the joypad interrupt if a line of `P1` went from high to low since `before`
+    fn joypad_edge(&mut self, before: u8) {
+        if before & !self.p1_lines() & 0x0F != 0 {
+            self.interrupt_flag |= INT_JOYPAD;
+        }
+    }
+
     fn read_io(&self, address: u16) -> u8 {
         match address {
-            0xFF00 => {
-                let mut low = 0x0F;
-                if self.p1_select & 0x10 == 0 {
-                    low &= !self.buttons & 0x0F;
-                }
-                if self.p1_select & 0x20 == 0 {
-                    low &= !(self.buttons >> 4) & 0x0F;
-                }
-                0xC0 | self.p1_select | low
-            }
+            0xFF00 => 0xC0 | self.p1_select | self.p1_lines(),
             0xFF02 => self.io[0x02] | 0x7E,
             0xFF04 => (self.div_counter >> 8) as u8,
             0xFF05 => self.tima,
@@ -650,7 +664,12 @@ impl Bus {
 
     fn write_io(&mut self, address: u16, value: u8) {
         match address {
-            0xFF00 => self.p1_select = value & 0x30,
+            0xFF00 => {
+                // Selecting a group with a button held pulls its line low
+                let before = self.p1_lines();
+                self.p1_select = value & 0x30;
+                self.joypad_edge(before);
+            }
             0xFF02 => {
                 self.io[0x02] = value & 0x81;
                 if value & 0x81 == 0x81 {
@@ -712,10 +731,9 @@ impl Bus {
     }
 
     fn press(&mut self, mask: u8) {
-        if self.buttons & mask != mask {
-            self.interrupt_flag |= INT_JOYPAD;
-        }
+        let before = self.p1_lines();
         self.buttons |= mask;
+        self.joypad_edge(before);
     }
 }
 
@@ -833,6 +851,16 @@ impl GameBoy {
     /// The byte at `address`, as the memory holds it (nothing blocked, no side effect)
     pub fn read(&self, address: u16) -> u8 {
         self.bus.peek(address)
+    }
+
+    /// Write `value` at `address`, in WRAM or HRAM, as a test that drives a program does (no
+    /// side effect, no M-cycle); panics elsewhere
+    pub fn write_ram(&mut self, address: u16, value: u8) {
+        match address {
+            0xC000..=0xDFFF => self.bus.wram[usize::from(address - 0xC000)] = value,
+            0xFF80..=0xFFFE => self.bus.hram[usize::from(address - 0xFF80)] = value,
+            _ => panic!("${:04X} is not in WRAM or HRAM", address),
+        }
     }
 
     /// The little-endian word at `address`

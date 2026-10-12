@@ -1107,7 +1107,9 @@ impl RustBoy {
     /// top.xor(R8::A).ldh(Mem::addr(hw::SCX), R8::A);
     /// gb.on_vblank(top);
     /// let out = gb.build()?;
-    /// assert!(out.contains("ld a, 100\n    ldh [rLYC], a\n    ld a, STATF_LYC\n    ldh [rSTAT], a"));
+    /// assert!(out.contains(
+    ///     "ld a, 100\n    ldh [rLYC], a\n    ld a, STATF_LYC\n    ldh [rSTAT], a"
+    /// ));
     /// assert!(out.contains("ld a, IEF_VBLANK | IEF_STAT\n    ldh [rIE], a"));
     /// # Ok::<(), rust_boy::engine::Error>(())
     /// ```
@@ -4713,5 +4715,219 @@ mod tests {
             generated_labels(&again);
             assert_links_with(&again, &[EXTERNAL_INC]);
         }
+    }
+}
+
+/// The interrupt API of `RustBoy`: what it generates and what it rejects. What the
+/// generated code does on the hardware is checked on the test emulator (`tests/emulator.rs`).
+#[cfg(test)]
+mod interrupt_tests {
+    use super::*;
+    use crate::asm::label_check::assert_links;
+    use crate::engine::{Definition, panic_message};
+    use crate::stdlib::inputs::PadButton;
+    use crate::stdlib::interrupts::TimerClock;
+
+    fn nop() -> Vec<Instr> {
+        vec![Instr::Nop]
+    }
+
+    #[test]
+    fn test_every_program_waits_for_vblank_with_an_interrupt() {
+        let out = RustBoy::new().build().unwrap();
+        for expected in [
+            "SECTION \"VBlank interrupt\", ROM0[$40]\n    jp VBlankHandler\n",
+            "EntryPoint:\n    di\n    ld sp, $FFFE\n    call WaitVBlank\n",
+            "ld a, IEF_VBLANK\n    ldh [rIE], a\n",
+            "xor a, a\n    ldh [rIF], a\n    ei\n\n    Main:\n    call WaitFrame\n    jp Main\n",
+            "VBlankHandler:\n    push af\n    ld a, 1\n    ld [wVBlankFlag], a\n    pop af\n    reti\n",
+            "wVBlankFlag: db",
+        ] {
+            assert!(out.contains(expected), "{}\nnot in:\n{}", expected, out);
+        }
+        // Only the VBlank vector, and no polling of LY in the main loop
+        assert_eq!(out.matches("interrupt\", ROM0").count(), 1);
+        assert!(!out.contains("WaitNotVBlank"));
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_a_handler_saves_what_its_code_changes() {
+        let mut gb = RustBoy::new();
+        let mut code = Block::new();
+        code.ld_b(1).ld_l(2);
+        gb.on_interrupt(Interrupt::Serial, code);
+        // A call: every register
+        let call = gb.call("Delay");
+        gb.on_interrupt(Interrupt::Joypad, call);
+        // A routine: its convention (Delay changes a, bc, f)
+        gb.on_interrupt_routine(Interrupt::Timer, &crate::stdlib::utility::delay());
+        // VBlank: a for the flag, and what the code changes
+        let mut vblank = Block::new();
+        vblank.ld_e(3);
+        gb.on_vblank(vblank);
+        let out = gb.build().unwrap();
+        for expected in [
+            "SerialHandler:\n    push bc\n    push hl\n    ld b, 1\n    ld l, 2\n    pop hl\n    \
+             pop bc\n    reti",
+            "JoypadHandler:\n    push af\n    push bc\n    push de\n    push hl\n    call Delay\n",
+            "TimerHandler:\n    push af\n    push bc\n    call Delay\n    pop bc\n    pop af\n",
+            "VBlankHandler:\n    push af\n    push de\n    ld e, 3\n    ld a, 1\n",
+        ] {
+            assert!(out.contains(expected), "{}\nnot in:\n{}", expected, out);
+        }
+        // Each vector, in priority order, before the header
+        let vectors: Vec<&str> = out
+            .lines()
+            .filter(|line| line.contains("interrupt\", ROM0"))
+            .collect();
+        assert_eq!(vectors.len(), 4, "{:?}", vectors);
+        assert!(out.find("Joypad interrupt").unwrap() < out.find("\"Header\"").unwrap());
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_code_for_one_interrupt_runs_in_one_handler_in_order() {
+        let mut gb = RustBoy::new();
+        let mut first = Block::new();
+        first.ld_b(1);
+        let mut second = Block::new();
+        second.ld_c(2);
+        gb.on_stat(Stat::new().line(5), first);
+        gb.on_stat(Stat::new().line(5), second);
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains("StatHandler:\n    push bc\n    ld b, 1\n    ld c, 2\n    pop bc\n"),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("ldh [rSTAT], a").count(), 1);
+    }
+
+    #[test]
+    fn test_what_the_interrupt_api_rejects() {
+        // A second STAT setting or timer
+        let mut gb = RustBoy::new();
+        gb.on_stat(Stat::new().line(5), nop());
+        let message = panic_message(|| gb.on_stat(Stat::new().hblank(), nop()));
+        assert!(
+            message.contains("other STAT conditions already"),
+            "{}",
+            message
+        );
+        let mut gb =
+            RustBoy::with_config(RustBoyConfig::default().timer(Timer::new(TimerClock::Hz4096, 0)));
+        let message = panic_message(|| gb.on_timer(Timer::new(TimerClock::Hz4096, 1), nop()));
+        assert!(message.contains("another timer already"), "{}", message);
+        // The same setting again is fine
+        gb.on_timer(Timer::new(TimerClock::Hz4096, 0), nop());
+
+        // Code that returns, at the call
+        let mut gb = RustBoy::new();
+        let message = panic_message(|| gb.on_vblank(vec![Instr::Ret]));
+        assert!(
+            message.contains("VBlankHandler handler's code returns"),
+            "{}",
+            message
+        );
+
+        // Disabling VBlank
+        let message = panic_message(|| RustBoy::new().disable_interrupt(Interrupt::VBlank));
+        assert!(
+            message.contains("waits for the VBlank interrupt"),
+            "{}",
+            message
+        );
+
+        // A function with a handler's name: an error of the program
+        let mut gb = RustBoy::new();
+        gb.on_timer(Timer::new(TimerClock::Hz4096, 0), nop());
+        let mut body = Block::new();
+        body.label("TimerHandler").ret();
+        gb.define_function("TimerHandler", body.into_instrs());
+        gb.keep_function("TimerHandler");
+        assert_eq!(
+            gb.build().unwrap_err(),
+            Error::NameConflict {
+                name: "TimerHandler".to_string(),
+                first: Definition::Function,
+                second: Definition::GeneratedFunction,
+            }
+        );
+    }
+
+    #[test]
+    fn test_an_interrupt_switched_without_a_handler_gets_reti() {
+        let mut gb = RustBoy::new();
+        let enable = gb.enable_interrupt(Interrupt::Serial);
+        gb.add_to_main_loop(enable);
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains("SECTION \"Serial interrupt\", ROM0[$58]\n    reti\n"),
+            "{}",
+            out
+        );
+        assert!(out.contains("or a, IEF_SERIAL"));
+        // Not enabled at start-up: only the ones with a handler
+        assert!(out.contains("ld a, IEF_VBLANK\n    ldh [rIE], a"));
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_soft_reset_reads_the_keys_once_a_frame() {
+        // Without inputs: its own UpdateKeys
+        let mut gb = RustBoy::new();
+        gb.set_soft_reset(true);
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains("call UpdateKeys\n    call CheckSoftReset\n    jp Main"),
+            "{}",
+            out
+        );
+        assert!(out.contains("CheckSoftReset:") && out.contains("wSoftResetArmed: db"));
+        assert_links(&out);
+
+        // With inputs: theirs
+        let mut gb = RustBoy::with_config(RustBoyConfig::default().soft_reset(true));
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::A, nop());
+        gb.add_inputs(inputs);
+        let out = gb.build().unwrap();
+        assert_eq!(out.matches("call UpdateKeys").count(), 1, "{}", out);
+        assert!(out.contains("call CheckSoftReset\n    jp Main"), "{}", out);
+        assert_links(&out);
+
+        // Off by default
+        assert!(!RustBoy::new().build().unwrap().contains("CheckSoftReset"));
+    }
+
+    #[test]
+    fn test_the_joypad_handler_selects_the_keys() {
+        let mut gb = RustBoy::new();
+        gb.on_joypad(nop());
+        let out = gb.build().unwrap();
+        // At start-up and at the end of each frame
+        assert_eq!(
+            out.matches("ld a, P1F_GET_BTN & P1F_GET_DPAD\n    ldh [rP1], a")
+                .count(),
+            2,
+            "{}",
+            out
+        );
+        assert!(out.contains("ld a, P1F_GET_BTN & P1F_GET_DPAD\n    ldh [rP1], a\n    jp Main"));
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_a_program_can_replace_wait_frame() {
+        // The VBlank handler still has its flag
+        let mut gb = RustBoy::new();
+        let mut body = Block::new();
+        body.label("WaitFrame").halt().ret();
+        gb.define_function("WaitFrame", body.into_instrs());
+        let out = gb.build().unwrap();
+        assert!(out.contains("WaitFrame:\n    halt\n    ret"), "{}", out);
+        assert!(out.contains("wVBlankFlag: db"));
+        assert_links(&out);
     }
 }

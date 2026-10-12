@@ -10,6 +10,7 @@ mod support;
 
 use std::collections::BTreeSet;
 
+use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
@@ -426,6 +427,75 @@ fn interrupts_timer_overflow() {
     assert_eq!(gb.read_symbol("wTimers"), 10);
 }
 
+/// The joypad interrupt comes when a line of `P1` goes from high to low: a press in a
+/// selected group, or a group selected while one of its buttons is held; never with no
+/// group selected. The program counts the interrupts in `wJoypads`, with `P1` as `wMark`
+/// says: the main loop writes `[wMark]` to `P1` each frame (`P1F_GET_NONE`, then the
+/// test changes it)
+#[test]
+fn interrupts_joypad_only_on_selected_lines() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let asm = r#"INCLUDE "hardware.inc"
+
+SECTION "Joypad interrupt", ROM0[$60]
+    push af
+    ld a, [wJoypads]
+    inc a
+    ld [wJoypads], a
+    pop af
+    reti
+
+SECTION "Header", ROM0[$100]
+    jp EntryPoint
+    ds $150 - @, 0
+
+SECTION "Main", ROM0
+EntryPoint:
+    xor a, a
+    ld [wJoypads], a
+    ld a, P1F_GET_NONE
+    ld [wMark], a
+    ld a, IEF_HILO
+    ldh [rIE], a
+    xor a, a
+    ldh [rIF], a
+    ei
+.loop:
+    ld a, [wMark]
+    ldh [rP1], a
+    jr .loop
+
+SECTION "Counters", WRAM0
+wJoypads: ds 1
+wMark: ds 1
+"#;
+    let rom = Rom::build(asm, &[]);
+    let mut gb = rom.boot();
+    let mark = gb.symbol("wMark");
+    gb.run_frames(1);
+    // No group selected: a press pulls no line low
+    gb.run_script(&[(2, &[Button::A, Button::Left])]);
+    assert_eq!(gb.read_symbol("wJoypads"), 0, "no group selected");
+    // The buttons selected: A is one press; Left, a direction, none
+    gb.write_ram(mark, 0x10); // P1F_GET_BTN
+    gb.run_frames(1);
+    gb.run_script(&[(2, &[Button::A]), (2, &[Button::Left])]);
+    assert_eq!(gb.read_symbol("wJoypads"), 1, "A, in the selected group");
+    // Selecting the directions while Left is held pulls its line low
+    gb.press(Button::Left);
+    gb.run_frames(1);
+    let before = gb.read_symbol("wJoypads");
+    gb.write_ram(mark, 0x20); // P1F_GET_DPAD
+    gb.run_frames(1);
+    assert_eq!(
+        gb.read_symbol("wJoypads"),
+        before + 1,
+        "selected while held"
+    );
+}
+
 /// The first line after the LCD is turned on has no OAM scan: OAM can be written at once
 #[test]
 fn lcd_on_first_line_has_no_oam_scan() {
@@ -784,6 +854,411 @@ fn coin_anim_a_starts_the_animation_b_stops_it() {
     gb.run_frames(40);
     assert_eq!(gb.oam_entry(0)[2], stopped, "B stopped the animation");
     assert_oam_written_in_vblank(&gb);
+}
+
+// ----- The engine's frame model and interrupts -----
+
+/// Code that adds 1 to the `u8` variable `var`
+fn count(var: &str) -> Block {
+    let mut code = Block::new();
+    code.ld_a_addr_def(var).inc(R8::A).ld_addr_def_a(var);
+    code
+}
+
+/// Code that stores `LY` in the variable `var`
+fn store_ly(var: &str) -> Block {
+    let mut code = Block::new();
+    code.ldh(R8::A, Mem::addr(hw::LY)).ld_addr_def_a(var);
+    code
+}
+
+/// Build `gb` into a ROM
+fn engine_rom(gb: &RustBoy) -> Rom {
+    Rom::build(&gb.build().expect("the program builds"), &[])
+}
+
+/// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a
+/// `halt`
+fn halted_share(gb: &mut GameBoy, frames: u64, samples: u64) -> f64 {
+    let step = frames * support::gameboy::FRAME_MCYCLES / samples;
+    let mut halted = 0;
+    for i in 0..samples {
+        // An odd offset, so the samples do not fall on one point of the frame
+        gb.run_until_cycle(gb.cycles() + step + i % 7);
+        if gb.registers().halted {
+            halted += 1;
+        }
+    }
+    halted as f64 / samples as f64
+}
+
+/// The main loop waits for each frame asleep, woken by the VBlank interrupt: the VBlank
+/// handler runs once a frame, then the main loop once, at the start of VBlank (line 144),
+/// and the CPU is in `halt` most of the time. No handler runs before the first VBlank after
+/// the start-up (the requests made during the start-up are dropped before `ei`).
+#[test]
+fn engine_vblank_handler_and_main_loop_run_once_a_frame() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wVBlanks", 0);
+    gb.vars.create_u8("wLoops", 0);
+    gb.vars.create_u8("wLoopLY", 0);
+    gb.on_vblank(count("wVBlanks"));
+    gb.add_to_main_loop(count("wLoops"));
+    gb.add_to_main_loop(store_ly("wLoopLY"));
+    let rom = engine_rom(&gb);
+    let mut gb = rom.boot();
+
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10), "the start-up ends");
+    assert_eq!(
+        gb.read_symbol("wVBlanks"),
+        0,
+        "a VBlank requested during the start-up was not dropped before ei"
+    );
+    gb.run_frames(1);
+    let (vblanks, loops) = (gb.read_symbol("wVBlanks"), gb.read_symbol("wLoops"));
+    assert_eq!((vblanks, loops), (1, 1), "the first frame");
+
+    gb.run_frames(100);
+    assert_eq!(
+        gb.read_symbol("wVBlanks"),
+        vblanks + 100,
+        "one VBlank handler a frame"
+    );
+    assert_eq!(
+        gb.read_symbol("wLoops"),
+        loops + 100,
+        "one main loop a frame"
+    );
+    assert_eq!(
+        gb.read_symbol("wLoopLY"),
+        144,
+        "the main loop runs at the start of VBlank"
+    );
+
+    let share = halted_share(&mut gb, 30, 600);
+    assert!(
+        share > 0.95,
+        "the CPU sleeps in halt: {:.0}% of the time",
+        share * 100.0
+    );
+    let pc = gb.registers().pc;
+    gb.run_frames(1);
+    assert!(gb.registers().halted);
+    assert!(
+        (gb.symbol("WaitFrame")..gb.symbol("WaitFrame.done")).contains(&gb.registers().pc),
+        "asleep in WaitFrame: pc = ${:04X} (${:04X} before)",
+        gb.registers().pc,
+        pc
+    );
+}
+
+/// WaitFrame checks its flag and sleeps with interrupts off, so it never sleeps through a
+/// VBlank that comes right after another interrupt: a STAT interrupt on line 143 whose
+/// handler takes a few more M-cycles each frame (4 per step of its loop) ends at every
+/// moment before, and after, the start of VBlank; the main loop still runs once a frame
+#[test]
+fn engine_wait_frame_never_misses_a_vblank() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wVBlanks", 0);
+    gb.vars.create_u8("wLoops", 0);
+    gb.vars.create_u8("wSteps", 0);
+    gb.on_vblank(count("wVBlanks"));
+    let mut busy = Block::new();
+    let delay = gb.labels().local("delay");
+    busy.ld_a_addr_def("wSteps")
+        .inc(R8::A)
+        .label(&delay)
+        .dec(R8::A)
+        .jr_cond(Condition::NZ, &delay);
+    gb.on_stat(Stat::new().line(143), busy);
+    gb.add_to_main_loop(count("wLoops"));
+    // One more step each frame: 1 to 64
+    let mut next = Block::new();
+    next.ld_a_addr_def("wSteps")
+        .inc(R8::A)
+        .and(63)
+        .ld_addr_def_a("wSteps");
+    gb.add_to_main_loop(next);
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(5);
+    let (vblanks, loops) = (gb.read_symbol("wVBlanks"), gb.read_symbol("wLoops"));
+    gb.run_frames(128);
+    assert_eq!(gb.read_symbol("wVBlanks"), vblanks.wrapping_add(128));
+    assert_eq!(
+        gb.read_symbol("wLoops"),
+        loops.wrapping_add(128),
+        "the main loop missed a frame"
+    );
+}
+
+/// The STAT handler runs on the conditions `on_stat` selects: on the LYC line once a frame,
+/// and in HBlank on each of the 144 visible lines
+#[test]
+fn engine_stat_handler_runs_on_its_conditions() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wStats", 0);
+    gb.vars.create_u8("wStatLY", 0);
+    let mut handler = count("wStats");
+    handler.emit_all(store_ly("wStatLY").into_instrs());
+    gb.on_stat(Stat::new().line(100), handler);
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(5);
+    let stats = gb.read_symbol("wStats");
+    gb.run_frames(50);
+    assert_eq!(gb.read_symbol("wStats"), stats + 50, "once a frame");
+    assert_eq!(gb.read_symbol("wStatLY"), 100, "on line 100");
+
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wStats", 0);
+    gb.vars.create_u8("wStatMode", 0);
+    let mut handler = count("wStats");
+    handler
+        .ldh(R8::A, Mem::addr(hw::STAT))
+        .and(0b11)
+        .ld_addr_def_a("wStatMode");
+    gb.on_stat(Stat::new().hblank(), handler);
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(5);
+    let stats = gb.read_symbol("wStats");
+    gb.run_frames(1);
+    assert_eq!(
+        gb.read_symbol("wStats"),
+        stats.wrapping_add(144),
+        "once on each visible line"
+    );
+    assert_eq!(gb.read_symbol("wStatMode"), 0, "in mode 0");
+}
+
+/// The timer handler runs once a period of the timer `on_timer` starts: at 65536 Hz (16
+/// M-cycles a step) from 128, every 2048 M-cycles; and `rTIMA` starts again from the modulo
+#[test]
+fn engine_timer_handler_runs_once_a_period() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let timer = Timer::new(TimerClock::Hz65536, 0x80);
+    let period = u64::from(timer.period_mcycles());
+    assert_eq!(period, 2048);
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wTimers", 0);
+    gb.vars.create_u8("wTima", 0);
+    let mut handler = count("wTimers");
+    handler
+        .ldh(R8::A, Mem::addr(hw::TIMA))
+        .ld_addr_def_a("wTima");
+    gb.on_timer(timer, handler);
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(5);
+    for _ in 0..3 {
+        let (cycle, timers) = (gb.cycles(), gb.read_symbol("wTimers"));
+        gb.run_until_cycle(cycle + 100 * period);
+        let ran = gb.read_symbol("wTimers").wrapping_sub(timers);
+        assert!(
+            (99..=101).contains(&ran),
+            "{} timer interrupts in 100 periods",
+            ran
+        );
+    }
+    // Read a step after the reload at most (the handler starts ~20 M-cycles after it)
+    let tima = gb.read_symbol("wTima");
+    assert!(
+        (0x80..=0x81).contains(&tima),
+        "rTIMA reloaded from rTMA: {:#04X}",
+        tima
+    );
+}
+
+/// Every handler keeps the registers of the code it interrupts: the main loop loads every
+/// register, runs 2000 `nop`s while the timer (every 256 M-cycles), STAT (HBlank) and VBlank
+/// handlers change every register, then stores them. The STAT handler calls a routine whose
+/// convention says it changes `de` only: the handler saves `de` for it.
+#[test]
+fn engine_handlers_preserve_the_registers() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    for var in [
+        "wA",
+        "wB",
+        "wC",
+        "wD",
+        "wE",
+        "wH",
+        "wL",
+        "wF",
+        "wTimers",
+        "wScramble",
+    ] {
+        gb.vars.create_u8(var, 0);
+    }
+    // Code that changes every register and the flags
+    let clobber = || {
+        let mut code = Block::new();
+        code.ld_bc(0x0F0F)
+            .ld_de(0x0F0F)
+            .ld_hl(0x0F0F)
+            .xor(R8::A)
+            .ld_addr_def_a("wScramble");
+        code
+    };
+    let mut timer = count("wTimers");
+    timer.emit_all(clobber().into_instrs());
+    gb.on_timer(Timer::new(TimerClock::Hz65536, 0xF0), timer);
+    gb.on_vblank(clobber());
+    let mut body = Block::new();
+    body.label("ScrambleDe").ld_de(0).ret();
+    let scramble = Routine::new("ScrambleDe", body).with_clobbers(Regs::DE);
+    gb.on_interrupt_routine(Interrupt::Stat, &scramble);
+    gb.on_stat(Stat::new().hblank(), Vec::<Instr>::new());
+
+    let mut code = Block::new();
+    code.ld_bc(0x1234)
+        .ld_de(0x5678)
+        .ld_hl(0x9ABC)
+        .ld_a(0x5A)
+        .or(R8::A)
+        .scf(); // f: carry only
+    for _ in 0..2000 {
+        code.nop();
+    }
+    code.ld_addr_def_a("wA");
+    for (reg, var) in [
+        (R8::B, "wB"),
+        (R8::C, "wC"),
+        (R8::D, "wD"),
+        (R8::E, "wE"),
+        (R8::H, "wH"),
+        (R8::L, "wL"),
+    ] {
+        code.ld(R8::A, reg).ld_addr_def_a(var);
+    }
+    code.push(R16Stack::AF)
+        .pop(R16Stack::BC)
+        .ld(R8::A, R8::C)
+        .ld_addr_def_a("wF");
+    gb.add_to_main_loop(code);
+    let out = gb.build().expect("the program builds");
+    assert!(
+        out.contains("StatHandler:\n    push de\n    call ScrambleDe"),
+        "{}",
+        out
+    );
+    let mut gb = Rom::build(&out, &[]).boot();
+    gb.run_frames(10);
+    // Every 256 M-cycles
+    let timers = gb.read_symbol("wTimers");
+    gb.run_until_cycle(gb.cycles() + 256 * 200);
+    let ran = gb.read_symbol("wTimers").wrapping_sub(timers);
+    assert!(ran >= 190, "the timer handler ran {} times", ran);
+    let regs: Vec<u8> = ["wA", "wB", "wC", "wD", "wE", "wH", "wL", "wF"]
+        .iter()
+        .map(|var| gb.read_symbol(var))
+        .collect();
+    assert_eq!(regs, [0x5A, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0x10]);
+}
+
+/// `disable_interrupt` stops a handler while the program runs, `enable_interrupt` starts it
+/// again: the main loop disables the timer on its 10th frame and enables it on its 20th
+#[test]
+fn engine_interrupts_enabled_and_disabled_at_run_time() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    let loops = gb.vars.create_u8("wLoops", 0);
+    gb.vars.create_u8("wTimers", 0);
+    gb.on_timer(Timer::new(TimerClock::Hz4096, 0xC0), count("wTimers"));
+    gb.add_to_main_loop(count("wLoops"));
+    gb.add_to_main_loop(loops.get());
+    let disable = gb.disable_interrupt(Interrupt::Timer);
+    gb.add_to_main_loop(IfA::eq(10, disable));
+    gb.add_to_main_loop(loops.get());
+    let enable = gb.enable_interrupt(Interrupt::Timer);
+    gb.add_to_main_loop(IfA::eq(20, enable));
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(12);
+    let stopped = gb.read_symbol("wTimers");
+    assert!(stopped >= 5, "the timer ran: {}", stopped);
+    gb.run_frames(6);
+    assert_eq!(gb.read_symbol("wTimers"), stopped, "disabled");
+    gb.run_frames(10);
+    assert!(gb.read_symbol("wTimers") > stopped, "enabled again");
+}
+
+/// The joypad handler runs when a button is pressed: the start-up selects both groups of
+/// keys, so a press pulls a line low; holding it does not run it again
+#[test]
+fn engine_joypad_handler_runs_on_a_press() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wPresses", 0);
+    gb.on_joypad(count("wPresses"));
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wPresses"), 0);
+    gb.run_script(&[(5, &[Button::A]), (2, &[]), (3, &[Button::Left])]);
+    assert_eq!(gb.read_symbol("wPresses"), 2, "A, then Left");
+}
+
+/// The soft reset: A + B + Select + Start held together run the start-up code again, once
+/// per press. `wBoots`, a byte the start-up does not set, counts the start-ups (the `init`
+/// code adds 1); `wFrames`, a variable, counts the frames since the last one.
+#[test]
+fn engine_soft_reset() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let reset = [Button::A, Button::B, Button::Select, Button::Start];
+    let mut gb = RustBoy::new();
+    gb.set_soft_reset(true);
+    let frames = gb.vars.create_u8("wFrames", 0);
+    gb.add_to_main_loop(count(frames.name()));
+    gb.init(count("wBoots"));
+    gb.raw(|asm| {
+        asm.chunk(Chunk::Data).label("wBoots").ds("1");
+    });
+    let rom = engine_rom(&gb);
+    let mut gb = rom.boot();
+    gb.run_frames(30);
+    assert_eq!(gb.read_symbol("wBoots"), 1);
+    assert!(gb.read_symbol("wFrames") >= 28);
+
+    // Three of the four: nothing
+    gb.run_script(&[(5, &[Button::A, Button::B, Button::Start])]);
+    assert_eq!(gb.read_symbol("wBoots"), 1);
+
+    // The four, held for 20 frames: one reset, and the game runs again
+    gb.run_script(&[(20, &reset)]);
+    assert_eq!(
+        gb.read_symbol("wBoots"),
+        2,
+        "one reset while the four are held"
+    );
+    let since = gb.read_symbol("wFrames");
+    assert!(
+        (10..20).contains(&since),
+        "the variables started again: {} frames",
+        since
+    );
+    assert!(gb.run_until_pc(gb.symbol("Main"), 2));
+    assert_eq!(gb.registers().sp, hw::STACK_TOP, "the stack starts again");
+
+    // Released, then the four again: a second reset
+    gb.run_script(&[(5, &[]), (3, &reset), (5, &[])]);
+    assert_eq!(gb.read_symbol("wBoots"), 3);
+    assert!(gb.read_symbol("wFrames") < 10);
 }
 
 // ----- B12: OAM written outside VBlank -----

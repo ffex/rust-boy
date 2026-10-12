@@ -257,7 +257,13 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       helper that adds SCX/SCY before `GetTileByPixel`, or a scroll-aware variant); whether sprites should get world
       coordinates or a "follow sprite" helper (today `follow_background_point` needs world positions kept by the program);
       whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today)
-- [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
+- [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
+      screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
+- [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
+      `#[non_exhaustive]` like `Lcdc` (its public `wx`/`wy` fields allow raw start-up values today); whether `build()`
+      should reject or warn about a configured window with `Lcdc.background` off (invisible on DMG, documented today);
+      whether a configured window can start hidden (a `Window` flag), or LCDC writes in init survive the LCD-on write
+      (today `build()` replaces them; documented on `show_window`)
 - [x] `GetTileByPixel` for the `$9C00` map (branch `refactor-p3-tilemap-lookup`):
       reads LCDC bit 3 at runtime; follows both configured and runtime background-map selection.
 - [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its

@@ -1821,6 +1821,92 @@ fn engine_background_scroll_init_survives_and_zero_delta_is_idle() {
 }
 
 #[test]
+fn window_startup_and_vblank_preserve_other_lcdc_bits() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for background in [TilemapArea::Map9800, TilemapArea::Map9C00] {
+        for window in [TilemapArea::Map9800, TilemapArea::Map9C00] {
+            let mut game = RustBoy::with_config(
+                RustBoyConfig::default()
+                    .background_tilemap(background)
+                    .window(Window::new(window, 0, 112)),
+            );
+            game.tiles.add_tilemap_at("WindowMap", window, &[[42; 32]]);
+            let mut gb = engine_rom(&game).boot();
+            gb.run_frames(2);
+            assert_eq!(gb.read(hw::WX.value), 7);
+            assert_eq!(gb.read(hw::WY.value), 112);
+            let lcdc = gb.read(hw::LCDC.value);
+            assert_ne!(lcdc & hw::LCDCF_WINON.value, 0);
+            assert_eq!(
+                lcdc & hw::LCDCF_WIN9C00.value,
+                if window == TilemapArea::Map9C00 {
+                    64
+                } else {
+                    0
+                }
+            );
+            assert_eq!(
+                lcdc & hw::LCDCF_BG9C00.value,
+                if background == TilemapArea::Map9C00 {
+                    8
+                } else {
+                    0
+                }
+            );
+            assert_eq!(
+                gb.vram()[usize::from(window.address() - hw::VRAM.value)],
+                42
+            );
+            let mut code = Block::new();
+            code.emit_all(game.show_window(false))
+                .emit_all(game.set_window_position(158, 143))
+                .emit_all(
+                    game.select_window_tilemap(if window == TilemapArea::Map9800 {
+                        TilemapArea::Map9C00
+                    } else {
+                        TilemapArea::Map9800
+                    }),
+                );
+            game.on_vblank(code);
+            let mut gb = engine_rom(&game).boot();
+            gb.run_frames(2);
+            assert_eq!(gb.read(hw::WX.value), 165);
+            assert_eq!(gb.read(hw::WY.value), 143);
+            assert_eq!(
+                gb.read(hw::LCDC.value),
+                (lcdc & !hw::LCDCF_WINON.value) ^ hw::LCDCF_WIN9C00.value
+            );
+            // Appended after the code above: the window is shown again, on the switched map
+            game.on_vblank(game.show_window(true));
+            let mut gb = engine_rom(&game).boot();
+            gb.run_frames(2);
+            assert_eq!(gb.read(hw::WX.value), 165);
+            assert_eq!(gb.read(hw::WY.value), 143);
+            assert_eq!(gb.read(hw::LCDC.value), lcdc ^ hw::LCDCF_WIN9C00.value);
+        }
+    }
+}
+
+#[test]
+fn window_init_position_override_and_disabled_default() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read(hw::LCDC.value) & hw::LCDCF_WINON.value, 0);
+    game.set_window(Some(Window::new(TilemapArea::Map9C00, 0, 0)));
+    game.init(game.set_window_position(40, 80));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read(hw::WX.value), 47);
+    assert_eq!(gb.read(hw::WY.value), 80);
+}
+
+#[test]
 fn get_tile_by_pixel_follows_active_background_map() {
     if !rgbds_enabled() {
         return;

@@ -1392,7 +1392,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** no metasprites beyond 16×16, no text/numbers. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
-  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+  (see §2); `GetTileByPixel` takes map pixels, while `GetTileByScreenPixel` adds SCX/SCY for screen-space collision
+  checks (Phase 3 follow-up).
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).

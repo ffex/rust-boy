@@ -253,10 +253,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Background scrolling (`SCX`/`SCY`), camera helpers (branch `refactor-p3-scrolling`: immediate
       set, signed relative movement and world-point following with a screen anchor; stateless
       `stdlib::graphics::scroll` snippets reused by `RustBoy`, wrapping at 256; emit in init or VBlank)
-- [ ] Follow-ups of the background camera (from the review of #43): collisions while scrolled (a screen-to-map
-      helper that adds SCX/SCY before `GetTileByPixel`, or a scroll-aware variant); whether sprites should get world
-      coordinates or a "follow sprite" helper (today `follow_background_point` needs world positions kept by the program);
-      whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today)
+- [ ] Follow-ups of the background camera (from the review of #43):
+      - [x] `GetTileByScreenPixel` adds SCX/SCY to screen coordinates before the shared `GetTileByPixel` lookup.
+      - [ ] Whether sprites should get world coordinates or a "follow sprite" helper (today
+            `follow_background_point` needs world positions kept by the program).
+      - [ ] Whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today).
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
 - [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be

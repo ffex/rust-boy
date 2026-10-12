@@ -195,6 +195,14 @@ arrangement of a whole composite: a 16x16 composite flipped in X mirrors each
 half in place, so swap the halves' tiles too. Change a composite's attributes per member sprite
 (`get_composite_sprites`).
 
+For tile collision after scrolling, use `GetTileByScreenPixel` with a screen-space position. It adds the current
+SCX/SCY values and then performs the same active-map lookup as `GetTileByPixel`; call it in VBlank or with the LCD
+off so VRAM is readable:
+
+```rust,ignore
+gb.call_args("GetTileByScreenPixel", gb.sprites.get_pivot(ball, 0, 1));
+```
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:

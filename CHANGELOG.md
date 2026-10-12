@@ -61,6 +61,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
   keeps the scroll: set it in init.
+- **Scrolled tile collision** (Phase 3): `GetTileByScreenPixel` adds the current `rSCX`/`rSCY` to screen-pixel
+  coordinates before the shared `GetTileByPixel` routine; use in VBlank or with the LCD off.
 - **Window** (Phase 3): optional `RustBoyConfig::window(Window::new(map, x, y))` or `RustBoy::set_window`,
   `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
   `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded because

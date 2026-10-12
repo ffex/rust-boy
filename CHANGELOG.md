@@ -82,6 +82,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   holds the final stage. Fade from/to a solid shade without blocking the main loop.
   Existing startup `Palettes` bytes and example output remain compatible. `Shade` is ordered from white to black.
   A fade leaves the palette byte in A: load the progress again before each fade.
+- **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
+  `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
+  existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
+  runtime, preserving coordinates and tile indices. Default/example output is unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -241,6 +245,8 @@ of each VBlank (B12; see [CONTEXT.md](CONTEXT.md#b12)).
 | `BuiltinFunction::ALL: [BuiltinFunction; 8]` | `InitOamDma` is a builtin (it copies the DMA routine to HRAM): an exhaustive `match` needs its arm |
 | `Definition` had 6 variants | `Definition::GeneratedBuffer`: a variable named `wShadowOAM` or `hOAMDMA` in a program with sprites is `Error::NameConflict`; `Definition::BuiltinLabel`: so is a label or variable `OamDmaCode` or `OamDmaCodeEnd` |
 | `stdlib` `Sprite { id, x, y, tile, flags }` (a struct literal) | it has a field `oam: OamTarget` (`OamTarget::Oam`, as `Sprite::new` sets it, or `OamTarget::Shadow`): add it, or use `Sprite::new(..)` and `.in_shadow_oam()` |
+| `flags: u8` in `Sprite::new`, `RustBoy::add_sprite`, `add_sprite_16x16` | `flags: impl Into<SpriteFlags>`: `u8` values and literals still work; an argument typed only by inference (`x.into()`, `Default::default()`) is ambiguous now: write `0u8` or `SpriteFlags::new()` |
+| (new) | `SpriteFlags`, `ObjectPalette`, `SpritePriority` (also in the prelude); `Sprite::set_flags` and `SpriteManager::set_flags` (`gb.sprites.set_flags(id, flags)`, shadow OAM) change a sprite's attributes at runtime |
 | (new) | `stdlib::graphics::oam`: `OamTarget`, `SHADOW_OAM`, `OAM_DMA`, `init_oam_dma`, `run_oam_dma`, `shadow_oam_section`, `oam_dma_section`, `oam_dma_size`; `stdlib::graphics::sprites::initialize_oam(target)`; `hw::OAM_DMA_SOURCE_ALIGN`, `OAM_DMA_MCYCLES`, `LINE_MCYCLES`, `VBLANK_LINES`, `VBLANK_MCYCLES` |
 
 ### For users of the `refactor` branch

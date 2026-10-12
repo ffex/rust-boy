@@ -232,6 +232,15 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Typed sprite attributes** (since `refactor-p3-sprite-flags`): `SpriteFlags`, `ObjectPalette` and `SpritePriority`
+  in `stdlib::graphics::sprites` (prelude exports). `Sprite::new`, `RustBoy::add_sprite` and `add_sprite_16x16` take
+  typed flags or raw `u8` values; the raw conversion keeps every bit, the CGB ones too, and the builders set or clear
+  only their DMG bit (priority 7, Y flip 6, X flip 5, palette 4). `Sprite::set_flags` and `SpriteManager::set_flags`
+  write the attribute byte at runtime (A only); the engine one writes the shadow OAM, which DMA copies at the next
+  VBlank. Behind-background priority hides the sprite behind background/window colours 1-3, not 0. Flips act on each
+  hardware sprite: a flipped 16x16 composite mirrors each half in place. Tests: all 16 DMG combinations, raw-byte
+  compatibility, independent bit clearing, the whole OAM entry on the emulator at start-up and after a runtime change.
+
 - **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,
   `Shade` and `PaletteRegister` and stateless snippets, reused by `RustBoy::set_palette` and `fade_palette`. The
   start-up `Palettes` keep taking hardware bytes. `PaletteFade` has four shade-saturating stages, fade-in from a

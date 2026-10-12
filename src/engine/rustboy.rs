@@ -1580,7 +1580,7 @@ impl RustBoy {
         tile_source: super::tiles::TileSource,
         x: u8,
         y: u8,
-        flags: u8,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::SpriteId {
         // The sprite name is checked before it names the tiles
         check_name("sprite", name);
@@ -1591,7 +1591,7 @@ impl RustBoy {
             first: self.tiles.sprite_tile_index(id),
             count: u16::try_from(count).unwrap_or(u16::MAX),
         };
-        self.sprites.add(name, tiles, x, y, flags)
+        self.sprites.add(name, tiles, x, y, flags.into().bits())
     }
 
     /// Give sprite `sprite` more tiles, from another source: frames spread over several
@@ -1657,7 +1657,8 @@ impl RustBoy {
     /// * `right_tiles` - Tile source for the right 8x16 half
     /// * `x` - X position of the left edge
     /// * `y` - Y position
-    /// * `flags` - OAM flags for both sprites
+    /// * `flags` - OAM flags for both sprites (raw or [`SpriteFlags`](crate::stdlib::graphics::sprites::SpriteFlags)). An X flip mirrors
+    ///   each half in place: swap `left_tiles` and `right_tiles` to mirror the whole sprite
     ///
     /// # Returns
     /// A `CompositeSpriteId` that can be used with composite sprite methods
@@ -1676,8 +1677,9 @@ impl RustBoy {
         right_tiles: super::tiles::TileSource,
         x: u8,
         y: u8,
-        flags: u8,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::CompositeSpriteId {
+        let flags = flags.into().bits();
         check_name("composite sprite", name);
         if self.sprites.size() != SpriteSize::Size8x16 {
             panic!(

@@ -900,6 +900,28 @@ impl SpriteManager {
         draw_sprites(&sprites)
     }
 
+    /// Set a sprite's runtime attributes in shadow OAM; startup attributes are unchanged.
+    /// Changes A only.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager.
+    pub fn set_flags(
+        &self,
+        id: SpriteId,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        Sprite::new(
+            sprite.oam_index,
+            sprite.x,
+            sprite.y,
+            sprite.tile_index,
+            sprite.flags,
+        )
+        .in_shadow_oam()
+        .set_flags(flags)
+    }
+
     /// Generate movement code for a specific sprite: add the value of the variable
     /// `var_name` to its X (changes `a`, `b` and the flags)
     ///
@@ -1172,6 +1194,29 @@ mod tests {
                 .insert(format!("wShadowOAM+{}", entry + 1), sprite.x + 8);
         }
         cpu
+    }
+
+    #[test]
+    fn set_flags_writes_the_shadow_oam_entry_of_the_sprite() {
+        // OAM itself is locked while the screen is drawn and rewritten by every DMA: the
+        // engine setter must write the sprite's shadow OAM entry, and only its attribute byte
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        sm.add_for_test("Paddle", 16, 128, 0, 1);
+        let ball = sm.add_for_test("Ball", 32, 100, 0x80, 1);
+        let code = sm.set_flags(
+            ball,
+            crate::stdlib::graphics::sprites::SpriteFlags::new().flip_x(true),
+        );
+        let mut cpu = TestCpu::default();
+        cpu.run(&code);
+        let flags = OamTarget::Shadow.entry(1, hw::OAMA_FLAGS).to_string();
+        assert!(flags.starts_with("wShadowOAM"), "{flags}");
+        assert_eq!(cpu.mem[&flags], hw::OAMF_XFLIP.value);
+        assert_eq!(
+            cpu.mem.keys().count(),
+            1,
+            "only the attribute byte is written"
+        );
     }
 
     type LimitMove = fn(&SpriteManager, SpriteId, u8, u8) -> Vec<Instr>;

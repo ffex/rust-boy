@@ -173,6 +173,28 @@ calls or pushes deep overwrites the DMA routine; and the DMA runs when the VBlan
 (`on_stat`, `on_timer`) that delays it past VBlank makes it run during the next frame's drawing, where it fails for
 that frame.
 
+### Typed sprite attributes
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let flags = SpriteFlags::new().flip_x(true)
+    .palette(ObjectPalette::Palette1)
+    .priority(SpritePriority::BehindBackground);
+let sprite = gb.add_sprite("Player", TileSource::from_raw(&[["$ff"; 8]]), 24, 32, flags);
+gb.add_to_main_loop(gb.sprites.set_flags(sprite, flags.flip_x(false).flip_y(true)));
+# gb.build().unwrap();
+```
+
+Runtime attributes live in shadow OAM and appear after the next DMA; they leave
+position and tile indices intact. Raw `u8` flag values remain accepted. Behind-background
+priority hides the sprite behind nonzero background/window colour indices; colour 0
+stays behind the sprite. These flips affect individual hardware sprites, not the
+arrangement of a whole composite: a 16x16 composite flipped in X mirrors each
+half in place, so swap the halves' tiles too. Change a composite's attributes per member sprite
+(`get_composite_sprites`).
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:
@@ -462,7 +484,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), runtime palette
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
+  palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by

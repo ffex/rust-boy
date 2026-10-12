@@ -1821,6 +1821,66 @@ fn engine_background_scroll_init_survives_and_zero_delta_is_idle() {
 }
 
 #[test]
+fn typed_sprite_flags_reach_oam_and_runtime_changes_preserve_position() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut expected = Vec::new();
+    for bits in 0..16 {
+        let flags = SpriteFlags::new()
+            .flip_x(bits & 1 != 0)
+            .flip_y(bits & 2 != 0)
+            .palette(if bits & 4 != 0 {
+                ObjectPalette::Palette1
+            } else {
+                ObjectPalette::Palette0
+            })
+            .priority(if bits & 8 != 0 {
+                SpritePriority::BehindBackground
+            } else {
+                SpritePriority::AboveBackground
+            });
+        let id = game.add_sprite(
+            &format!("FlagSprite{bits}"),
+            TileSource::from_raw(&[["$ff"; 8]]),
+            24,
+            32,
+            flags,
+        );
+        let changed =
+            SpriteFlags::from(flags.bits() ^ (hw::OAMF_XFLIP.value | hw::OAMF_YFLIP.value));
+        game.on_vblank(game.sprites.set_flags(id, changed));
+        expected.push((flags.bits(), changed.bits()));
+    }
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    for (index, (initial, _)) in expected.iter().enumerate() {
+        assert_eq!(
+            gb.oam_entry(index),
+            [
+                32 + hw::OAM_Y_OFFSET,
+                24 + hw::OAM_X_OFFSET,
+                index as u8,
+                *initial
+            ]
+        );
+    }
+    gb.run_frames(3);
+    for (index, (_, changed)) in expected.iter().enumerate() {
+        assert_eq!(
+            gb.oam_entry(index),
+            [
+                32 + hw::OAM_Y_OFFSET,
+                24 + hw::OAM_X_OFFSET,
+                index as u8,
+                *changed
+            ]
+        );
+    }
+}
+
+#[test]
 fn palettes_and_nonblocking_fades_follow_progress_in_vblank() {
     if !rgbds_enabled() {
         return;

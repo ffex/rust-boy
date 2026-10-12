@@ -20,7 +20,7 @@ mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
-pub use config::{Lcdc, Palettes, RustBoyConfig};
+pub use config::{Lcdc, Palettes, RustBoyConfig, Window};
 pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;

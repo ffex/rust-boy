@@ -811,8 +811,10 @@ fn moving_sprite_rom(delay: u16) -> Rom {
 /// before the move outlasts VBlank (~1140 M-cycles), the move runs in the visible part of
 /// the frame, and what happens depends on where in the line it lands: in HBlank it works,
 /// in mode 2 or 3, while the PPU owns OAM, the read gives `$FF` and the write is dropped.
-/// With 1008 iterations of `Delay` (1006 to 1011 give the same) it lands in mode 3 of line
-/// 52 on every frame, so the sprite never moves.
+/// With 1004 iterations of `Delay` (1002 to 1007 give the same) it lands in mode 3 of line
+/// 52 on every frame, so the sprite never moves. (It was 1008, 1006 to 1011, when the main
+/// loop polled `rLY` for VBlank: the frame's work now starts after the VBlank interrupt, its
+/// handler and `WaitFrame`'s return, about 28 M-cycles later.)
 ///
 /// When shadow OAM + DMA lands (Phase 3, graphics), the delayed program must move its
 /// sprite like the other one: turn the second half of this test into that check.
@@ -832,7 +834,7 @@ fn b12_oam_written_outside_vblank_is_lost() {
     assert_oam_written_in_vblank(&gb);
 
     // After the delay the move runs mid-frame, in mode 3
-    let mut gb = moving_sprite_rom(1008).boot();
+    let mut gb = moving_sprite_rom(1004).boot();
     gb.run_frames(10);
     let x = gb.oam_entry(0)[1];
     let before = gb.oam_writes().len();

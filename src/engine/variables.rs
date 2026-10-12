@@ -487,12 +487,6 @@ impl VariableManager {
         (addresses, error)
     }
 
-    /// Whether the program has a `WRAM0` variable section (the `raw()` data goes in the
-    /// last one)
-    pub(crate) fn has_wram0_sections(&self) -> bool {
-        !self.sections.is_empty()
-    }
-
     /// `Err` ([`Error::MemoryFull`]) if the variables do not fit in WRAM0 or HRAM
     pub(crate) fn check_layout(&self) -> Result<(), Error> {
         match self.addresses() {

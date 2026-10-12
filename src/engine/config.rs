@@ -2,6 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::stdlib::interrupts::{Stat, Timer};
+
 use super::functions::BuiltinFunction;
 use super::sprites::SpriteSize;
 use super::tiles::TilemapArea;
@@ -13,7 +15,8 @@ use super::tiles::TilemapArea;
 /// gives the same program as before the configuration existed. Change it with the builder
 /// methods (one per field), or set the fields of a default value; the `RustBoy` setters
 /// (`set_sprite_size`, `set_background_tilemap`, `set_palettes`, `set_animation_delay`,
-/// `use_function`) change the same settings later.
+/// `use_function`, `set_soft_reset`, and `on_stat` / `on_timer` for `stat` / `timer`)
+/// change the same settings later.
 ///
 /// # Example
 /// ```
@@ -53,6 +56,16 @@ pub struct RustBoyConfig {
     /// The animations go to their next frame every `animation_delay` frames; 8 by
     /// default (about 7.5 frames a second at 60 Hz)
     pub animation_delay: u8,
+    /// Reset the game when A, B, Select and Start are held together (see
+    /// [`RustBoy::set_soft_reset`](super::RustBoy::set_soft_reset)); off by default
+    pub soft_reset: bool,
+    /// The conditions of the STAT interrupt (`rSTAT`, `rLYC`) the start-up code selects;
+    /// none by default. [`RustBoy::on_stat`](super::RustBoy::on_stat) sets it with its
+    /// handler.
+    pub stat: Option<Stat>,
+    /// The timer the start-up code starts; stopped by default.
+    /// [`RustBoy::on_timer`](super::RustBoy::on_timer) sets it with its handler.
+    pub timer: Option<Timer>,
 }
 
 impl Default for RustBoyConfig {
@@ -64,6 +77,9 @@ impl Default for RustBoyConfig {
             lcdc: Lcdc::default(),
             builtins: BTreeSet::new(),
             animation_delay: 8,
+            soft_reset: false,
+            stat: None,
+            timer: None,
         }
     }
 }
@@ -107,6 +123,24 @@ impl RustBoyConfig {
     /// With the animations going to their next frame every `delay` frames
     pub fn animation_delay(mut self, delay: u8) -> Self {
         self.animation_delay = delay;
+        self
+    }
+
+    /// With the soft reset (A + B + Select + Start) on, or off
+    pub fn soft_reset(mut self, on: bool) -> Self {
+        self.soft_reset = on;
+        self
+    }
+
+    /// With the STAT interrupt's conditions `stat` selected at start-up
+    pub fn stat(mut self, stat: Stat) -> Self {
+        self.stat = Some(stat);
+        self
+    }
+
+    /// With `timer` started at start-up
+    pub fn timer(mut self, timer: Timer) -> Self {
+        self.timer = Some(timer);
         self
     }
 }

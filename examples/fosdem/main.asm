@@ -1,9 +1,13 @@
     INCLUDE "hardware.inc"
+    SECTION "VBlank interrupt", ROM0[$40]
+    jp VBlankHandler
     SECTION "Header", ROM0[$100]
     jp EntryPoint
     ds $150 - @, 0
 
     EntryPoint:
+    di
+    ld sp, $FFFE
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
@@ -48,17 +52,23 @@
     ld a, 0
     ld [wNewKeys], a
     ld a, 0
+    ld [wVBlankFlag], a
+    ld a, 0
     ld [wFrameCounter], a
     ld a, 255
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
+    ld a, IEF_VBLANK
+    ldh [rIE], a
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16
     ld [rLCDC], a
+    xor a, a
+    ldh [rIF], a
+    ei
 
     Main:
-    call WaitNotVBlank
-    call WaitVBlank
+    call WaitFrame
     ld a, [wFrameCounter]
     inc a
     ld [wFrameCounter], a
@@ -222,11 +232,6 @@
     cp a, 144
     jp c, WaitVBlank
     ret
-    WaitNotVBlank:
-    ld a, [rLY]
-    cp a, 144
-    jp nc, WaitNotVBlank
-    ret
     UpdateKeys:
     ld a, P1F_GET_BTN
     call .onenibble
@@ -253,6 +258,21 @@
     ldh a, [rP1]
     or a, 240
     .knowret:
+    ret
+    ; Wait for the next VBlank, asleep: the VBlank handler sets wVBlankFlag
+    WaitFrame:
+    xor a, a
+    ld [wVBlankFlag], a
+    .wait:
+    di
+    ld a, [wVBlankFlag]
+    and a, a
+    jr nz, .done
+    halt
+    ei
+    jr .wait
+    .done:
+    ei
     ret
     Anim_player_left_playerWalkFront:
     ld a, [_OAMRAM+2]
@@ -350,6 +370,12 @@
     add a, 2
     ld [_OAMRAM+6], a
     ret
+    VBlankHandler:
+    push af
+    ld a, 1
+    ld [wVBlankFlag], a
+    pop af
+    reti
 
     player_left:
     INCBIN "char.2bpp"
@@ -361,6 +387,7 @@
     SECTION "Variables", WRAM0[$C000]
     wCurKeys: db
     wNewKeys: db
+    wVBlankFlag: db
     wFrameCounter: db
     wAnim_player_left_Current: db
     wAnim_player_right_Current: db

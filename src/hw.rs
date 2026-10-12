@@ -120,6 +120,16 @@ symbols! {
     /// Joypad, `rP1`: select the buttons or the D-pad (`P1F_GET_*`), then read 4 bits
     /// (0 = pressed)
     P1: u16 = "rP1", 0xFF00;
+    /// Divider, `rDIV`: counts up at 16384 Hz; a write resets it
+    DIV: u16 = "rDIV", 0xFF04;
+    /// Timer counter, `rTIMA`: counts up at the `rTAC` clock; on overflow it is reloaded
+    /// from `rTMA` and requests the timer interrupt
+    TIMA: u16 = "rTIMA", 0xFF05;
+    /// Timer modulo, `rTMA`: what `rTIMA` restarts from after an overflow
+    TMA: u16 = "rTMA", 0xFF06;
+    /// Timer control, `rTAC`: on or off (`TACF_START` / `TACF_STOP`) and the clock
+    /// (`TACF_4KHZ`, ...)
+    TAC: u16 = "rTAC", 0xFF07;
     /// Interrupt flags, `rIF` (bits `IEF_*`)
     IF: u16 = "rIF", 0xFF0F;
     /// LCD control, `rLCDC` (flags `LCDCF_*`)
@@ -225,6 +235,20 @@ symbols! {
     STATF_LCD: u8 = "STATF_LCD", 0b0000_0011;
     /// STAT: VRAM is busy (modes 2 and 3)
     STATF_BUSY: u8 = "STATF_BUSY", 0b0000_0010;
+
+    // === rTAC flags ===
+    /// TAC: the timer counts
+    TACF_START: u8 = "TACF_START", 0b0000_0100;
+    /// TAC: the timer is stopped (0)
+    TACF_STOP: u8 = "TACF_STOP", 0;
+    /// TAC clock: 4096 Hz, one `rTIMA` step every 256 M-cycles (0)
+    TACF_4KHZ: u8 = "TACF_4KHZ", 0b0000_0000;
+    /// TAC clock: 16384 Hz, one `rTIMA` step every 64 M-cycles
+    TACF_16KHZ: u8 = "TACF_16KHZ", 0b0000_0011;
+    /// TAC clock: 65536 Hz, one `rTIMA` step every 16 M-cycles
+    TACF_65KHZ: u8 = "TACF_65KHZ", 0b0000_0010;
+    /// TAC clock: 262144 Hz, one `rTIMA` step every 4 M-cycles
+    TACF_262KHZ: u8 = "TACF_262KHZ", 0b0000_0001;
 
     // === rIE / rIF bits ===
     /// Interrupt: a joypad line went from high to low
@@ -375,6 +399,20 @@ pub const OAM_Y_OFFSET: u8 = 16;
 
 /// End (exclusive) of HRAM: `rIE` is at `$FFFF`
 pub const HRAM_END: u16 = 0xFFFF;
+/// The stack pointer the DMG boot ROM leaves, `SP` = `$FFFE`: the stack grows down into
+/// HRAM from there (`RustBoy`'s start-up code sets it again, for a soft reset)
+pub const STACK_TOP: u16 = 0xFFFE;
+
+/// Where the CPU jumps for the VBlank interrupt (`IEF_VBLANK`); each vector has 8 bytes
+pub const VECTOR_VBLANK: u16 = 0x0040;
+/// Where the CPU jumps for the STAT interrupt (`IEF_STAT`)
+pub const VECTOR_STAT: u16 = 0x0048;
+/// Where the CPU jumps for the timer interrupt (`IEF_TIMER`)
+pub const VECTOR_TIMER: u16 = 0x0050;
+/// Where the CPU jumps for the serial interrupt (`IEF_SERIAL`)
+pub const VECTOR_SERIAL: u16 = 0x0058;
+/// Where the CPU jumps for the joypad interrupt (`IEF_HILO`)
+pub const VECTOR_JOYPAD: u16 = 0x0060;
 
 /// The four bytes of an OAM entry, in order: [`OAMA_Y`], [`OAMA_X`], [`OAMA_TILEID`],
 /// [`OAMA_FLAGS`]

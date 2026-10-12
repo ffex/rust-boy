@@ -1,4 +1,6 @@
     INCLUDE "hardware.inc"
+    SECTION "VBlank interrupt", ROM0[$40]
+    jp VBlankHandler
     SECTION "Header", ROM0[$100]
     jp EntryPoint
     ds $150 - @, 0
@@ -11,6 +13,8 @@
     DEF SCORE_ONES EQU $9871
 
     EntryPoint:
+    di
+    ld sp, $FFFE
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
@@ -70,12 +74,18 @@
     ld [wCurKeys], a
     ld a, 0
     ld [wNewKeys], a
+    ld a, 0
+    ld [wVBlankFlag], a
+    ld a, IEF_VBLANK
+    ldh [rIE], a
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ8
     ld [rLCDC], a
+    xor a, a
+    ldh [rIF], a
+    ei
 
     Main:
-    call WaitNotVBlank
-    call WaitVBlank
+    call WaitFrame
     ld a, [wBallMomentumX]
     ld b, a
     ld a, [_OAMRAM+5]
@@ -215,11 +225,6 @@
     cp a, 144
     jp c, WaitVBlank
     ret
-    WaitNotVBlank:
-    ld a, [rLY]
-    cp a, 144
-    jp nc, WaitNotVBlank
-    ret
     UpdateKeys:
     ld a, P1F_GET_BTN
     call .onenibble
@@ -274,6 +279,21 @@
     add hl, bc
     ld a, [hl]
     ret
+    ; Wait for the next VBlank, asleep: the VBlank handler sets wVBlankFlag
+    WaitFrame:
+    xor a, a
+    ld [wVBlankFlag], a
+    .wait:
+    di
+    ld a, [wVBlankFlag]
+    and a, a
+    jr nz, .done
+    halt
+    ei
+    jr .wait
+    .done:
+    ei
+    ret
     IsWallTile:
     cp a, $00
     ret z
@@ -310,6 +330,12 @@
     ld [hl], BLANK_TILE
     .end_if_1:
     ret
+    VBlankHandler:
+    push af
+    ld a, 1
+    ld [wVBlankFlag], a
+    pop af
+    reti
 
     Paddle:
     dw `13333331
@@ -650,5 +676,6 @@
     wScore: db
     wCurKeys: db
     wNewKeys: db
+    wVBlankFlag: db
 
 

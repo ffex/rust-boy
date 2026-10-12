@@ -116,10 +116,11 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 
 ### Handoff to Claude
 
-When the PR is open and its CI checks pass locally, hand it to Claude: give the maintainer the PR
+When the PR is open and its CI checks pass locally (or the ones that could not run are listed as not run),
+hand it to Claude: give the maintainer the PR
 number, the branch and, for stacked PRs, the merge order, and leave the PR's *Independent review*
 section as "pending" (Claude also picks up open PRs marked so). Do not push to the branch after the handoff, unless
-Claude or the maintainer asks you to. If something is unfinished or uncertain, say so in the PR's
+the maintainer asks you to (Claude's requests reach you through the maintainer). Questions go to the maintainer. If something is unfinished or uncertain, say so in the PR's
 *Risks and follow-ups* section rather than in the handoff, so the reviewer reads it independently.
 Claude fills in the *Independent review* section.
 

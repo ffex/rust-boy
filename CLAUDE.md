@@ -5,7 +5,7 @@ rust-boy is a Rust DSL that generates Game Boy assembly in RGBDS syntax (`cargo 
 
 - [`Task.md`](Task.md) — phased checklist.
 - [`CONTEXT.md`](CONTEXT.md) — architecture, levels assessment, bug catalogue B1–B30 and branch analysis.
-- [`AGENTS.md`](AGENTS.md) — Codex's implementation and git/PR workflow.
+- [`AGENTS.md`](AGENTS.md) — the git/PR workflow: Codex's for its first try, and Claude's for the PRs it writes.
 
 Read these before starting a task (reviewing, fixing or writing a PR), and keep them up to date in the same branch
 as the change.
@@ -115,7 +115,7 @@ A PR Claude writes itself (a follow-up, a docs change) follows the git workflow 
 [`AGENTS.md`](AGENTS.md) (branch names, small commits, ticking `Task.md`, `CHANGELOG.md`) but skips its
 handoff: it starts at step 1 below with its *Independent review* section "pending".
 
-For each Codex PR (or chain of stacked PRs):
+For each PR (or chain of stacked PRs), Codex's or Claude's own:
 
 1. **Independent review.** Start a reviewer agent with **no context** from the work, in its own
    worktree, read-only towards GitHub. Give it only the PR numbers, their branches and the merge
@@ -147,6 +147,11 @@ For each Codex PR (or chain of stacked PRs):
    fixed it. Then merge into `refactor` with a merge commit pinned to the reviewed head SHA (the
    merge tool's expected head SHA, or `gh pr merge N --merge --match-head-commit <sha>`), and check
    that CI on `refactor` is green; if it is red, fix it at once with a new PR through the same steps.
+   A chain of stacked PRs reviewed together is merged in its order, one pinned merge per PR. The
+   earlier PRs of the chain moving `refactor` need no new review of the later ones when the tree of
+   `refactor` after the last merge is the reviewed merged tree (`git diff` empty).
+   **Asking Codex.** Claude does not ask Codex for pushes: it fixes findings itself. When Codex
+   should redo a task, Claude says so to the maintainer.
 5. **Release PR.** `refactor` → `main` is never merged by Claude: when it is ready, tell the
    maintainer and wait.
 

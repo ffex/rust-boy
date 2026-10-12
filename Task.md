@@ -279,13 +279,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
-- [ ] Follow-up of the sprite attributes (from the review of #49): a composite-level `set_flags`, and an X flip of a
-      16x16 composite that also swaps its halves (today per member sprite; documented)
 - [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
       lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
 - [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
       off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
+- [x] Follow-up of the sprite attributes (from the review of #49): `SpriteManager::set_composite_flags` sets every
+      member's flags and swaps the tile assignments of a two-part composite on X flip. For animated composites,
+      call after animation updates because those update each member's tile byte.
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation

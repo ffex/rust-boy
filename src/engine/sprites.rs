@@ -980,6 +980,43 @@ impl SpriteManager {
         .set_flags(flags)
     }
 
+    /// Set runtime flags for every hardware sprite in a composite. When X flip is enabled,
+    /// the tile assignments of a two-part composite are exchanged so the whole image is
+    /// mirrored, rather than mirroring each half in its original position.
+    ///
+    /// Changes A only. Animations that update member tiles later in the frame may replace
+    /// the exchanged tile assignments; apply this after those updates when using animated
+    /// composites.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager.
+    pub fn set_composite_flags(
+        &self,
+        id: CompositeSpriteId,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Vec<Instr> {
+        let flags = flags.into();
+        let composite = self.composite(id);
+        let mut code = Block::new();
+        for (index, sprite_id) in composite.sprites.iter().enumerate() {
+            let sprite = self.sprite(*sprite_id);
+            let tile = if composite.sprites.len() == 2 && flags.bits() & hw::OAMF_XFLIP.value != 0 {
+                let other = self.sprite(composite.sprites[1 - index]);
+                other.tile_index
+            } else {
+                sprite.tile_index
+            };
+            code.ld_a(tile)
+                .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_TILEID));
+            code.emit_all(
+                Sprite::new(sprite.oam_index, sprite.x, sprite.y, tile, sprite.flags)
+                    .in_shadow_oam()
+                    .set_flags(flags),
+            );
+        }
+        code.into_instrs()
+    }
+
     /// Generate movement code for a specific sprite: add the value of the variable
     /// `var_name` to its X (changes `a`, `b` and the flags)
     ///

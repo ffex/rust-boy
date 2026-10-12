@@ -299,7 +299,8 @@ impl VariableManager {
     ///
     /// HRAM is small: `RustBoy` gives 64 bytes of it to variables ($FF80-$FFBF), and
     /// `build()` returns [`Error::MemoryFull`] when they do not fit. Panics as
-    /// [`create_u8`](Self::create_u8), and if a WRAM0 variable has the name.
+    /// [`create_u8`](Self::create_u8), if a WRAM0 variable has the name, and for
+    /// `wVBlankFlag`, the main loop's frame flag, which `build()` keeps in WRAM0.
     ///
     /// # Example
     /// ```
@@ -403,6 +404,14 @@ impl VariableManager {
                 name
             );
         }
+        // The main loop's frame flag is a WRAM0 byte of `build()`'s (in HRAM, the program
+        // would have no WRAM0 section for its raw `Data` code)
+        assert!(
+            !(matches!(place, Place::Hram) && name == crate::stdlib::interrupts::VBLANK_FLAG),
+            "variable `{}`: it is the main loop's frame flag, which build() creates in WRAM0; \
+             it cannot be an HRAM variable",
+            name
+        );
         if let Some((&id, existing)) = self.variables.iter().find(|(_, v)| v.name == name) {
             assert!(
                 existing.var_type == var_type,
@@ -485,12 +494,6 @@ impl VariableManager {
             }
         }
         (addresses, error)
-    }
-
-    /// Whether the program has a `WRAM0` variable section (the `raw()` data goes in the
-    /// last one)
-    pub(crate) fn has_wram0_sections(&self) -> bool {
-        !self.sections.is_empty()
     }
 
     /// `Err` ([`Error::MemoryFull`]) if the variables do not fit in WRAM0 or HRAM

@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::asm::Instr;
 use crate::asm::labels::symbols;
 use crate::stdlib::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
-use crate::stdlib::inputs::update_keys;
+use crate::stdlib::inputs::{check_soft_reset, update_keys};
+use crate::stdlib::interrupts::wait_frame;
 use crate::stdlib::routine::Routine;
 use crate::stdlib::utility::delay;
 
@@ -37,17 +38,25 @@ pub enum BuiltinFunction {
     GetTileByPixel,
     /// Delay loop using BC as counter
     Delay,
+    /// Wait for the next VBlank, asleep (`halt`): the main loop's frame wait (see
+    /// `stdlib::interrupts::wait_frame`)
+    WaitFrame,
+    /// Reset the game when A, B, Select and Start are held (see
+    /// `stdlib::inputs::check_soft_reset`)
+    CheckSoftReset,
 }
 
 impl BuiltinFunction {
     /// Every builtin, in the order `build()` emits them
-    pub const ALL: [BuiltinFunction; 6] = [
+    pub const ALL: [BuiltinFunction; 8] = [
         BuiltinFunction::Memcopy,
         BuiltinFunction::WaitVBlank,
         BuiltinFunction::WaitNotVBlank,
         BuiltinFunction::UpdateKeys,
         BuiltinFunction::GetTileByPixel,
         BuiltinFunction::Delay,
+        BuiltinFunction::WaitFrame,
+        BuiltinFunction::CheckSoftReset,
     ];
 
     /// Get the label name for this function
@@ -59,6 +68,8 @@ impl BuiltinFunction {
             BuiltinFunction::UpdateKeys => "UpdateKeys",
             BuiltinFunction::GetTileByPixel => "GetTileByPixel",
             BuiltinFunction::Delay => "Delay",
+            BuiltinFunction::WaitFrame => "WaitFrame",
+            BuiltinFunction::CheckSoftReset => "CheckSoftReset",
         }
     }
 
@@ -79,6 +90,8 @@ impl BuiltinFunction {
             BuiltinFunction::UpdateKeys => update_keys(),
             BuiltinFunction::GetTileByPixel => get_tile_by_pixel(),
             BuiltinFunction::Delay => delay(),
+            BuiltinFunction::WaitFrame => wait_frame(),
+            BuiltinFunction::CheckSoftReset => check_soft_reset(),
         }
     }
 
@@ -567,6 +580,8 @@ mod tests {
             (BuiltinFunction::WaitNotVBlank, wait_not_vblank()),
             (BuiltinFunction::UpdateKeys, update_keys()),
             (BuiltinFunction::GetTileByPixel, get_tile_by_pixel()),
+            (BuiltinFunction::WaitFrame, wait_frame()),
+            (BuiltinFunction::CheckSoftReset, check_soft_reset()),
         ];
         for (builtin, routine) in stdlib {
             assert_eq!(builtin.routine(), routine, "{:?}", builtin);

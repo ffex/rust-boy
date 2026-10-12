@@ -33,9 +33,11 @@
 //! and C flags; N and H are not modelled, so `daa` is not either. `push` and `pop` share
 //! one stack with `call` and `ret`, as on the CPU: a pushed pair can be popped into
 //! another pair (`push hl` / `pop de`), with what the model knows of it, but a `ret` to a
-//! pushed value or a `pop` of a return address panics. `halt`, `stop`, `di`, `ei`, `reti`,
-//! `rst`, `jp hl`, `add sp`, `ld hl, sp + e`, `add hl, sp` and every other use of `sp` are
-//! not modelled. Jumps and
+//! pushed value or a `pop` of a return address panics. `di` and `ei` are recorded in the
+//! trace ([`Event::Ime`]), and `ld sp, n16` starts a new, empty stack (it panics when the
+//! stack holds something: the model would lose it). `halt`, `stop`, `reti`, `rst`, `jp hl`,
+//! `add sp`, `ld hl, sp + e`, `add hl, sp` and every other use of `sp` are not modelled.
+//! Jumps and
 //! calls go to labels in the same instruction list, and
 //! execution ends when it runs past the last instruction or on a `ret` with no `call`
 //! to return to (so a routine can be run on its own, or a test can put its routines
@@ -234,6 +236,8 @@ pub(crate) enum Event {
     Write(String, u8),
     /// A call to the label (a stub or a routine in the code)
     Call(String),
+    /// `ei` (true) or `di` (false): the interrupt master enable
+    Ime(bool),
 }
 
 /// What `call` and `push` put on the stack of [`TestCpu::run`]
@@ -345,6 +349,15 @@ impl TestCpu {
                 panic!("invalid instruction: {}", error);
             }
             match instr {
+                // A new stack, from the start-up code (`ld sp, $FFFE`)
+                Instr::Ld {
+                    dst: Dst::R16(R16::SP),
+                    ..
+                } => assert!(
+                    stack.is_empty(),
+                    "{}: moving a stack that holds something is not supported by the test CPU",
+                    instr
+                ),
                 Instr::Ld {
                     dst: Dst::R16(pair),
                     src,
@@ -575,6 +588,8 @@ impl TestCpu {
                         None => return,
                     }
                 }
+                Instr::Di => self.trace.push(Event::Ime(false)),
+                Instr::Ei => self.trace.push(Event::Ime(true)),
                 Instr::Nop | Instr::Label { .. } | Instr::Comment { .. } => {}
                 other => panic!("instruction not supported by the test CPU: {}", other),
             }
@@ -1935,7 +1950,7 @@ mod tests {
     fn test_unmodelled_instructions_panic() {
         // Interrupts, the stack pointer, `daa` (needs the N and H flags) and the jumps to
         // an address in a register are not modelled
-        let unmodelled: [Snippet; 11] = [
+        let unmodelled: [Snippet; 10] = [
             |asm| {
                 asm.halt();
             },
@@ -1943,10 +1958,7 @@ mod tests {
                 asm.stop();
             },
             |asm| {
-                asm.di();
-            },
-            |asm| {
-                asm.ei();
+                asm.ld_bc(1).push(R16Stack::BC).ld(R16::SP, 0xFFFEu16);
             },
             |asm| {
                 asm.reti();
@@ -1980,5 +1992,32 @@ mod tests {
         let mut asm = Block::new();
         asm.nop();
         assert!(!panics(&asm));
+    }
+
+    #[test]
+    fn test_di_ei_and_a_new_stack() {
+        // `di` and `ei` are in the trace; `ld sp` with nothing on the stack starts a new one
+        let mut asm = Block::new();
+        asm.di()
+            .ld(R16::SP, 0xFFFEu16)
+            .ld_a(1)
+            .ld_addr_def_a("wX")
+            .call("Sub")
+            .ei()
+            .jr("End")
+            .label("Sub")
+            .ret()
+            .label("End");
+        let mut cpu = TestCpu::default();
+        cpu.run(&asm.into_instrs());
+        assert_eq!(
+            cpu.trace,
+            [
+                Event::Ime(false),
+                Event::Write("wX".to_string(), 1),
+                Event::Call("Sub".to_string()),
+                Event::Ime(true)
+            ]
+        );
     }
 }

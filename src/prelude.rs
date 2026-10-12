@@ -3,7 +3,8 @@
 //! It brings the engine ([`RustBoy`], its settings, its errors with what they hold
 //! (`Definition`, `MemoryRegion`), sprites, tiles, variables, inputs), the control flow
 //! and routines of [`stdlib`](crate::stdlib) (`If`, `IfA`, `IfConst`, `IfCall`, `Call`,
-//! `Routine`, `Regs`, `PadButton`), the building blocks of [`asm`](crate::asm) for code
+//! `Routine`, `Regs`, `PadButton`, and the interrupts: `Interrupt`, `Stat`, `Timer`,
+//! `TimerClock`), the building blocks of [`asm`](crate::asm) for code
 //! written by hand (`Block`, `Expr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and
 //! `Emittable` with the `LabelAllocator` its `emit` takes), and the [`hw`]
 //! module itself (`hw::LCDC`, ...).
@@ -44,4 +45,5 @@ pub use crate::engine::{
 pub use crate::hw;
 pub use crate::stdlib::flow::{Call, If, IfA, IfCall, IfConst};
 pub use crate::stdlib::inputs::PadButton;
+pub use crate::stdlib::interrupts::{Interrupt, Stat, Timer, TimerClock};
 pub use crate::stdlib::routine::{Regs, Routine};

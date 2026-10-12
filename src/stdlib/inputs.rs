@@ -1,4 +1,4 @@
-use crate::asm::{Block, Condition, Instr, LabelAllocator, Mem, R8};
+use crate::asm::{Block, Condition, Expr, Instr, JumpTarget, LabelAllocator, Mem, R8};
 use crate::hw;
 use crate::stdlib::routine::{Regs, Routine};
 
@@ -129,6 +129,68 @@ pub fn check_key(
     asm.jp_cond(Condition::Z, &end);
     asm.emit_all(pressed_func);
     asm.label(&end);
+    asm.into_instrs()
+}
+
+/// The variable of [`check_soft_reset`]: 0 until it sees the four reset buttons not all held
+pub const SOFT_RESET_ARMED: &str = "wSoftResetArmed";
+
+/// The four buttons of a soft reset, A + B + Select + Start, as `wCurKeys` bits
+pub fn soft_reset_keys() -> Expr {
+    Expr::from(hw::PADF_A) | hw::PADF_B | hw::PADF_SELECT | hw::PADF_START
+}
+
+/// The `CheckSoftReset` routine: reset the game when A, B, Select and Start are held
+/// together
+///
+/// "Reset" means what the console does after its boot ROM: a jump to the cartridge's entry
+/// point, `$0100` ([`hw::ROM_HEADER`]), so the program's start-up code runs again. It must
+/// therefore start like a reset needs: interrupts off (`di`) and the stack pointer set
+/// (`ld sp, $FFFE`), as `RustBoy`'s does; then it sets everything again (VRAM, OAM, every
+/// variable to its initial value). What it does not set keeps its value: the registers the
+/// start-up code does not write (`rSCX`, `rSCY`, ...), and the RAM no variable holds.
+///
+/// It reads `wCurKeys`, so it must run after [`update_keys`] in the same frame. It resets
+/// once per press: the reset needs the four buttons not all held in an earlier frame
+/// ([`SOFT_RESET_ARMED`], which the start-up code sets to 0), so holding them through the
+/// reset does not reset the game again on every frame; it resets again once one of them
+/// has been released and the four are held again.
+///
+/// - Reads and returns nothing; clobbers `a` and the flags (when it returns).
+/// - Variables: `wCurKeys` (read), [`SOFT_RESET_ARMED`].
+pub fn check_soft_reset() -> Routine {
+    let mut asm = Block::new();
+    asm.comment("Reset when A, B, Select and Start are held, after they were not all held");
+    asm.label("CheckSoftReset");
+    asm.ld_a_addr_def("wCurKeys");
+    asm.and(soft_reset_keys());
+    asm.cp(soft_reset_keys());
+    asm.jr_cond(Condition::Z, ".held");
+    // Not all four: the next time they are, reset
+    asm.ld_a(1);
+    asm.ld_addr_def_a(SOFT_RESET_ARMED);
+    asm.ret();
+    asm.label(".held");
+    asm.ld_a_addr_def(SOFT_RESET_ARMED);
+    asm.and(R8::A);
+    // Held since the last reset (or power-on): wait for a release
+    asm.ret_cond(Condition::Z);
+    asm.emit(Instr::Jp {
+        target: JumpTarget::Addr(hw::ROM_HEADER),
+    });
+    Routine::new("CheckSoftReset", asm)
+        .with_variable("wCurKeys")
+        .with_variable(SOFT_RESET_ARMED)
+        .with_clobbers(Regs::A | Regs::F)
+}
+
+/// Code that selects both groups of the joypad in `rP1` (buttons and directions: their
+/// select bits cleared, `P1F_GET_BTN & P1F_GET_DPAD`), so that a press requests the joypad
+/// interrupt. [`update_keys`] leaves no group selected (`P1F_GET_NONE`). Uses `a`.
+pub fn select_all_keys() -> Vec<Instr> {
+    let mut asm = Block::new();
+    asm.ld(R8::A, Expr::from(hw::P1F_GET_BTN) & hw::P1F_GET_DPAD);
+    asm.ldh(Mem::addr(hw::P1), R8::A);
     asm.into_instrs()
 }
 

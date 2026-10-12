@@ -164,6 +164,31 @@ fn test_update_keys_convention() {
     check_convention(&update_keys(), &[&none, &some]);
 }
 
+/// The paths of `CheckSoftReset` that return (its reset jumps to `$0100`, which the test
+/// CPU does not follow; the emulator tests check it): it arms itself when the four reset
+/// keys are not all held, and waits for a release when they are held but it is not armed
+#[test]
+fn test_check_soft_reset_convention() {
+    use crate::stdlib::inputs::{SOFT_RESET_ARMED, check_soft_reset};
+    let keys = |held: u8, armed: u8| {
+        move |cpu: &mut TestCpu| {
+            for flag in [hw::PADF_A, hw::PADF_B, hw::PADF_SELECT, hw::PADF_START] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.mem.insert("wCurKeys".to_string(), held);
+            cpu.mem.insert(SOFT_RESET_ARMED.to_string(), armed);
+        }
+    };
+    let (none, three, held_unarmed) = (keys(0x00, 0), keys(0x0B, 1), keys(0x0F, 0));
+    check_convention(&check_soft_reset(), &[&none, &three, &held_unarmed]);
+    for (case, armed) in [(keys(0x00, 0), 1), (keys(0x0F, 0), 0), (keys(0xF7, 0), 1)] {
+        let mut cpu = TestCpu::default();
+        case(&mut cpu);
+        cpu.run(check_soft_reset().body());
+        assert_eq!(cpu.mem.get(SOFT_RESET_ARMED), Some(&armed));
+    }
+}
+
 #[test]
 fn test_get_tile_by_pixel_convention() {
     let pixel = |x: u8, y: u8| {

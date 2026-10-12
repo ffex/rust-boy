@@ -1,11 +1,15 @@
 //! Main RustBoy struct - the high-level Game Boy development API
 
-use crate::asm::labels::{code_lines, defines};
-use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, Section, is_identifier};
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::asm::labels::defines;
+use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, is_identifier};
 use crate::hw;
 use crate::stdlib::flow::Emittable;
 use crate::stdlib::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
-use crate::stdlib::routine::Routine;
+use crate::stdlib::inputs::select_all_keys;
+use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
+use crate::stdlib::routine::{Regs, Routine};
 
 use super::config::{Palettes, RustBoyConfig};
 use super::error::Error;
@@ -15,33 +19,6 @@ use super::layout::{Chunk, Layout};
 use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
 use super::tiles::{TileManager, TilemapArea};
 use super::variables::VariableManager;
-
-/// The `WRAM0` section `build()` opens for the `raw()` code of `Chunk::Data` when no
-/// variable section comes before it and it opens none itself
-const RAW_DATA_SECTION: &str = "Raw Data";
-
-/// Whether `code` starts with a `SECTION` (before any other code; comments are skipped)
-fn opens_section(code: &[Instr]) -> bool {
-    for instr in code {
-        match instr {
-            Instr::Comment { .. } => continue,
-            Instr::Section { .. } => return true,
-            Instr::Raw { line } => {
-                let lines = code_lines(line);
-                match lines.iter().map(|l| l.trim()).find(|l| !l.is_empty()) {
-                    Some(first) => {
-                        // The keyword, not a label that starts with it (`SectionTable:`)
-                        let word = first.split_whitespace().next().unwrap_or("");
-                        return word.eq_ignore_ascii_case("SECTION");
-                    }
-                    None => continue, // a comment only
-                }
-            }
-            _ => return false,
-        }
-    }
-    false
-}
 
 /// High-level Game Boy development API
 ///
@@ -88,10 +65,30 @@ pub struct RustBoy {
     /// Main loop code
     main_loop_code: Vec<Instr>,
 
+    /// The code each interrupt's handler runs ([`RustBoy::on_interrupt`]), in the order it
+    /// was given, and the registers it saves
+    handlers: BTreeMap<Interrupt, HandlerCode>,
+
+    /// The interrupts the program enables or disables while it runs
+    /// ([`RustBoy::enable_interrupt`], [`RustBoy::disable_interrupt`]): each gets a vector,
+    /// `reti` when it has no handler
+    switched_interrupts: BTreeSet<Interrupt>,
+
+    /// Whether the main loop calls `UpdateKeys` ([`RustBoy::add_inputs`]): the soft reset
+    /// reads the keys it updates
+    updates_keys: bool,
+
     /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
     /// builtins, animation delay. The sprite size is also the sprite manager's, which
     /// needs it when a sprite is added: `with_config` and `set_sprite_size` set both
     config: RustBoyConfig,
+}
+
+/// The code of an interrupt handler, as the program gives it, and the registers it saves
+#[derive(Default)]
+struct HandlerCode {
+    code: Vec<Instr>,
+    saves: Regs,
 }
 
 impl RustBoy {
@@ -123,6 +120,9 @@ impl RustBoy {
             constants: Vec::new(),
             init_code: Vec::new(),
             main_loop_code: Vec::new(),
+            handlers: BTreeMap::new(),
+            switched_interrupts: BTreeSet::new(),
+            updates_keys: false,
             config,
         }
     }
@@ -233,12 +233,22 @@ impl RustBoy {
 
     /// Add initialization code (runs once at startup)
     ///
-    /// The start-up code runs, in order: LCD off, tile data copied to VRAM, OAM cleared
-    /// and the sprites written, default palettes (`rBGP`, `rOBP0`, `rOBP1`), every
-    /// variable set to its initial value (animation variables included), **this code**,
-    /// then LCD on. So the code here can change any variable, animation or palette, and
-    /// runs with the LCD off (VRAM and OAM can be written freely). `rLCDC` is the
-    /// exception: `build()` sets it after this code to turn the LCD on.
+    /// The start-up code runs, in order: interrupts off, LCD off, tile data copied to VRAM,
+    /// OAM cleared and the sprites written, default palettes (`rBGP`, `rOBP0`, `rOBP1`),
+    /// every variable set to its initial value (animation variables included), the
+    /// interrupt sources (`rSTAT`, `rLYC`, the timer) and `rIE`, **this code**, then LCD on,
+    /// pending interrupts dropped (`rIF` = 0) and interrupts on (`ei`). So the code here can
+    /// change any variable, animation, palette or interrupt setting, and runs with the LCD
+    /// and interrupts off (VRAM and OAM can be written freely). `rLCDC` is the exception:
+    /// `build()` sets it after this code to turn the LCD on. A soft reset
+    /// ([`RustBoy::set_soft_reset`]) runs the whole start-up again, this code too.
+    ///
+    /// `rIE` holds `IEF_VBLANK` and the interrupts that have a handler when this code runs.
+    /// To enable another one, use the API ([`RustBoy::on_interrupt`] and the `on_*` methods,
+    /// or [`RustBoy::enable_interrupt`], whose code ORs its bit in); code written by hand
+    /// must OR its bits in too (`ldh a, [rIE]`, `or a, ...`, `ldh [rIE], a`): writing
+    /// `rIE` turns off what it leaves out. (The main loop's `WaitFrame` enables VBlank again
+    /// on its own, but a handler left out stops running.)
     ///
     /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
     /// off, `rLY` stays 0 and the wait never ends.
@@ -269,11 +279,9 @@ impl RustBoy {
     /// - `Header`, `Constants`, `Tiles`, `Tilemap`: after the generated ones (`Header` is
     ///   inside the header section, after its padding).
     /// - `Data`: after the variable sections, so inside the last of them (a `WRAM0`
-    ///   section) unless the raw code opens its own `SECTION`. In a program without
-    ///   variables, raw `Data` code that does not start with a `SECTION` gets a `WRAM0`
-    ///   section of its own, `SECTION "Raw Data", WRAM0` (it would land in ROM). A RAM
-    ///   section only reserves space (labels, `ds n`): code or data there makes `build()`
-    ///   return [`Error::Section`].
+    ///   section: every program has one, for the main loop's `wVBlankFlag`) unless the raw
+    ///   code opens its own `SECTION`. A RAM section only reserves space (labels, `ds n`):
+    ///   code or data there makes `build()` return [`Error::Section`].
     ///
     /// # Example
     /// ```
@@ -651,6 +659,18 @@ impl RustBoy {
         // === HEADER CHUNK ===
         asm.chunk(Chunk::Header);
         asm.include_hardware();
+        // The interrupt vectors: a jump to each handler, `reti` for an interrupt the
+        // program switches on without one
+        for interrupt in Interrupt::ALL {
+            if self.has_handler(interrupt) {
+                asm.emit_all(interrupts::vector(
+                    interrupt,
+                    Some(interrupt.handler_label()),
+                ));
+            } else if self.switched_interrupts.contains(&interrupt) {
+                asm.emit_all(interrupts::vector(interrupt, None));
+            }
+        }
         asm.emit_all(crate::stdlib::utility::header_section());
         // Each chunk the `raw()` code wrote goes after the code generated for it (B15)
         asm.emit_all(self.raw_chunk(Chunk::Header));
@@ -667,8 +687,11 @@ impl RustBoy {
         // once the functions are known: a builtin may need variables (B26)
         let mut startup = Block::new();
 
-        // Entry point
+        // Entry point: from power-on, or from a soft reset (`jp $0100`), so interrupts off
+        // and the stack where the boot ROM puts it, whatever the game was doing
         startup.label("EntryPoint");
+        startup.di();
+        startup.ld(R16::SP, Expr::hex(hw::STACK_TOP));
         startup.call("WaitVBlank");
 
         // Turn off screen for safe VRAM access
@@ -702,10 +725,25 @@ impl RustBoy {
             startup.ld_addr_def_a(register);
         }
 
-        // Then the variables (below), then the user init code, after every default it
-        // may want to change: variables, animations, palettes, OAM (B11). The LCD is
-        // still off, so it can write VRAM.
+        // Then the variables (below), then the interrupt sources and `rIE`, then the user
+        // init code, after every default it may want to change: variables, animations,
+        // palettes, OAM (B11), interrupts. The LCD is still off, so it can write VRAM.
         let mut finish = Block::new();
+        if let Some(stat) = self.config.stat {
+            finish.emit_all(interrupts::configure_stat(stat));
+        }
+        if let Some(timer) = self.config.timer {
+            finish.emit_all(interrupts::start_timer(timer));
+        }
+        if self.has_handler(Interrupt::Joypad) {
+            // A press requests the interrupt only in a selected group
+            finish.emit_all(select_all_keys());
+        }
+        let enabled: Vec<Interrupt> = Interrupt::ALL
+            .into_iter()
+            .filter(|interrupt| self.has_handler(*interrupt))
+            .collect();
+        finish.emit_all(interrupts::set_enabled(&enabled));
         finish.emit_all(self.init_code.clone());
         finish.emit_all(self.raw_chunk(Chunk::Init));
 
@@ -725,15 +763,21 @@ impl RustBoy {
         }
         finish.ld(R8::A, lcdc);
         finish.ld_addr_def_a(hw::LCDC);
+        // Interrupts on, without what the hardware requested during the start-up (the
+        // VBlank the start-up waited for, a timer overflow): the first VBlank interrupt is
+        // the first frame's
+        finish.emit_all(interrupts::clear_pending());
+        finish.ei();
         let startup = startup.into_instrs();
         let finish = finish.into_instrs();
 
         // === MAIN LOOP CHUNK ===
         asm.chunk(Chunk::MainLoop);
 
+        // Once a frame: asleep until the VBlank handler ran, then the frame's work, which
+        // starts in VBlank
         asm.label("Main");
-        asm.call("WaitNotVBlank");
-        asm.call("WaitVBlank");
+        asm.call(BuiltinFunction::WaitFrame.label());
 
         // Generate animation calls at start of main loop
         if self.sprites.has_animations() {
@@ -746,6 +790,19 @@ impl RustBoy {
         // Emit main loop code, then the raw main loop code
         asm.emit_all(self.main_loop_code.clone());
         asm.emit_all(self.raw_chunk(Chunk::MainLoop));
+
+        // The soft reset reads the keys of this frame
+        if self.config.soft_reset {
+            if !self.updates_keys {
+                asm.call(BuiltinFunction::UpdateKeys.label());
+            }
+            asm.call(BuiltinFunction::CheckSoftReset.label());
+        }
+        // UpdateKeys leaves no group of keys selected: select them again for the joypad
+        // interrupt
+        if self.has_handler(Interrupt::Joypad) {
+            asm.emit_all(select_all_keys());
+        }
 
         // Jump back to main loop
         asm.jp("Main");
@@ -775,6 +832,11 @@ impl RustBoy {
         // copy: building changes nothing in `self`)
         let mut vars = self.vars.clone();
 
+        // The flag of the frame wait, which the VBlank handler sets (WaitFrame's variable;
+        // created here too, since the handler needs it even if the program replaced
+        // WaitFrame with its own)
+        vars.create_needed(interrupts::VBLANK_FLAG, 0)?;
+
         // Add animation variables if animations are used
         if self.sprites.has_animations() {
             vars.create_needed("wFrameCounter", 0)?;
@@ -791,6 +853,7 @@ impl RustBoy {
         // functions. (Variables only hold data, so their code is not needed for this, but
         // their names are: a name the program defines is not a function.)
         let animations = self.sprites.generate_animation_functions();
+        let handlers = self.generate_handlers();
         let mut code: Vec<&[Instr]> = [
             Chunk::Header,
             Chunk::Constants,
@@ -810,7 +873,9 @@ impl RustBoy {
             raw_data.as_slice(),
         ]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
-        let generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
+        code.extend(handlers.iter().map(Routine::body));
+        let mut generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
+        generated.extend(handlers.iter().map(|handler| handler.name().to_string()));
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
@@ -820,6 +885,9 @@ impl RustBoy {
         for (_, body) in animations {
             // Emitted here, not scanned as a user function
             asm.emit_all(body);
+        }
+        for handler in handlers {
+            asm.emit_all(handler);
         }
         asm.emit_all(raw_functions);
 
@@ -839,15 +907,44 @@ impl RustBoy {
         asm.emit_all(finish);
 
         asm.chunk(Chunk::Data);
+        // The raw data goes in the last variable section, a WRAM0 one: every program has
+        // one, for wVBlankFlag (it used to land in ROM without variables, B15)
         asm.emit_all(vars.generate_sections());
-        if !raw_data.is_empty() && !vars.has_wram0_sections() && !opens_section(&raw_data) {
-            // No variable section before it: the raw data would land in the ROM0 section
-            // of the code, so it gets a WRAM0 section of its own
-            asm.section(Section::wram0(RAW_DATA_SECTION));
-        }
         asm.emit_all(raw_data);
 
         Ok(asm)
+    }
+
+    /// Whether `interrupt` has a handler: VBlank always (the main loop waits for it), the
+    /// others when the program gave code for them ([`RustBoy::on_interrupt`])
+    fn has_handler(&self, interrupt: Interrupt) -> bool {
+        interrupt == Interrupt::VBlank || self.handlers.contains_key(&interrupt)
+    }
+
+    /// The interrupt handlers `build()` emits, in priority order: the VBlank handler, and
+    /// one for each interrupt the program gave code for
+    fn generate_handlers(&self) -> Vec<Routine> {
+        let mut handlers = Vec::new();
+        for interrupt in Interrupt::ALL {
+            if !self.has_handler(interrupt) {
+                continue;
+            }
+            let given = self.handlers.get(&interrupt);
+            let mut code = Vec::new();
+            let mut saves = given.map_or(Regs::NONE, |handler| handler.saves);
+            // (B12: the OAM DMA of a shadow OAM goes first in the VBlank handler, at the
+            // start of VBlank)
+            if let Some(handler) = given {
+                code.extend(handler.code.iter().cloned());
+            }
+            if interrupt == Interrupt::VBlank {
+                // A frame started: WaitFrame returns
+                code.extend(interrupts::signal_frame());
+                saves |= Regs::A;
+            }
+            handlers.push(interrupts::handler(interrupt, code, saves));
+        }
+        handlers
     }
 
     /// The whole program [`build`](Self::build) prints, before its jumps are relaxed
@@ -916,7 +1013,237 @@ impl RustBoy {
         // Add the input handling code (the actions are the user's code)
         self.main_loop_code
             .extend(checked(inputs.generate_code(self.asm.labels())));
+        self.updates_keys = true;
 
+        self
+    }
+
+    // ==================== Interrupts ====================
+
+    /// Run `code` in the handler of `interrupt`, each time it fires
+    ///
+    /// The handler is generated by `build()`: its vector ([`interrupts::vector`]) jumps to
+    /// it, it saves the registers `code` may change ([`Regs::written_by`]; all of them when
+    /// that cannot be told, as for code with a `call` or raw code), runs `code`, restores
+    /// them and returns with `reti` ([`interrupts::handler`]). So the code it interrupts
+    /// (the main loop, another routine) finds its registers as it left them. Code given
+    /// for one interrupt several times runs in that order, in one handler. The interrupt is
+    /// enabled in `rIE` at start-up, so the handler runs from the first frame on.
+    ///
+    /// The handler runs with interrupts off (no other handler interrupts it), and it delays
+    /// what it interrupts: keep it short. The main loop's frame model (`build()`):
+    /// - the **VBlank handler** runs at the start of each VBlank (line 144). It runs the
+    ///   code given here for [`Interrupt::VBlank`] ([`RustBoy::on_vblank`]), then tells
+    ///   the main loop that a frame started (`wVBlankFlag`). It is the place for what must
+    ///   happen in VBlank whatever the main loop does (the OAM DMA of a shadow OAM goes
+    ///   first in it);
+    /// - the **main loop** waits for that (`call WaitFrame`, asleep in `halt`), then runs
+    ///   the animations and the [`RustBoy::add_to_main_loop`] code, so it starts in
+    ///   VBlank too, right after the handler, and runs once a frame;
+    /// - the other handlers run whenever their interrupt fires, in VBlank or not.
+    ///
+    /// # Panics
+    /// If `code` returns (`ret`, `reti`): it runs inline in the handler. On an instruction
+    /// [`Instr::check`] rejects.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::asm::{Block, R8};
+    /// use rust_boy::engine::RustBoy;
+    /// use rust_boy::stdlib::interrupts::Interrupt;
+    ///
+    /// let mut gb = RustBoy::new();
+    /// let frames = gb.vars.create_u8("wFrames", 0);
+    /// let mut count = Block::new();
+    /// count.ld_a_addr_def(frames.name()).inc(R8::A).ld_addr_def_a(frames.name());
+    /// gb.on_interrupt(Interrupt::VBlank, count);
+    /// let out = gb.build()?;
+    /// assert!(out.contains("SECTION \"VBlank interrupt\", ROM0[$40]"));
+    /// assert!(out.contains("VBlankHandler:\n    push af\n    ld a, [wFrames]"));
+    /// # Ok::<(), rust_boy::engine::Error>(())
+    /// ```
+    #[track_caller]
+    pub fn on_interrupt(&mut self, interrupt: Interrupt, mut code: impl Emittable) -> &mut Self {
+        let code = checked(code.emit(self.asm.labels()));
+        let saves = Regs::written_by(&code).unwrap_or(Regs::ALL);
+        self.add_handler_code(interrupt, code, saves);
+        self
+    }
+
+    /// Call `routine` in the handler of `interrupt`, each time it fires
+    ///
+    /// As [`RustBoy::on_interrupt`] with `call Name` as the code, but the handler saves the
+    /// registers the routine's calling convention says it changes ([`Routine::changes`]:
+    /// what it returns and clobbers), not all of them. The routine is registered with its
+    /// dependencies, as with [`RustBoy::call_routine`].
+    ///
+    /// # Panics
+    /// If the routine reads registers ([`Routine::reads`]): a handler interrupts any code,
+    /// so they would hold whatever that code left there. As [`RustBoy::call_routine`].
+    #[track_caller]
+    pub fn on_interrupt_routine(&mut self, interrupt: Interrupt, routine: &Routine) -> &mut Self {
+        assert!(
+            routine.reads().is_empty(),
+            "on_interrupt_routine: routine `{}` reads {}, but a handler interrupts any code, so \
+             they would hold what that code left there; give it a routine that reads no register",
+            routine.name(),
+            routine.reads()
+        );
+        let call = self.call_routine(routine);
+        self.add_handler_code(interrupt, call, routine.changes());
+        self
+    }
+
+    /// Run `code` in the VBlank handler, at the start of each VBlank, before the main loop
+    /// runs: [`RustBoy::on_interrupt`] for [`Interrupt::VBlank`]
+    #[track_caller]
+    pub fn on_vblank(&mut self, code: impl Emittable) -> &mut Self {
+        self.on_interrupt(Interrupt::VBlank, code)
+    }
+
+    /// Run `code` in the STAT handler, on the conditions of `stat` (`LY` = `LYC` on a line,
+    /// PPU modes), which the start-up code selects ([`RustBoyConfig::stat`])
+    ///
+    /// On the DMG, a write to `rSTAT` in mode 0 or 1 (HBlank, VBlank), or while `LY` =
+    /// `LYC`, requests a STAT interrupt of its own: changing the conditions while the
+    /// program runs ([`interrupts::configure_stat`]) from the main loop, which runs in
+    /// VBlank, runs the handler once more. The start-up code writes `rSTAT` with the LCD
+    /// off and drops the requests before `ei`.
+    ///
+    /// # Panics
+    /// If the program has other STAT conditions already (another `on_stat`, or its
+    /// configuration): the conditions are one setting. Change them while the program runs
+    /// with [`interrupts::configure_stat`]. As [`RustBoy::on_interrupt`] for `code`.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::asm::{Block, Mem, R8};
+    /// use rust_boy::engine::RustBoy;
+    /// use rust_boy::hw;
+    /// use rust_boy::stdlib::interrupts::Stat;
+    ///
+    /// // Scroll the bottom of the screen (from line 100) by 8 pixels, the top not at all
+    /// let mut gb = RustBoy::new();
+    /// let mut split = Block::new();
+    /// split.ld_a(8).ldh(Mem::addr(hw::SCX), R8::A);
+    /// gb.on_stat(Stat::new().line(100), split);
+    /// let mut top = Block::new();
+    /// top.xor(R8::A).ldh(Mem::addr(hw::SCX), R8::A);
+    /// gb.on_vblank(top);
+    /// let out = gb.build()?;
+    /// assert!(out.contains(
+    ///     "ld a, 100\n    ldh [rLYC], a\n    ld a, STATF_LYC\n    ldh [rSTAT], a"
+    /// ));
+    /// assert!(out.contains("ld a, IEF_VBLANK | IEF_STAT\n    ldh [rIE], a"));
+    /// # Ok::<(), rust_boy::engine::Error>(())
+    /// ```
+    #[track_caller]
+    pub fn on_stat(&mut self, stat: Stat, code: impl Emittable) -> &mut Self {
+        if let Some(other) = self.config.stat {
+            if other != stat {
+                panic!(
+                    "on_stat: the program selects other STAT conditions already ({:?}); they \
+                     are one setting, for one handler",
+                    other
+                );
+            }
+        }
+        self.config.stat = Some(stat);
+        self.on_interrupt(Interrupt::Stat, code)
+    }
+
+    /// Run `code` in the timer handler, each time `timer` overflows; the start-up code
+    /// starts it ([`RustBoyConfig::timer`]), and the first interrupt comes about one period
+    /// ([`Timer::period_mcycles`]) after it
+    ///
+    /// # Panics
+    /// If the program has another timer already (another `on_timer`, or its configuration):
+    /// the timer is one setting. Change it while the program runs with
+    /// [`interrupts::start_timer`] / [`interrupts::stop_timer`]. As [`RustBoy::on_interrupt`]
+    /// for `code`.
+    #[track_caller]
+    pub fn on_timer(&mut self, timer: Timer, code: impl Emittable) -> &mut Self {
+        if let Some(other) = self.config.timer {
+            if other != timer {
+                panic!(
+                    "on_timer: the program has another timer already ({:?}); the timer is one \
+                     setting, for one handler",
+                    other
+                );
+            }
+        }
+        self.config.timer = Some(timer);
+        self.on_interrupt(Interrupt::Timer, code)
+    }
+
+    /// Run `code` in the joypad handler, when a button is pressed
+    ///
+    /// The hardware requests the joypad interrupt when a line of `rP1` goes from high to
+    /// low, and only for the group of buttons `rP1` selects: so with a joypad handler the
+    /// start-up code selects both groups ([`select_all_keys`]), and the main loop selects
+    /// them again at the end of each frame (`UpdateKeys` leaves none selected). The
+    /// interrupt also comes when a group is selected while one of its buttons is held: each
+    /// frame while a button is held, when `UpdateKeys` reads the keys
+    /// ([`RustBoy::add_inputs`]) or when the main loop selects them again. It is for waking
+    /// up on a press; read the keys with [`RustBoy::add_inputs`].
+    #[track_caller]
+    pub fn on_joypad(&mut self, code: impl Emittable) -> &mut Self {
+        self.on_interrupt(Interrupt::Joypad, code)
+    }
+
+    /// Add `code` to the handler of `interrupt`, which saves `saves` too
+    #[track_caller]
+    fn add_handler_code(&mut self, interrupt: Interrupt, code: Vec<Instr>, saves: Regs) {
+        let handler = self.handlers.entry(interrupt).or_default();
+        handler.code.extend(code);
+        handler.saves |= saves;
+        // The checks of the handler (no `ret` in its code), at this call
+        interrupts::handler(interrupt, handler.code.clone(), handler.saves);
+    }
+
+    /// Code that enables `interrupt` in `rIE` while the program runs (in the main loop, a
+    /// handler, a function); it uses `a` and the flags
+    ///
+    /// An interrupt with a handler ([`RustBoy::on_interrupt`]) is enabled at start-up
+    /// already: this is for one that the program disabled ([`RustBoy::disable_interrupt`]),
+    /// or that only wakes the main loop's `halt` (its vector is `reti` when it has no
+    /// handler). A request the hardware made while it was disabled is still pending in
+    /// `rIF`, and is taken at once: drop it first with [`interrupts::clear_pending`] if it
+    /// must not be.
+    pub fn enable_interrupt(&mut self, interrupt: Interrupt) -> Vec<Instr> {
+        self.switched_interrupts.insert(interrupt);
+        interrupts::enable(&[interrupt])
+    }
+
+    /// Code that disables `interrupt` in `rIE` while the program runs; it uses `a` and the
+    /// flags
+    ///
+    /// # Panics
+    /// For [`Interrupt::VBlank`]: the main loop waits for it every frame.
+    #[track_caller]
+    pub fn disable_interrupt(&mut self, interrupt: Interrupt) -> Vec<Instr> {
+        assert!(
+            interrupt != Interrupt::VBlank,
+            "disable_interrupt(VBlank): the main loop waits for the VBlank interrupt every frame"
+        );
+        self.switched_interrupts.insert(interrupt);
+        interrupts::disable(&[interrupt])
+    }
+
+    /// Reset the game when A, B, Select and Start are held together, or not (the default)
+    ///
+    /// The main loop checks the keys at the end of each frame (`CheckSoftReset`, after the
+    /// `UpdateKeys` of [`RustBoy::add_inputs`], or its own): with the four held, it jumps to
+    /// the entry point (`$0100`), and the start-up code runs again from its start: it turns
+    /// interrupts off and sets the stack pointer, waits for VBlank, turns the LCD off, copies
+    /// the tiles, clears the OAM, sets the palettes and **every variable to its initial
+    /// value**, runs the [`RustBoy::init`] code and turns the LCD on, as at power-on (only the
+    /// boot ROM does not run again). What the start-up code does not set keeps its value: the
+    /// registers it does not write (`rSCX`, `rSCY`, sound) and the RAM no variable holds. The
+    /// game resets once per press: holding the four through the reset does not reset it
+    /// again, one of them must be released first (`stdlib::inputs::check_soft_reset`).
+    pub fn set_soft_reset(&mut self, on: bool) -> &mut Self {
+        self.config.soft_reset = on;
         self
     }
 
@@ -1122,6 +1449,7 @@ impl Default for RustBoy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::asm::Section;
     use crate::engine::{Definition, MemoryRegion, VarType};
 
     #[test]
@@ -1278,10 +1606,10 @@ mod tests {
         in_order(&[
             "Memcopy:",
             "WaitVBlank:",
-            "WaitNotVBlank:",
             "UpdateKeys:",
             "GetTileByPixel:",
             "Delay:",
+            "WaitFrame:",
             "FuncB:",
             "FuncA:",
         ]);
@@ -1678,8 +2006,8 @@ mod tests {
             error
         );
 
-        // MemoryFull: the program's variables fill WRAM0, and build() adds its own (it
-        // panicked in build(), in create_u8)
+        // MemoryFull: the program's variables fill WRAM0, and build() adds its own, the first
+        // of them the main loop's wVBlankFlag (it panicked in build(), in create_u8)
         let mut gb = animated();
         for i in 0..4096 {
             gb.vars.create_u8(&format!("wByte{}", i), 0);
@@ -1689,7 +2017,7 @@ mod tests {
             error,
             Error::MemoryFull {
                 region: MemoryRegion::Wram0,
-                what: "variable `wFrameCounter` (1 bytes)".to_string(),
+                what: "variable `wVBlankFlag` (1 bytes)".to_string(),
                 needed: 1,
                 available: 0,
             }
@@ -2445,6 +2773,27 @@ mod tests {
         let mut cpu = TestCpu::default();
         cpu.mem.insert("rLY".to_string(), 144); // in VBlank: WaitVBlank returns at once
         cpu.consts.insert(lcdc_on, 0x83);
+        // The flags of the interrupt set-up
+        for flag in [
+            hw::IEF_VBLANK,
+            hw::IEF_STAT,
+            hw::IEF_TIMER,
+            hw::IEF_SERIAL,
+            hw::IEF_HILO,
+            hw::STATF_LYC,
+            hw::STATF_MODE00,
+            hw::STATF_MODE01,
+            hw::STATF_MODE10,
+            hw::TACF_START,
+            hw::TACF_4KHZ,
+            hw::TACF_16KHZ,
+            hw::TACF_65KHZ,
+            hw::TACF_262KHZ,
+            hw::P1F_GET_BTN,
+            hw::P1F_GET_DPAD,
+        ] {
+            cpu.consts.insert(flag.name.to_string(), flag.value);
+        }
         (code, cpu)
     }
 
@@ -2502,10 +2851,20 @@ mod tests {
         let mut user = Block::new();
         user.ld_a(5).ld_addr_def_a("rSCX");
         gb.init(user.into_instrs());
+        // Handlers for every interrupt but the serial one, with their sources
+        gb.on_stat(Stat::new().line(10), vec![Instr::Nop]);
+        gb.on_timer(
+            Timer::new(crate::stdlib::interrupts::TimerClock::Hz16384, 0xF0),
+            vec![Instr::Nop],
+        );
+        gb.on_joypad(vec![Instr::Nop]);
 
         let cpu = run_startup(&mut gb);
         // Each side effect, by the start-up step it belongs to
+        let sources = ["rLYC", "rSTAT", "rTMA", "rTIMA", "rTAC", "rP1"];
         let step = |event: &Event| match event {
+            Event::Ime(false) => "interrupts off",
+            Event::Ime(true) => "interrupts on",
             Event::Call(name) if name == "WaitVBlank" => "wait for VBlank",
             Event::Write(reg, 0) if reg == "rLCDC" => "LCD off",
             Event::Call(name) if name == "Memcopy" => "copy to VRAM",
@@ -2514,8 +2873,11 @@ mod tests {
                 "palettes"
             }
             Event::Write(var, _) if var.starts_with('w') => "variables",
+            Event::Write(reg, _) if sources.contains(&reg.as_str()) => "interrupt sources",
+            Event::Write(reg, _) if reg == "rIE" => "enable interrupts",
             Event::Write(reg, _) if reg == "rSCX" => "user init",
             Event::Write(reg, _) if reg == "rLCDC" => "LCD on",
+            Event::Write(reg, 0) if reg == "rIF" => "drop pending interrupts",
             other => panic!("unexpected start-up event {:?}", other),
         };
         let mut steps: Vec<&str> = cpu.trace.iter().map(step).collect();
@@ -2523,16 +2885,40 @@ mod tests {
         assert_eq!(
             steps,
             [
+                "interrupts off",
                 "wait for VBlank",
                 "LCD off",
                 "copy to VRAM",
                 "OAM",
                 "palettes",
                 "variables",
+                "interrupt sources",
+                "enable interrupts",
                 "user init",
                 "LCD on",
+                "drop pending interrupts",
+                "interrupts on",
             ]
         );
+        // The sources, and the interrupts with a handler (VBlank always)
+        assert_mem(&cpu, "rLYC", 10);
+        assert_mem(&cpu, "rSTAT", hw::STATF_LYC.value);
+        assert_mem(&cpu, "rTMA", 0xF0);
+        assert_mem(&cpu, "rTIMA", 0xF0);
+        assert_mem(&cpu, "rTAC", hw::TACF_START.value | hw::TACF_16KHZ.value);
+        assert_mem(&cpu, "rP1", 0);
+        assert_mem(
+            &cpu,
+            "rIE",
+            hw::IEF_VBLANK.value | hw::IEF_STAT.value | hw::IEF_TIMER.value | hw::IEF_HILO.value,
+        );
+
+        // Without handlers: only VBlank, and no source
+        let cpu = run_startup(&mut RustBoy::new());
+        assert_mem(&cpu, "rIE", hw::IEF_VBLANK.value);
+        for source in sources {
+            assert!(cpu.mem.get(source).is_none(), "{} written", source);
+        }
     }
 
     // ==================== raw() (B15) ====================
@@ -2601,7 +2987,9 @@ mod tests {
     #[test]
     fn test_raw_data_always_lands_in_wram() {
         // Raw Data code without a SECTION, in a program without variables, used to land
-        // in the ROM0 section of the code (`wLonely: db` at $018F)
+        // in the ROM0 section of the code (`wLonely: db` at $018F, B15). Every program has a
+        // WRAM0 variable now, the main loop's wVBlankFlag, and the raw data goes after the
+        // variables, in their last section
         let data_text = |gb: &mut RustBoy| chunk_text(gb, Chunk::Data);
         let mut gb = RustBoy::new();
         gb.raw(|asm| {
@@ -2609,14 +2997,13 @@ mod tests {
             asm.raw("wLonely: db");
         });
         let data = data_text(&mut gb);
-        assert!(
-            data.starts_with("SECTION \"Raw Data\", WRAM0\n"),
-            "a WRAM0 section first:\n{}",
-            data
+        assert_eq!(
+            data,
+            "SECTION \"Variables\", WRAM0[$C000]\nwVBlankFlag: db\n; my data\nwLonely: db\n"
         );
         assert_links(&gb.build().unwrap());
 
-        // Raw data that opens its own section (typed or in a raw line) gets none
+        // Raw data that opens its own section (typed or in a raw line) is in it
         for open in [
             |asm: &mut Layout| {
                 asm.section(Section::wram0("Mine"));
@@ -2632,33 +3019,22 @@ mod tests {
                 asm.raw("hByte: db");
             });
             let data = data_text(&mut gb);
-            assert!(!data.contains("Raw Data"), "{}", data);
+            assert!(data.contains("\"Mine\""), "{}", data);
             assert_links(&gb.build().unwrap());
         }
 
-        // A label that starts with "Section" is not the keyword: the default section is
-        // still added
-        let mut gb = RustBoy::new();
-        gb.raw(|asm| {
-            asm.chunk(Chunk::Data).raw("SectionTable: db");
-        });
-        let data = data_text(&mut gb);
-        assert!(
-            data.starts_with("SECTION \"Raw Data\", WRAM0\n"),
-            "a WRAM0 section first:\n{}",
-            data
-        );
-        assert_links(&gb.build().unwrap());
-
-        // After the variables, the raw data goes in their last section, as documented
+        // With variables of the program: after them, as documented
         let mut gb = RustBoy::new();
         gb.vars.create_u8("wScore", 0);
         gb.raw(|asm| {
             asm.chunk(Chunk::Data).raw("wMore: db");
         });
         let data = data_text(&mut gb);
-        assert!(!data.contains("Raw Data"), "{}", data);
-        assert!(data.contains("wScore: db\nwMore: db"), "{}", data);
+        assert!(
+            data.contains("wScore: db\nwVBlankFlag: db\nwMore: db"),
+            "{}",
+            data
+        );
         assert_links(&gb.build().unwrap());
     }
 
@@ -2691,7 +3067,7 @@ mod tests {
                 panic!("code or data in a RAM section");
             };
             assert!(
-                message.contains("in the WRAM0 section \"Raw Data\": a RAM section holds no code"),
+                message.contains("in the WRAM0 section \"Variables\": a RAM section holds no code"),
                 "{}",
                 message
             );
@@ -3007,9 +3383,9 @@ mod tests {
             data.starts_with(
                 "SECTION \"HRAM Variables\", HRAM[$FF80]\n    hSpeed: db\n    hDelta: dw\n    \
                  SECTION \"Variables\", WRAM0[$C000]\n    wLives: db\n    wScore: dw\n    \
-                 SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    wFrameCounter: db\n    \
-                 wAnim_Coin_Current: db\n    wAnim_Coin_Dir: db\n    wCurKeys: db\n    \
-                 wNewKeys: db\n    SECTION \"Buffer\", WRAM0\n"
+                 SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    wVBlankFlag: db\n    \
+                 wFrameCounter: db\n    wAnim_Coin_Current: db\n    wAnim_Coin_Dir: db\n    \
+                 wCurKeys: db\n    wNewKeys: db\n    SECTION \"Buffer\", WRAM0\n"
             ),
             "{}",
             data
@@ -3035,9 +3411,10 @@ mod tests {
         }
         // And build()'s own, after them
         for (name, address) in [
-            ("wFrameCounter", 0xC005),
-            ("wAnim_Coin_Current", 0xC006),
-            ("wNewKeys", 0xC009),
+            ("wVBlankFlag", 0xC005),
+            ("wFrameCounter", 0xC006),
+            ("wAnim_Coin_Current", 0xC007),
+            ("wNewKeys", 0xC00A),
         ] {
             assert_eq!(symbols[name], (0, address), "{}", name);
         }
@@ -3069,14 +3446,16 @@ mod tests {
         assert!(out.contains("ldh [hScore+1], a"), "{}", out);
         assert_links(&out);
 
-        // Raw data with only HRAM variables still gets a WRAM0 section of its own (the last
-        // section of the variables is HRAM)
+        // Raw data with only HRAM variables of the program still lands in WRAM0: after the
+        // HRAM section, in the WRAM0 section of wVBlankFlag
         gb.raw(|asm| {
             asm.chunk(Chunk::Data).raw("wLonely: db");
         });
         let out = gb.build().unwrap();
         assert!(
-            out.contains("SECTION \"Raw Data\", WRAM0\n    wLonely: db"),
+            out.contains(
+                "SECTION \"Variables\", WRAM0[$C000]\n    wVBlankFlag: db\n    wLonely: db"
+            ),
             "{}",
             out
         );
@@ -3250,10 +3629,11 @@ mod tests {
             [
                 "Memcopy",
                 "WaitVBlank",
-                "WaitNotVBlank",
                 "Delay",
+                "WaitFrame",
                 "ClearMap",
-                "LoadLevel"
+                "LoadLevel",
+                "VBlankHandler"
             ],
             "{}",
             out
@@ -3275,11 +3655,12 @@ mod tests {
             [
                 "Memcopy",
                 "WaitVBlank",
-                "WaitNotVBlank",
                 "Delay",
+                "WaitFrame",
                 "ClearMap",
                 "LoadLevel",
-                "Level1"
+                "Level1",
+                "VBlankHandler"
             ],
             "{}",
             out
@@ -4358,5 +4739,259 @@ mod tests {
             generated_labels(&again);
             assert_links_with(&again, &[EXTERNAL_INC]);
         }
+    }
+}
+
+/// The interrupt API of `RustBoy`: what it generates and what it rejects. What the
+/// generated code does on the hardware is checked on the test emulator (`tests/emulator.rs`).
+#[cfg(test)]
+mod interrupt_tests {
+    use super::*;
+    use crate::asm::label_check::assert_links;
+    use crate::engine::{Definition, panic_message};
+    use crate::stdlib::inputs::PadButton;
+    use crate::stdlib::interrupts::TimerClock;
+
+    fn nop() -> Vec<Instr> {
+        vec![Instr::Nop]
+    }
+
+    #[test]
+    fn test_every_program_waits_for_vblank_with_an_interrupt() {
+        let out = RustBoy::new().build().unwrap();
+        for expected in [
+            "SECTION \"VBlank interrupt\", ROM0[$40]\n    jp VBlankHandler\n",
+            "EntryPoint:\n    di\n    ld sp, $FFFE\n    call WaitVBlank\n",
+            "ld a, IEF_VBLANK\n    ldh [rIE], a\n",
+            "xor a, a\n    ldh [rIF], a\n    ei\n\n    Main:\n    call WaitFrame\n    jp Main\n",
+            "VBlankHandler:\n    push af\n    ld a, 1\n    ld [wVBlankFlag], a\n    pop af\n    reti\n",
+            "wVBlankFlag: db",
+        ] {
+            assert!(out.contains(expected), "{}\nnot in:\n{}", expected, out);
+        }
+        // Only the VBlank vector, and no polling of LY in the main loop
+        assert_eq!(out.matches("interrupt\", ROM0").count(), 1);
+        assert!(!out.contains("WaitNotVBlank"));
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_a_handler_saves_what_its_code_changes() {
+        let mut gb = RustBoy::new();
+        let mut code = Block::new();
+        code.ld_b(1).ld_l(2);
+        gb.on_interrupt(Interrupt::Serial, code);
+        // A call: every register
+        let call = gb.call("Delay");
+        gb.on_interrupt(Interrupt::Joypad, call);
+        // A routine: its convention (UpdateKeys changes a, b, f)
+        gb.on_interrupt_routine(Interrupt::Timer, &crate::stdlib::inputs::update_keys());
+        // VBlank: a for the flag, and what the code changes
+        let mut vblank = Block::new();
+        vblank.ld_e(3);
+        gb.on_vblank(vblank);
+        let out = gb.build().unwrap();
+        for expected in [
+            "SerialHandler:\n    push bc\n    push hl\n    ld b, 1\n    ld l, 2\n    pop hl\n    \
+             pop bc\n    reti",
+            "JoypadHandler:\n    push af\n    push bc\n    push de\n    push hl\n    call Delay\n",
+            "TimerHandler:\n    push af\n    push bc\n    call UpdateKeys\n    pop bc\n    pop af\n",
+            "VBlankHandler:\n    push af\n    push de\n    ld e, 3\n    ld a, 1\n",
+        ] {
+            assert!(out.contains(expected), "{}\nnot in:\n{}", expected, out);
+        }
+        // Each vector, in priority order, before the header
+        let vectors: Vec<&str> = out
+            .lines()
+            .filter(|line| line.contains("interrupt\", ROM0"))
+            .collect();
+        assert_eq!(vectors.len(), 4, "{:?}", vectors);
+        assert!(out.find("Joypad interrupt").unwrap() < out.find("\"Header\"").unwrap());
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_code_for_one_interrupt_runs_in_one_handler_in_order() {
+        let mut gb = RustBoy::new();
+        let mut first = Block::new();
+        first.ld_b(1);
+        let mut second = Block::new();
+        second.ld_c(2);
+        gb.on_stat(Stat::new().line(5), first);
+        gb.on_stat(Stat::new().line(5), second);
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains("StatHandler:\n    push bc\n    ld b, 1\n    ld c, 2\n    pop bc\n"),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("ldh [rSTAT], a").count(), 1);
+    }
+
+    #[test]
+    fn test_what_the_interrupt_api_rejects() {
+        // A second STAT setting or timer
+        let mut gb = RustBoy::new();
+        gb.on_stat(Stat::new().line(5), nop());
+        let message = panic_message(|| gb.on_stat(Stat::new().hblank(), nop()));
+        assert!(
+            message.contains("other STAT conditions already"),
+            "{}",
+            message
+        );
+        let mut gb =
+            RustBoy::with_config(RustBoyConfig::default().timer(Timer::new(TimerClock::Hz4096, 0)));
+        let message = panic_message(|| gb.on_timer(Timer::new(TimerClock::Hz4096, 1), nop()));
+        assert!(message.contains("another timer already"), "{}", message);
+        // The same setting again is fine
+        gb.on_timer(Timer::new(TimerClock::Hz4096, 0), nop());
+
+        // Code that returns, at the call
+        let mut gb = RustBoy::new();
+        let message = panic_message(|| gb.on_vblank(vec![Instr::Ret]));
+        assert!(
+            message.contains("VBlankHandler handler's code returns"),
+            "{}",
+            message
+        );
+
+        // Disabling VBlank
+        let message = panic_message(|| RustBoy::new().disable_interrupt(Interrupt::VBlank));
+        assert!(
+            message.contains("waits for the VBlank interrupt"),
+            "{}",
+            message
+        );
+
+        // A function with a handler's name: an error of the program
+        let mut gb = RustBoy::new();
+        gb.on_timer(Timer::new(TimerClock::Hz4096, 0), nop());
+        let mut body = Block::new();
+        body.label("TimerHandler").ret();
+        gb.define_function("TimerHandler", body.into_instrs());
+        gb.keep_function("TimerHandler");
+        assert_eq!(
+            gb.build().unwrap_err(),
+            Error::NameConflict {
+                name: "TimerHandler".to_string(),
+                first: Definition::Function,
+                second: Definition::GeneratedFunction,
+            }
+        );
+    }
+
+    #[test]
+    fn test_an_interrupt_switched_without_a_handler_gets_reti() {
+        let mut gb = RustBoy::new();
+        let enable = gb.enable_interrupt(Interrupt::Serial);
+        gb.add_to_main_loop(enable);
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains("SECTION \"Serial interrupt\", ROM0[$58]\n    reti\n"),
+            "{}",
+            out
+        );
+        assert!(out.contains("or a, IEF_SERIAL"));
+        // Not enabled at start-up: only the ones with a handler
+        assert!(out.contains("ld a, IEF_VBLANK\n    ldh [rIE], a"));
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_soft_reset_reads_the_keys_once_a_frame() {
+        // Without inputs: its own UpdateKeys
+        let mut gb = RustBoy::new();
+        gb.set_soft_reset(true);
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains("call UpdateKeys\n    call CheckSoftReset\n    jp Main"),
+            "{}",
+            out
+        );
+        assert!(out.contains("CheckSoftReset:") && out.contains("wSoftResetArmed: db"));
+        assert_links(&out);
+
+        // With inputs: theirs
+        let mut gb = RustBoy::with_config(RustBoyConfig::default().soft_reset(true));
+        let mut inputs = InputManager::new();
+        inputs.on_press(PadButton::A, nop());
+        gb.add_inputs(inputs);
+        let out = gb.build().unwrap();
+        assert_eq!(out.matches("call UpdateKeys").count(), 1, "{}", out);
+        assert!(out.contains("call CheckSoftReset\n    jp Main"), "{}", out);
+        assert_links(&out);
+
+        // Off by default
+        assert!(!RustBoy::new().build().unwrap().contains("CheckSoftReset"));
+    }
+
+    #[test]
+    fn test_the_joypad_handler_selects_the_keys() {
+        let mut gb = RustBoy::new();
+        gb.on_joypad(nop());
+        let out = gb.build().unwrap();
+        // At start-up and at the end of each frame
+        assert_eq!(
+            out.matches("ld a, P1F_GET_BTN & P1F_GET_DPAD\n    ldh [rP1], a")
+                .count(),
+            2,
+            "{}",
+            out
+        );
+        assert!(out.contains("ld a, P1F_GET_BTN & P1F_GET_DPAD\n    ldh [rP1], a\n    jp Main"));
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_a_routine_handler_reads_no_register() {
+        // GetTileByPixel reads b and c: in a handler they hold what the interrupted code
+        // left there
+        let mut gb = RustBoy::new();
+        let routine = crate::stdlib::graphics::utility::get_tile_by_pixel();
+        let message = panic_message(|| gb.on_interrupt_routine(Interrupt::Timer, &routine));
+        assert!(
+            message.contains("routine `GetTileByPixel` reads bc"),
+            "{}",
+            message
+        );
+        // One that reads nothing is fine
+        gb.on_interrupt_routine(Interrupt::Timer, &crate::stdlib::interrupts::wait_frame());
+    }
+
+    #[test]
+    fn test_the_frame_flag_cannot_be_an_hram_variable() {
+        // In HRAM, a program without WRAM0 variables would put its raw Data code (without a
+        // SECTION) in the HRAM section (review of #37)
+        let mut gb = RustBoy::new();
+        let message = panic_message(|| gb.vars.create_hram_u8("wVBlankFlag", 0));
+        assert!(message.contains("main loop's frame flag"), "{}", message);
+        // In WRAM0 it is the program's, and build() uses it
+        gb.vars.create_u8("wVBlankFlag", 0);
+        gb.raw(|asm| {
+            asm.chunk(Chunk::Data).raw("wLonely: db");
+        });
+        let out = gb.build().unwrap();
+        assert!(
+            out.contains(
+                "SECTION \"Variables\", WRAM0[$C000]\n    wVBlankFlag: db\n    wLonely: db"
+            ),
+            "{}",
+            out
+        );
+        assert_eq!(out.matches("wVBlankFlag: db").count(), 1);
+        assert_links(&out);
+    }
+
+    #[test]
+    fn test_a_program_can_replace_wait_frame() {
+        // The VBlank handler still has its flag
+        let mut gb = RustBoy::new();
+        let mut body = Block::new();
+        body.label("WaitFrame").halt().ret();
+        gb.define_function("WaitFrame", body.into_instrs());
+        let out = gb.build().unwrap();
+        assert!(out.contains("WaitFrame:\n    halt\n    ret"), "{}", out);
+        assert!(out.contains("wVBlankFlag: db"));
+        assert_links(&out);
     }
 }

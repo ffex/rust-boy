@@ -260,8 +260,20 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Multiple bindings for the same button
 
 ### Engine
-- [ ] VBlank interrupt + `halt` main loop (instead of busy-polling `LY`)
-- [ ] Interrupts API (VBlank, STAT, Timer, Joypad) and timers
+- [x] VBlank interrupt + `halt` main loop (instead of busy-polling `LY`) (branch `refactor-p3-interrupts`: the vector
+      at `$40` jumps to `VBlankHandler`, which runs the `on_vblank` code and sets `wVBlankFlag`; the main loop starts
+      with `call WaitFrame`, which checks the flag and sleeps in `halt` with interrupts off, so no VBlank is missed;
+      `EntryPoint` starts with `di` and `ld sp, $FFFE`, `rIE` is set before the `init()` code, `rIF` cleared before
+      `ei`. Frame model in [CONTEXT.md](CONTEXT.md#key-concepts): game logic stays in the main loop, which starts in
+      VBlank right after the handler, and the OAM DMA of B12 goes first in the VBlank handler. The 3 `RustBoy`
+      examples' ROMs change; their emulator tests pass unchanged)
+- [x] Interrupts API (VBlank, STAT, Timer, Joypad) and timers (branch `refactor-p3-interrupts`:
+      `stdlib::interrupts` (`Interrupt`, vectors, handlers that save the registers their code changes, `WaitFrame`,
+      `enable` / `disable` / `set_enabled` / `clear_pending`, `Stat` and `configure_stat`, `Timer` / `TimerClock` and
+      `start_timer` / `stop_timer`); `RustBoy::on_interrupt`, `on_interrupt_routine` (saves the routine's
+      `Routine::changes`), `on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `enable_interrupt`, `disable_interrupt`;
+      `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
+      The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
 - [ ] Scenes / game states
 - [ ] Entities: spawn / despawn
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
@@ -270,7 +282,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
-- [ ] Soft reset (A+B+Start+Select)
+- [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
+      `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads
+      `wCurKeys` after `UpdateKeys` at the end of each frame and jumps to `$0100`, so the whole start-up runs again;
+      once per press: it needs the four buttons not all held since the last start-up, `wSoftResetArmed`)
 
 ### Platform
 - [ ] MBC1/MBC5 ROM banking (> 32 KB)

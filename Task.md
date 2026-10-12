@@ -300,6 +300,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       with another meaning; `set_animation_period` would tell them apart (an API rename)
 - [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
       coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
+- [ ] Follow-up of the animation events (from the review of the #50 chain, maintainer decision): re-enabling a finished
+      Once (switching away and back, or disable then enable) re-arms its event without replaying the frames, so the event
+      or callback fires again one period later; should re-arming need `restart_animation` instead? (documented today)
 
 ### Audio *(nothing exists today)*
 - [ ] APU init (sound on/off at boot), register constants in `hw`

@@ -594,6 +594,9 @@ impl SpriteManager {
     /// its last frame once per activation/restart; Loop reports last→first wrap;
     /// PingPong reports returning to its first frame. Single-frame loops report every
     /// update. Events describe shadow state; visibility follows at the next DMA.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`.
     pub fn enable_animation_events(&mut self, id: SpriteId, index: u8) {
         let sprite = self.sprite_mut(id);
         sprite.check_animation_index(index);
@@ -604,6 +607,9 @@ impl SpriteManager {
     /// called after all sprites step, once per completion. It may change selections
     /// or restart a whole composite; BC/DE/HL are preserved around it. Main-loop only.
     /// The function must be defined (or declared external) by build time.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`, or `callback` cannot be a label.
     pub fn set_animation_callback(&mut self, id: SpriteId, index: u8, callback: &str) {
         check_label("animation callback", callback);
         let sprite = self.sprite_mut(id);
@@ -615,7 +621,9 @@ impl SpriteManager {
 
     /// Load A with the pending event (0/1) and clear it. Z means none; changes AF only.
     /// Multiple unconsumed completions coalesce into one flag. Main-loop consumer only.
-    /// Panics unless events were enabled for this animation.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`, or its events are not enabled.
     pub fn take_animation_event(&self, id: SpriteId, index: u8) -> Vec<Instr> {
         let sprite = self.sprite(id);
         sprite.check_animation_index(index);
@@ -635,6 +643,9 @@ impl SpriteManager {
     /// completion latch and pending callback, plus direction/timer where present.
     /// Changes AF only. Timed sprites wait a full period before their next step;
     /// shared-clock sprites use the next global tick. Main-loop/init only.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`.
     pub fn restart_animation(&self, id: SpriteId, index: u8) -> Vec<Instr> {
         let sprite = self.sprite(id);
         sprite.check_animation_index(index);
@@ -679,11 +690,17 @@ impl SpriteManager {
         *parts.last().expect("composites have parts")
     }
     /// Enable one coalescing event per logical composite, reported by its last part.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`.
     pub fn enable_composite_animation_events(&mut self, id: CompositeSpriteId, index: u8) {
         let member = self.composite_event_member(id, index);
         self.enable_animation_events(member, index);
     }
     /// Bind one deferred callback per logical composite completion.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`, or `callback` cannot be a label.
     pub fn set_composite_animation_callback(
         &mut self,
         id: CompositeSpriteId,
@@ -694,10 +711,16 @@ impl SpriteManager {
         self.set_animation_callback(member, index, callback);
     }
     /// Consume the logical composite event; changes AF only.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`, or its events are not enabled.
     pub fn take_composite_animation_event(&self, id: CompositeSpriteId, index: u8) -> Vec<Instr> {
         self.take_animation_event(self.composite_event_member(id, index), index)
     }
     /// Restart all members together, validating every member before generating code.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`.
     pub fn restart_composite_animation(&self, id: CompositeSpriteId, index: u8) -> Vec<Instr> {
         self.composite_event_member(id, index);
         self.composite(id)
@@ -2700,6 +2723,43 @@ mod tests {
         cpu.run(&code);
         cpu.run(&sm.take_animation_event(sprite, 0));
         assert_eq!(cpu.a, 1);
+    }
+
+    #[test]
+    fn a_restart_from_an_earlier_callback_cancels_a_pending_callback() {
+        // Both Once animations end on the same frame; callbacks run in creation order, and
+        // the first one restarts the second sprite: its completion is gone with the restart,
+        // so its own callback must not run
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let first = sm.add_for_test("First", 0, 0, 0, 2);
+        let second = sm.add_for_test("Second", 0, 0, 2, 2);
+        for (sprite, callback) in [(first, "FirstDone"), (second, "SecondDone")] {
+            sm.add_animation(sprite, "Attack", 0, 1, AnimationType::Once);
+            sm.set_initial_animation(sprite, 0);
+            sm.set_animation_callback(sprite, 0, callback);
+        }
+        let mut code = animation_program(&sm, 1);
+        let mut callbacks = Block::new();
+        callbacks
+            .label("FirstDone")
+            .emit_all(sm.restart_animation(second, 0))
+            .ret()
+            .label("SecondDone")
+            .ld_a(1)
+            .ld_addr_def_a("wSecondCalled")
+            .ret();
+        code.extend(callbacks.into_instrs());
+        let mut cpu = animation_cpu(&sm);
+        cpu.mem.insert("wSecondCalled".to_string(), 0);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, first), 1, "the first Once ended");
+        assert_eq!(
+            shown_frame(&sm, &cpu, second),
+            0,
+            "the second one was restarted"
+        );
+        assert_eq!(cpu.mem["wAnim_Second_Attack_Pending"], 0);
+        assert_eq!(cpu.mem["wSecondCalled"], 0);
     }
 
     #[test]

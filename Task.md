@@ -81,7 +81,8 @@ Every fix comes with a test (unit or snapshot) whose generated asm **assembles**
       (branch `refactor-p1-animations`: both implemented; `PingPong` keeps its direction in `wAnim_{sprite}_Dir`)
 - [x] `gb.init()` code overwritten by variable initialisation — [B11](CONTEXT.md#b11)
       (branch `refactor-p1-init-order`: variables and palettes are set before the user code, LCD on stays last)
-- [ ] Direct OAM access from the main loop (no shadow OAM / DMA) — [B12](CONTEXT.md#b12) *(implementation in Phase 3 graphics)*
+- [x] Direct OAM access from the main loop (no shadow OAM / DMA) — [B12](CONTEXT.md#b12) (Phase 3 graphics, branch
+      `refactor-codex-p3-sprites`: the shadow OAM and its OAM DMA, below)
 
 ### P2
 - [x] `build()` not idempotent — [B14](CONTEXT.md#b14) (branch `refactor-p1-duplicate-vars`); `build(&self)` stays a Phase 2 item
@@ -233,9 +234,22 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 ## Phase 3 — Missing features
 
 ### Graphics
-- [ ] Shadow OAM in WRAM + OAM DMA routine in HRAM (fixes [B12](CONTEXT.md#b12)); then turn
+- [x] Shadow OAM in WRAM + OAM DMA routine in HRAM (fixes [B12](CONTEXT.md#b12)); then turn
       `b12_oam_written_outside_vblank_is_lost` (`tests/emulator.rs`, today's behaviour) into the check that the sprite moves
-- [ ] VRAM write queue flushed during VBlank (tilemap edits, score)
+      (branch `refactor-codex-p3-sprites`: `wShadowOAM` on the last page of WRAM0 and `hOAMDMA` at the top of the variables'
+      HRAM, allocated at the top of their region (`MemoryAllocator::allocate_top`) so no variable moves; `InitOamDma` copies
+      the routine at start-up, the VBlank handler runs the DMA first; `stdlib::graphics::oam` for `stdlib` programs, which
+      `unbricked_std` uses. `b12_sprite_moves_whatever_the_main_loop_delay`: the sprite moves one pixel a frame after 0 to
+      2300 `Delay` iterations (the old engine fails it); the 4 examples with sprites change by design, their tests pass,
+      with every DMA in VBlank)
+- [x] VRAM write queue flushed during VBlank (tilemap edits, score)
+      (branch `refactor-codex-p3-vram-queue`: `RustBoy::queue_vram_write` and
+      `queue_vram_write_from_registers`, 12 pending byte writes in 41 WRAM bytes; carry reports rejection
+      on full/invalid runtime address. Single producer in init/main (`Error::MainLoopOnly` from a handler), cursor
+      published last, IME preserved;
+      flush after OAM DMA, before user VBlank code, late entries deferred. Emulator tests inject VBlank at every
+      enqueue instruction boundary and check delayed main-loop writes, late flush and the full queue plus DMA
+      handler (967 M-cycles, within 1140); standalone routines in `stdlib::graphics::vram_queue`)
 - [ ] Background scrolling (`SCX`/`SCY`), camera helpers
 - [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`

@@ -75,6 +75,9 @@ impl MemoryRegion {
 pub struct MemoryAllocator {
     region: MemoryRegion,
     next_address: u16,
+    /// The end (exclusive) of what [`allocate`](Self::allocate) may hand out: the region's
+    /// end, lowered by each [`allocate_top`](Self::allocate_top)
+    end: u16,
 }
 
 impl MemoryAllocator {
@@ -83,6 +86,7 @@ impl MemoryAllocator {
         Self {
             region,
             next_address: region.start_address(),
+            end: region.end_address(),
         }
     }
 
@@ -92,12 +96,45 @@ impl MemoryAllocator {
         let addr = self.next_address;
         let new_next = self.next_address.checked_add(size)?;
 
-        if new_next > self.region.end_address() {
+        if new_next > self.end {
             return None;
         }
 
         self.next_address = new_next;
         Some(addr)
+    }
+
+    /// Allocate `size` bytes at the top of what is left, at an address that is a multiple
+    /// of `2^align_bits`, and return it; `None` if they do not fit (nothing is allocated)
+    ///
+    /// The bottom ([`allocate`](Self::allocate)) and the top grow towards each other, so
+    /// what is allocated at the top moves nothing allocated at the bottom: `RustBoy` puts
+    /// its buffers there (the shadow OAM, aligned to a page for the OAM DMA), so the
+    /// program's variables keep the addresses they would have without them.
+    pub fn allocate_top(&mut self, size: u16, align_bits: u8) -> Option<u16> {
+        let mask = 1u16.checked_shl(u32::from(align_bits))?.wrapping_sub(1);
+        let start = self.end.checked_sub(size)? & !mask;
+        if start < self.next_address {
+            return None;
+        }
+        self.end = start;
+        Some(start)
+    }
+
+    /// [`allocate_top`](Self::allocate_top), or [`Error::MemoryFull`] naming `what`
+    pub(crate) fn try_allocate_top(
+        &mut self,
+        size: u16,
+        align_bits: u8,
+        what: &str,
+    ) -> Result<u16, Error> {
+        self.allocate_top(size, align_bits)
+            .ok_or_else(|| Error::MemoryFull {
+                region: self.region,
+                what: what.to_string(),
+                needed: size.into(),
+                available: self.bytes_remaining().into(),
+            })
     }
 
     /// Allocate `size` bytes for `what` (e.g. ``variable `wScore` (2 bytes)``) and return
@@ -138,7 +175,7 @@ impl MemoryAllocator {
 
     /// Get how many bytes remain available
     pub fn bytes_remaining(&self) -> u16 {
-        self.region.end_address() - self.next_address
+        self.end - self.next_address
     }
 
     /// Format address as hex string for assembly
@@ -174,6 +211,34 @@ mod tests {
 
         let addr2 = alloc.allocate(2).unwrap();
         assert_eq!(addr2, 0xC001);
+    }
+
+    #[test]
+    fn test_allocation_at_the_top() {
+        let mut alloc = MemoryAllocator::new(MemoryRegion::Wram0);
+        assert_eq!(alloc.allocate(2), Some(0xC000));
+        // A page-aligned block at the top, then a 64-aligned one below it
+        assert_eq!(alloc.allocate_top(160, 8), Some(0xCF00));
+        assert_eq!(alloc.allocate_top(51, 6), Some(0xCEC0));
+        assert_eq!(alloc.bytes_remaining(), 0xCEC0 - 0xC002);
+        // The bottom grows up to the top, not into it
+        assert_eq!(alloc.allocate(0xCEC0 - 0xC002), Some(0xC002));
+        assert_eq!(alloc.allocate(1), None);
+        assert_eq!(alloc.allocate_top(1, 0), None);
+        // HRAM: 8 bytes at the top of the variables' 64
+        let mut alloc = MemoryAllocator::new(MemoryRegion::Hram);
+        assert_eq!(alloc.allocate_top(8, 0), Some(0xFFB8));
+        assert_eq!(alloc.bytes_remaining(), 56);
+        // What does not fit is not allocated
+        let mut alloc = MemoryAllocator::new(MemoryRegion::Hram);
+        assert_eq!(alloc.allocate(60), Some(0xFF80));
+        assert_eq!(alloc.allocate_top(8, 0), None);
+        assert_eq!(alloc.allocate_top(4, 0), Some(0xFFBC));
+        let message = alloc
+            .try_allocate_top(1, 0, "the routine `hX`")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("the routine `hX`"), "{}", message);
     }
 
     #[test]

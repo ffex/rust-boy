@@ -8,6 +8,7 @@ use crate::hw;
 use crate::stdlib::graphics::utility::{
     get_tile_by_pixel, is_specific_tile, memcopy, wait_not_vblank, wait_vblank,
 };
+use crate::stdlib::graphics::vram_queue;
 use crate::stdlib::inputs::update_keys;
 use crate::stdlib::utility::delay;
 
@@ -138,6 +139,40 @@ fn test_memcopy_convention() {
 }
 
 #[test]
+fn test_vram_queue_conventions() {
+    let producer = |offset: u8, value: u8| {
+        move |cpu: &mut TestCpu| {
+            cpu.mem.insert(vram_queue::READ.to_string(), offset);
+            cpu.mem.insert(vram_queue::WRITE.to_string(), offset);
+            let mut inputs = Block::new();
+            inputs
+                .ld(R16::HL, Expr::hex(hw::SCRN0.value + 0x17))
+                .ld(R8::A, value);
+            load(cpu, inputs);
+        }
+    };
+    check_convention(
+        &vram_queue::enqueue(),
+        &[&producer(0, 7), &producer(36, 42)],
+    );
+    let consumer = |value: u8| {
+        move |cpu: &mut TestCpu| {
+            producer(0, value)(cpu);
+            cpu.run(vram_queue::enqueue().body());
+            cpu.mem.insert(hw::LY.name.to_string(), 144);
+            let mut registers = Block::new();
+            registers
+                .ld(R8::A, 0x71)
+                .ld(R16::BC, 0x2345)
+                .ld(R16::DE, 0x6789)
+                .ld(R16::HL, 0x0ABC);
+            load(cpu, registers);
+        }
+    };
+    check_convention(&vram_queue::flush(), &[&consumer(7), &consumer(42)]);
+}
+
+#[test]
 fn test_vblank_waits_convention() {
     // In VBlank (LY 144 to 153) WaitVBlank returns at once; out of it, WaitNotVBlank does
     let ly = |value: u8| {
@@ -214,6 +249,39 @@ fn test_delay_convention() {
     };
     let (zero, five) = (count(0), count(5));
     check_convention(&delay(), &[&zero, &five]);
+}
+
+/// `InitOamDma` copies the 8 bytes of the OAM DMA routine to `hOAMDMA` in HRAM ($FFB8
+/// in a `RustBoy` program), through `ldh [c], a`
+#[test]
+fn test_init_oam_dma_convention() {
+    use crate::stdlib::graphics::oam::{init_oam_dma, oam_dma_size};
+    let setup = |cpu: &mut TestCpu| {
+        cpu.consts
+            .insert("OamDmaCodeEnd - OamDmaCode".to_string(), 8);
+        cpu.consts.insert("LOW(hOAMDMA)".to_string(), 0xB8);
+        for i in 0..8 {
+            cpu.mem.insert(format!("OamDmaCode+{}", i), 0x10 + i);
+        }
+        // The routine's first byte has the label's name
+        cpu.mem.insert("OamDmaCode".to_string(), 0x10);
+    };
+    check_convention(&init_oam_dma(), &[&setup]);
+    let mut cpu = TestCpu::default();
+    setup(&mut cpu);
+    cpu.run(&init_oam_dma().code_with_deps());
+    // $FFB8: the top 8 bytes of the 64 HRAM bytes a `RustBoy` program gives its variables
+    let routine = hw::HRAM.value + 0x38;
+    for i in 0..oam_dma_size() {
+        assert_eq!(
+            cpu.mem.get(&format!("${:04X}", routine + i)),
+            Some(&(0x10 + i as u8)),
+            "byte {} in HRAM",
+            i
+        );
+    }
+    let past = format!("${:04X}", routine + oam_dma_size());
+    assert_eq!(cpu.mem.get(&past), None, "nothing past the routine");
 }
 
 #[test]

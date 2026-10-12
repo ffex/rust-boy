@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
+use rust_boy::stdlib::graphics::vram_queue;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
 
@@ -624,7 +625,8 @@ hReadFirstFree: ds 1
 // ----- The examples -----
 
 /// Every CPU write to OAM with the LCD on happened in VBlank and none was dropped: the
-/// main loop of the example fits in VBlank, so it does not run into [B12] today
+/// hand-written examples (`unbricked`, `basic_usage`) write OAM from a main loop that fits
+/// in VBlank, so they do not run into [B12]
 ///
 /// [B12]: ../CONTEXT.md#b12
 fn assert_oam_written_in_vblank(gb: &GameBoy) {
@@ -639,6 +641,46 @@ fn assert_oam_written_in_vblank(gb: &GameBoy) {
         outside.len(),
         outside.first()
     );
+    assert_eq!(
+        gb.blocked_accesses(),
+        (0, 0, 0),
+        "VRAM / OAM accesses the PPU blocked"
+    );
+}
+
+/// The sprites reach OAM only through OAM DMAs of the shadow OAM, in VBlank ([B12]): the
+/// CPU never writes OAM with the LCD on (the start-up clears the shadow OAM, not OAM),
+/// every OAM DMA with the LCD on copies `wShadowOAM` and starts and ends in VBlank, one a
+/// frame, and no access was blocked (no DMA conflict either: the DMA routine runs from HRAM)
+///
+/// [B12]: ../CONTEXT.md#b12
+fn assert_sprites_shown_by_dma_in_vblank(gb: &GameBoy) {
+    let written: Vec<_> = gb.oam_writes().iter().filter(|w| w.lcd_on).collect();
+    assert!(
+        written.is_empty(),
+        "{} CPU writes to OAM with the LCD on, the first: {:?}",
+        written.len(),
+        written.first()
+    );
+    let shadow = gb.symbol("wShadowOAM");
+    let dmas: Vec<_> = gb.oam_dmas().iter().filter(|dma| dma.lcd_on).collect();
+    let frames = gb.frame();
+    assert!(
+        dmas.len() as u64 + 3 >= frames,
+        "{} OAM DMAs with the LCD on in {} frames",
+        dmas.len(),
+        frames
+    );
+    for dma in &dmas {
+        assert_eq!(dma.source, shadow, "a DMA of the shadow OAM: {:?}", dma);
+        let in_vblank = |(ly, mode): (u8, Mode)| (144..=153).contains(&ly) && mode == Mode::VBlank;
+        assert!(
+            in_vblank(dma.first) && dma.last.is_some_and(in_vblank),
+            "a DMA outside VBlank: {:?}",
+            dma
+        );
+    }
+    assert_eq!(gb.dma_conflicts(), 0, "the CPU left HRAM during a DMA");
     assert_eq!(
         gb.blocked_accesses(),
         (0, 0, 0),
@@ -685,7 +727,6 @@ fn check_unbricked(bin: &str) -> GameBoy {
     let x = gb.oam_entry(0)[1];
     assert!((35..=36).contains(&x), "the paddle moved right: X {}", x);
     assert_eq!(gb.oam_entry(0)[0], 144, "the paddle stays on its row");
-    assert_oam_written_in_vblank(&gb);
     gb
 }
 
@@ -730,6 +771,7 @@ fn unbricked_ball_bounces_paddle_moves_bricks_break() {
         return;
     }
     let gb = check_unbricked("unbricked");
+    assert_oam_written_in_vblank(&gb);
     assert!(bricks(&gb) < 32, "bricks broke: {} left", bricks(&gb));
     assert!(gb.read_symbol("wScore") > 0, "the score went up");
 }
@@ -739,7 +781,8 @@ fn unbricked_std_ball_bounces_paddle_moves() {
     if !rgbds_enabled() {
         return;
     }
-    check_unbricked("unbricked_std");
+    let gb = check_unbricked("unbricked_std");
+    assert_sprites_shown_by_dma_in_vblank(&gb);
 }
 
 #[test]
@@ -748,6 +791,7 @@ fn unbricked_rustboy_ball_bounces_paddle_moves_bricks_break() {
         return;
     }
     let gb = check_unbricked("unbricked_rustboy");
+    assert_sprites_shown_by_dma_in_vblank(&gb);
     assert!(bricks(&gb) < 32, "bricks broke: {} left", bricks(&gb));
     // The momentum variables are what the bounces change
     let momentum_x = gb.read_symbol("wBallMomentumX");
@@ -806,7 +850,7 @@ fn fosdem_player_walks_as_one_block_with_its_animation() {
     assert_eq!(gb.oam_entry(1)[1], 9);
     gb.run_script(&[(100, &[Button::Up])]);
     assert_eq!(gb.oam_entry(0)[0], 1, "the top limit, 1");
-    assert_oam_written_in_vblank(&gb);
+    assert_sprites_shown_by_dma_in_vblank(&gb);
 }
 
 #[test]
@@ -853,7 +897,7 @@ fn coin_anim_a_starts_the_animation_b_stops_it() {
     let stopped = gb.oam_entry(0)[2];
     gb.run_frames(40);
     assert_eq!(gb.oam_entry(0)[2], stopped, "B stopped the animation");
-    assert_oam_written_in_vblank(&gb);
+    assert_sprites_shown_by_dma_in_vblank(&gb);
 }
 
 // ----- The engine's frame model and interrupts -----
@@ -1376,7 +1420,7 @@ fn engine_soft_reset() {
     assert!(gb.read_symbol("wFrames") < 10);
 }
 
-// ----- B12: OAM written outside VBlank -----
+// ----- B12: the shadow OAM and the OAM DMA -----
 
 /// A program whose main loop moves a sprite one pixel right every frame, after
 /// `delay` iterations of the `Delay` routine (about 7 M-cycles each)
@@ -1396,57 +1440,325 @@ fn moving_sprite_rom(delay: u16) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
 }
 
-/// [B12], today's behaviour: the engine moves a sprite by writing OAM from the main loop.
-/// While the main loop fits in VBlank the sprite moves one pixel a frame; once the code
-/// before the move outlasts VBlank (~1140 M-cycles), the move runs in the visible part of
-/// the frame, and what happens depends on where in the line it lands: in HBlank it works,
-/// in mode 2 or 3, while the PPU owns OAM, the read gives `$FF` and the write is dropped.
-/// With 1004 iterations of `Delay` (1002 to 1007 give the same) it lands in mode 3 of line
-/// 52 on every frame, so the sprite never moves. (It was 1008, 1006 to 1011, when the main
-/// loop polled `rLY` for VBlank: the frame's work now starts after the VBlank interrupt, its
-/// handler and `WaitFrame`'s return, about 28 M-cycles later.)
-///
-/// When shadow OAM + DMA lands (Phase 3, graphics), the delayed program must move its
-/// sprite like the other one: turn the second half of this test into that check.
+/// [B12], fixed: the engine moves a sprite in the shadow OAM, in WRAM, and the VBlank
+/// handler copies it to OAM with an OAM DMA, so the sprite moves one pixel a frame whatever
+/// the main loop does before the move. Before the fix the move wrote OAM itself: with 1004
+/// iterations of `Delay` (1002 to 1007 gave the same) it landed in mode 3 of line 52 on
+/// every frame, where the read gave `$FF` and the write was dropped, so the sprite never
+/// moved. Here the delays put the move in VBlank (0), in mode 3 of line 52 (1004), and at
+/// many other points of the frame, up to the end of its visible lines.
 ///
 /// [B12]: ../CONTEXT.md#b12
 #[test]
-fn b12_oam_written_outside_vblank_is_lost() {
+fn b12_sprite_moves_whatever_the_main_loop_delay() {
     if !rgbds_enabled() {
         return;
     }
-    // Within VBlank: the sprite (OAM X = 8 + 8) moves 1 pixel a frame
-    let mut gb = moving_sprite_rom(0).boot();
-    gb.run_frames(10);
-    let x = gb.oam_entry(0)[1];
-    gb.run_frames(60);
-    assert_eq!(gb.oam_entry(0)[1], x.wrapping_add(60));
-    assert_oam_written_in_vblank(&gb);
-
-    // After the delay the move runs mid-frame, in mode 3
-    let mut gb = moving_sprite_rom(1004).boot();
-    gb.run_frames(10);
-    let x = gb.oam_entry(0)[1];
-    let before = gb.oam_writes().len();
-    let blocked_reads = gb.blocked_accesses().2;
-    gb.run_frames(60);
-    let moves: Vec<_> = gb.oam_writes()[before..].to_vec();
-    assert_eq!(moves.len(), 60, "one OAM write a frame");
+    let delays = [0, 1, 300, 1004, 1005, 1500, 2000, 2300];
+    let runs: Vec<(u16, GameBoy, u8, usize)> = delays
+        .into_iter()
+        .map(|delay| {
+            let mut gb = moving_sprite_rom(delay).boot();
+            gb.run_frames(10);
+            let x = gb.oam_entry(0)[1];
+            let dmas = gb.oam_dmas().len();
+            gb.run_frames(60);
+            (delay, gb, x, dmas)
+        })
+        .collect();
+    // First the sprite, for every delay: before the fix it stood still from 1002 to 1007
+    let stuck: Vec<(u16, u8, u8)> = runs
+        .iter()
+        .filter(|(_, gb, x, _)| gb.oam_entry(0)[1] != x.wrapping_add(60))
+        .map(|(delay, gb, x, _)| (*delay, *x, gb.oam_entry(0)[1]))
+        .collect();
     assert!(
-        moves
-            .iter()
-            .all(|write| write.lcd_on && write.mode == Mode::Drawing && write.dropped),
-        "every write lands in mode 3 and is dropped: {:?}",
-        moves.first()
+        stuck.is_empty(),
+        "the sprite did not move one pixel a frame (delay, X before, X 60 frames later): {:?}",
+        stuck
     );
+    // Then how it got there: one OAM DMA of the shadow OAM a frame, in VBlank
+    for (delay, gb, _, dmas) in &runs {
+        assert_eq!(
+            gb.oam_dmas().len() - dmas,
+            60,
+            "delay {}: one OAM DMA a frame",
+            delay
+        );
+        assert_sprites_shown_by_dma_in_vblank(gb);
+    }
+}
+
+/// The VBlank handler of `rom` over 10 frames: the M-cycles from its first instruction to
+/// the end of its `reti`, and `LY` / the PPU mode there (the first `reti` the CPU reaches
+/// from `VBlankHandler`: the handler has one, at its end)
+fn vblank_handler_runs(rom: &Rom, frames: usize) -> Vec<(u64, u8, Mode)> {
+    let mut gb = rom.boot();
+    gb.run_frames(5);
+    let handler = gb.symbol("VBlankHandler");
+    let mut runs = Vec::new();
+    for _ in 0..frames {
+        assert!(gb.run_until_pc(handler, 2), "the VBlank handler runs");
+        let start = gb.cycles();
+        while gb.read(gb.registers().pc) != 0xD9 {
+            gb.step();
+        }
+        gb.step();
+        let (ly, mode) = gb.ly_mode();
+        runs.push((gb.cycles() - start, ly, mode));
+    }
+    runs
+}
+
+/// The VBlank handler's work fits in VBlank (1140 M-cycles from line 144): the OAM DMA of
+/// the shadow OAM (B12) takes about 180 M-cycles with its call, and the handler ends long
+/// before line 0, where OAM is the PPU's again
+#[test]
+fn engine_vblank_handler_fits_in_vblank() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for delay in [0, 1004] {
+        let runs = vblank_handler_runs(&moving_sprite_rom(delay), 10);
+        for &(cycles, ly, mode) in &runs {
+            assert!(
+                (144..=153).contains(&ly) && mode == Mode::VBlank,
+                "the handler ended on line {} ({:?}) after {} M-cycles",
+                ly,
+                mode,
+                cycles
+            );
+        }
+        let cycles = runs[0].0;
+        assert!(
+            runs.iter().all(|run| run.0 == cycles),
+            "the same work every frame: {:?}",
+            runs
+        );
+        // push af, the DMA (ld a, call, the 168 M-cycles of the routine), the frame flag,
+        // pop af, reti
+        assert!((180..=230).contains(&cycles), "{} M-cycles", cycles);
+        eprintln!("VBlank handler with the OAM DMA: {} M-cycles", cycles);
+    }
+}
+
+// ----- Queued VRAM writes -----
+
+/// Fill the queue in initialization (overflow is reported), then queue a full batch
+/// every frame. Optionally delay the producer into mode 3. OAM DMA shares the handler.
+fn vram_queue_rom(delay: u16) -> Rom {
+    let mut game = RustBoy::new();
+    game.add_sprite(
+        "QueueDot",
+        TileSource::from_raw(&[["`33333333"; 8]]),
+        8,
+        8,
+        0,
+    );
+    game.vars.create_u8("wRejectedWrites", 0);
+    let mut init = Block::new();
+    for i in 0..=vram_queue::CAPACITY {
+        init.emit_all(game.queue_vram_write(hw::SCRN0.value + u16::from(i), i + 1));
+        let accepted = game.labels().local("queue_accepted");
+        init.jr_cond(Condition::NC, &accepted)
+            .ld(R16::HL, "wRejectedWrites")
+            .inc(R8::AtHl)
+            .label(&accepted);
+    }
+    init.label("QueueInitDone");
+    game.init(init);
+    let mut work = Block::new();
+    if delay != 0 {
+        work.ld(R16::BC, delay).call("Delay");
+    }
+    work.label("QueueBatchStart");
+    for i in 0..vram_queue::CAPACITY {
+        work.emit_all(game.queue_vram_write(hw::SCRN1.value + u16::from(i), 100 + i));
+    }
+    game.add_to_main_loop(work);
+    Rom::build(&game.build().unwrap(), &[])
+}
+
+#[test]
+fn engine_vram_queue_full_batch_fits_with_oam_dma() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let rom = vram_queue_rom(0);
+    let mut gb = rom.boot();
+    assert!(gb.run_until_pc(gb.symbol("QueueInitDone"), 3));
+    assert!(
+        !gb.registers().ime,
+        "enqueue preserved disabled IME during init"
+    );
+    assert_eq!(gb.read_symbol("wRejectedWrites"), 1, "overflow is rejected");
     assert_eq!(
-        gb.oam_entry(0)[1],
-        x,
-        "today (B12) the sprite does not move"
+        gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)],
+        0,
+        "enqueue did not write VRAM before the first flush"
     );
+    gb.run_frames(5);
+    for i in 0..vram_queue::CAPACITY {
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value) + usize::from(i)],
+            i + 1
+        );
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN1.value - hw::VRAM.value) + usize::from(i)],
+            100 + i
+        );
+    }
     assert_eq!(
-        gb.blocked_accesses().2 - blocked_reads,
-        60,
-        "and each read of the sprite's X gave $FF"
+        gb.vram()
+            [usize::from(hw::SCRN0.value - hw::VRAM.value) + usize::from(vram_queue::CAPACITY)],
+        0
     );
+    let runs = vblank_handler_runs(&rom, 20);
+    for &(cycles, ly, mode) in &runs {
+        assert_eq!(
+            mode,
+            Mode::VBlank,
+            "handler ended after {cycles} cycles, line {ly}"
+        );
+        assert!(
+            cycles < u64::from(hw::VBLANK_MCYCLES) - 100,
+            "full queue plus DMA left less than 100 M-cycles: {cycles}"
+        );
+    }
+    eprintln!(
+        "Full VRAM queue and OAM DMA handler: {} M-cycles",
+        runs[0].0
+    );
+}
+
+#[test]
+fn engine_vram_queue_writes_in_vblank_even_with_delayed_game_logic() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let rom = vram_queue_rom(1004);
+    let mut gb = rom.boot();
+    let end = u64::from(hw::LINE_MCYCLES) * 154 * 12;
+    let write = gb.symbol("FlushVramQueue.write");
+    let mut count = 0;
+    while gb.cycles() < end {
+        if gb.registers().pc == write {
+            let (ly, mode) = gb.ly_mode();
+            assert_eq!(mode, Mode::VBlank, "VRAM write on line {ly}");
+            count += 1;
+        }
+        gb.step();
+    }
+    assert!(count > 50, "queue flushed only {count} entries");
+    assert_eq!(gb.blocked_accesses().0, 0);
+    assert_sprites_shown_by_dma_in_vblank(&gb);
+    for i in 0..vram_queue::CAPACITY {
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN1.value - hw::VRAM.value) + usize::from(i)],
+            100 + i
+        );
+    }
+}
+
+#[test]
+fn engine_vram_queue_publish_is_safe_at_every_instruction_boundary() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut work = Block::new();
+    work.emit_all(game.queue_vram_write(hw::SCRN0, 17))
+        .label("QueueInjectionBegin")
+        .emit_all(game.queue_vram_write(hw::SCRN0, 34))
+        .label("QueueInjectionDone")
+        .label(".park")
+        .halt()
+        .jr(".park");
+    game.add_to_main_loop(work);
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let begin = rom.symbols["QueueInjectionBegin"];
+    let done = rom.symbols["QueueInjectionDone"];
+    let enqueue = rom.symbols["QueueVramWrite"];
+    let mut reference = rom.boot();
+    assert!(reference.run_until_pc(begin, 3));
+    assert!(reference.run_until_pc(enqueue, 1));
+    let mut boundaries = Vec::new();
+    while reference.registers().pc != done {
+        boundaries.push(reference.registers().pc);
+        reference.step();
+        assert!(boundaries.len() < 100);
+    }
+    assert!(boundaries.len() > 20);
+    for boundary in boundaries {
+        let mut gb = rom.boot();
+        assert!(gb.run_until_pc(begin, 3));
+        assert!(gb.run_until_pc(enqueue, 1));
+        assert!(gb.run_until_pc(boundary, 1));
+        assert_eq!(gb.ly_mode().1, Mode::VBlank);
+        let before = gb.registers();
+        assert!(before.ime);
+        // Only a published entry may be consumed, even if every data byte has already
+        // been written. The interrupt must preserve the producer's registers and stack.
+        let expected = if gb.read_symbol(vram_queue::WRITE) == 6 {
+            34
+        } else {
+            17
+        };
+        gb.request_interrupt(hw::IEF_VBLANK.value);
+        gb.step();
+        assert!(gb.run_until_pc(boundary, 1));
+        assert_eq!(gb.registers(), before, "registers at ${boundary:04X}");
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)],
+            expected,
+            "partial entry at ${boundary:04X}"
+        );
+        assert!(gb.run_until_pc(done, 1));
+        assert!(gb.registers().ime, "enqueue preserved enabled IME");
+        gb.run_frames(2);
+        assert_eq!(gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)], 34);
+        assert_eq!(
+            gb.read_symbol(vram_queue::READ),
+            gb.read_symbol(vram_queue::WRITE)
+        );
+        assert_eq!(gb.blocked_accesses().0, 0);
+    }
+}
+
+#[test]
+fn engine_vram_queue_late_flush_leaves_entries_for_the_next_vblank() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut work = Block::new();
+    work.di()
+        .emit_all(game.queue_vram_write(hw::SCRN0, 42))
+        .label("WaitLastVblankLine")
+        .ld_a_addr_def(hw::LY)
+        .cp(153)
+        .jr_cond(Condition::NZ, "WaitLastVblankLine")
+        .call("FlushVramQueue")
+        .label("QueueDeferred")
+        .ei()
+        .label(".park")
+        .halt()
+        .jr(".park");
+    game.add_to_main_loop(work);
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let mut gb = rom.boot();
+    assert!(gb.run_until_pc(gb.symbol("QueueDeferred"), 3));
+    assert_ne!(
+        gb.read_symbol(vram_queue::READ),
+        gb.read_symbol(vram_queue::WRITE)
+    );
+    assert_eq!(gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)], 0);
+    assert!(!gb.registers().ime, "flush preserved disabled IME");
+    gb.run_frames(2);
+    assert_eq!(gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)], 42);
+    assert_eq!(
+        gb.read_symbol(vram_queue::READ),
+        gb.read_symbol(vram_queue::WRITE)
+    );
+    assert_eq!(gb.blocked_accesses().0, 0);
 }

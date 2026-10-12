@@ -87,6 +87,15 @@ pub enum Error {
     /// RAM section (it only reserves space), or a section name used twice; the message is
     /// the asm layer's
     Section(String),
+    /// Code of an interrupt handler reaches a routine that only start-up and main-loop code
+    /// may run: `QueueVramWrite`, since the VRAM queue has one producer (an interrupt in the
+    /// middle of the main loop's write would fill the same entry)
+    MainLoopOnly {
+        /// The routine, e.g. `QueueVramWrite`
+        routine: String,
+        /// The handler whose code reaches it, e.g. `TimerHandler`
+        handler: String,
+    },
 }
 
 /// What a name is defined as, in an [`Error::NameConflict`]
@@ -102,6 +111,12 @@ pub enum Definition {
     GeneratedVariable(VarType),
     /// A function `build()` generates (an animation's, `Anim_{sprite}_{animation}`)
     GeneratedFunction,
+    /// A block of RAM `build()` reserves for the code it generates (the shadow OAM
+    /// `wShadowOAM`, the OAM DMA routine `hOAMDMA`)
+    GeneratedBuffer,
+    /// A label of a builtin routine's code (`OamDmaCode` and `OamDmaCodeEnd`, the OAM DMA
+    /// code that `InitOamDma` copies to HRAM)
+    BuiltinLabel,
     /// A symbol defined outside the generated code (`RustBoy::external_symbol`)
     ExternalSymbol,
     /// A constant or a label of the program's code (`define_const`, a `DEF` or a label in
@@ -120,6 +135,13 @@ impl fmt::Display for Definition {
             Definition::GeneratedFunction => {
                 write!(f, "a function build() generates (an animation's)")
             }
+            Definition::GeneratedBuffer => {
+                write!(f, "a block of RAM build() reserves (the shadow OAM, ...)")
+            }
+            Definition::BuiltinLabel => write!(
+                f,
+                "a label of a builtin routine (the OAM DMA code InitOamDma copies to HRAM)"
+            ),
             Definition::ExternalSymbol => write!(
                 f,
                 "an external symbol (a function is defined either with define_function or \
@@ -171,6 +193,12 @@ impl fmt::Display for Error {
                 available
             ),
             Error::Section(message) => write!(f, "invalid program: {}", message),
+            Error::MainLoopOnly { routine, handler } => write!(
+                f,
+                "`{}` reaches `{}`, which only start-up and main-loop code may call: an \
+                 interrupt in the middle of the main loop's call would lose a write",
+                handler, routine
+            ),
         }
     }
 }

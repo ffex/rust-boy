@@ -6,7 +6,9 @@ use crate::asm::labels::defines;
 use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, is_identifier};
 use crate::hw;
 use crate::stdlib::flow::Emittable;
-use crate::stdlib::graphics::sprites::{clear_objects_screen, initialize_objects_screen};
+use crate::stdlib::graphics::oam::{self, OamTarget};
+use crate::stdlib::graphics::sprites::{clear_objects_screen, initialize_oam};
+use crate::stdlib::graphics::vram_queue;
 use crate::stdlib::inputs::select_all_keys;
 use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
@@ -16,6 +18,7 @@ use super::error::Error;
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
 use super::layout::{Chunk, Layout};
+use super::memory::MemoryRegion;
 use super::sprites::{SpriteManager, SpriteSize, SpriteTiles, check_name};
 use super::tiles::{TileManager, TilemapArea};
 use super::variables::VariableManager;
@@ -78,6 +81,9 @@ pub struct RustBoy {
     /// reads the keys it updates
     updates_keys: bool,
 
+    /// Whether the program uses the bounded VRAM write queue.
+    vram_queue: bool,
+
     /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
     /// builtins, animation delay. The sprite size is also the sprite manager's, which
     /// needs it when a sprite is added: `with_config` and `set_sprite_size` set both
@@ -123,6 +129,7 @@ impl RustBoy {
             handlers: BTreeMap::new(),
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
+            vram_queue: false,
             config,
         }
     }
@@ -702,11 +709,19 @@ impl RustBoy {
         startup.emit_all(self.tiles.generate_memcopy_calls());
 
         // Clear the whole OAM, with or without sprites: objects are always turned on
-        // below, and OAM holds garbage at power-on (B28)
-        startup.emit_all(initialize_objects_screen());
-        startup.emit_all(clear_objects_screen(&labels));
-        if !self.sprites.is_empty() {
+        // below, and OAM holds garbage at power-on (B28). With sprites, the program writes
+        // them to the shadow OAM (B12): the OAM DMA routine goes to HRAM, the shadow OAM is
+        // cleared and gets the sprites, and a first OAM DMA copies it to OAM, so the first
+        // frame shows them; then the VBlank handler copies it every frame
+        if self.uses_shadow_oam() {
+            startup.call(BuiltinFunction::InitOamDma.label());
+            startup.emit_all(initialize_oam(OamTarget::Shadow));
+            startup.emit_all(clear_objects_screen(&labels));
             startup.emit_all(self.sprites.generate_init_code());
+            startup.emit_all(oam::run_oam_dma());
+        } else {
+            startup.emit_all(initialize_oam(OamTarget::Oam));
+            startup.emit_all(clear_objects_screen(&labels));
         }
 
         // The palettes, every one of them (OBP1 too, B28); `a` is loaded again only for
@@ -729,6 +744,9 @@ impl RustBoy {
         // init code, after every default it may want to change: variables, animations,
         // palettes, OAM (B11), interrupts. The LCD is still off, so it can write VRAM.
         let mut finish = Block::new();
+        if self.vram_queue {
+            finish.emit_all(vram_queue::initialize());
+        }
         if let Some(stat) = self.config.stat {
             finish.emit_all(interrupts::configure_stat(stat));
         }
@@ -876,9 +894,122 @@ impl RustBoy {
         code.extend(handlers.iter().map(Routine::body));
         let mut generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
         generated.extend(handlers.iter().map(|handler| handler.name().to_string()));
+        // The VRAM queue has one producer, the main loop: no handler may enqueue
+        let enqueue = vram_queue::enqueue();
+        for (interrupt, handler) in &self.handlers {
+            if self.functions.reaches(&handler.code, enqueue.name()) {
+                return Err(Error::MainLoopOnly {
+                    routine: enqueue.name().to_string(),
+                    handler: interrupt.handler_label().to_string(),
+                });
+            }
+        }
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
+        let mut buffers = Vec::new();
+        if self.uses_shadow_oam()
+            || functions
+                .names
+                .iter()
+                .any(|name| name == BuiltinFunction::InitOamDma.label())
+        {
+            buffers.extend([
+                (
+                    oam::SHADOW_OAM,
+                    "Shadow OAM",
+                    MemoryRegion::Wram0,
+                    hw::OAM_SIZE.into(),
+                    hw::OAM_DMA_SOURCE_ALIGN,
+                ),
+                (
+                    oam::OAM_DMA,
+                    "OAM DMA",
+                    MemoryRegion::Hram,
+                    oam::oam_dma_size(),
+                    0,
+                ),
+            ]);
+        }
+        if self.vram_queue {
+            buffers.extend([
+                (
+                    vram_queue::BUFFER,
+                    "VRAM queue",
+                    MemoryRegion::Wram0,
+                    vram_queue::BUFFER_BYTES,
+                    0,
+                ),
+                (
+                    vram_queue::READ,
+                    "VRAM queue read cursor",
+                    MemoryRegion::Wram0,
+                    1,
+                    0,
+                ),
+                (
+                    vram_queue::WRITE,
+                    "VRAM queue write cursor",
+                    MemoryRegion::Wram0,
+                    1,
+                    0,
+                ),
+            ]);
+        }
+        {
+            // Generated RAM buffers cannot also be user-defined symbols: a reference
+            // must reach the reserved data or HRAM code, not a competing definition.
+            for &(name, _, _, _, _) in &buffers {
+                let first = if self.functions.is_external_symbol(name) {
+                    Some(super::error::Definition::ExternalSymbol)
+                } else if code.iter().any(|body| defines(body, name))
+                    || defines(&functions.code, name)
+                {
+                    Some(super::error::Definition::CodeSymbol)
+                } else {
+                    None
+                };
+                if let Some(first) = first {
+                    return Err(Error::NameConflict {
+                        name: name.to_string(),
+                        first,
+                        second: super::error::Definition::GeneratedBuffer,
+                    });
+                }
+            }
+        }
+        let init_oam_dma = BuiltinFunction::InitOamDma.label();
+        if functions.names.iter().any(|name| name == init_oam_dma)
+            && !self.functions.is_user_function(init_oam_dma)
+        {
+            // The builtin InitOamDma defines the labels of the DMA code it copies: a second
+            // definition (a variable too) would fail in rgbasm, or copy other bytes to HRAM
+            for name in [oam::OAM_DMA_CODE, oam::OAM_DMA_CODE_END] {
+                // InitOamDma defines it once; another function's definition is a second one
+                let in_functions = functions
+                    .code
+                    .iter()
+                    .filter(|instr| defines(std::slice::from_ref(*instr), name))
+                    .count();
+                let variable = vars.names().find(|(var, _)| *var == name);
+                let first = if let Some((_, var_type)) = variable {
+                    Some(super::error::Definition::Variable(var_type))
+                } else if self.functions.is_external_symbol(name) {
+                    Some(super::error::Definition::ExternalSymbol)
+                } else if code.iter().any(|body| defines(body, name)) || in_functions > 1 {
+                    Some(super::error::Definition::CodeSymbol)
+                } else {
+                    None
+                };
+                if let Some(first) = first {
+                    return Err(Error::NameConflict {
+                        name: name.to_string(),
+                        first,
+                        second: super::error::Definition::BuiltinLabel,
+                    });
+                }
+            }
+        }
         asm.chunk(Chunk::Functions);
         asm.emit_all(functions.code);
 
@@ -898,6 +1029,12 @@ impl RustBoy {
         for name in functions.variables {
             vars.create_needed(&name, 0)?;
         }
+        // The shadow OAM, on a page of its own at the top of WRAM0, and the OAM DMA routine
+        // at the top of the HRAM the variables may use (B12): the variables keep their
+        // addresses. For the sprites, or for `InitOamDma` however the program calls it
+        for (name, section, region, size, alignment) in buffers {
+            vars.reserve_buffer(name, section, region, size, alignment)?;
+        }
         // Every variable now: they must fit
         vars.check_layout()?;
 
@@ -913,6 +1050,12 @@ impl RustBoy {
         asm.emit_all(raw_data);
 
         Ok(asm)
+    }
+
+    /// Whether the program's sprites live in a shadow OAM, copied to OAM by an OAM DMA in
+    /// the VBlank handler (B12): when it has sprites
+    fn uses_shadow_oam(&self) -> bool {
+        !self.sprites.is_empty()
     }
 
     /// Whether `interrupt` has a handler: VBlank always (the main loop waits for it), the
@@ -932,8 +1075,18 @@ impl RustBoy {
             let given = self.handlers.get(&interrupt);
             let mut code = Vec::new();
             let mut saves = given.map_or(Regs::NONE, |handler| handler.saves);
-            // (B12: the OAM DMA of a shadow OAM goes first in the VBlank handler, at the
-            // start of VBlank)
+            // B12: the OAM DMA of the shadow OAM goes first in the VBlank handler, at the
+            // start of VBlank, whatever the main loop does
+            if interrupt == Interrupt::VBlank && self.uses_shadow_oam() {
+                code.extend(oam::run_oam_dma());
+                saves |= Regs::A | Regs::F;
+            }
+            if interrupt == Interrupt::VBlank && self.vram_queue {
+                code.push(Instr::Call {
+                    target: JumpTarget::Label(vram_queue::flush().name().to_string()),
+                });
+                saves |= vram_queue::flush().changes();
+            }
             if let Some(handler) = given {
                 code.extend(handler.code.iter().cloned());
             }
@@ -1245,6 +1398,67 @@ impl RustBoy {
     pub fn set_soft_reset(&mut self, on: bool) -> &mut Self {
         self.config.soft_reset = on;
         self
+    }
+
+    /// Queue a VRAM byte write from initialization or main-loop code. Automatically
+    /// enables a FIFO of 12 pending writes (41 WRAM bytes), flushed after OAM DMA and
+    /// before user VBlank code. Writes appear at the next flush. On return, carry is
+    /// clear if accepted, set if full or outside VRAM; rejected writes must be retried
+    /// by the caller if required. Changes all registers and flags, preserving IME.
+    ///
+    /// Do not call the generated code from interrupt handlers: the queue has one
+    /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it
+    /// directly or through user functions (not through labels of `raw()` code, which it
+    /// does not follow). Do not call `FlushVramQueue` yourself: the VBlank handler is its
+    /// one consumer.
+    ///
+    /// The flush takes VBlank time from the code after it (with 12 queued writes, about
+    /// 150 M-cycles of VBlank are left of 920, for the `on_vblank` code and the main loop
+    /// alike): with a full queue, direct VRAM access can miss VBlank, so send VRAM writes
+    /// through the queue. A late VBlank handler defers entries; arbitrary user handler
+    /// work is outside the queue's timing budget.
+    ///
+    /// # Panics
+    /// If a constant address is outside VRAM, a constant value does not fit a byte, or
+    /// another routine already occupies one of the queue routine names.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::prelude::*;
+    /// let mut gb = RustBoy::new();
+    /// let write = gb.queue_vram_write(hw::SCRN0, 7);
+    /// gb.add_to_main_loop(write);
+    /// assert!(gb.build()?.contains("FlushVramQueue:"));
+    /// # Ok::<(), Error>(())
+    /// ```
+    #[track_caller]
+    pub fn queue_vram_write(
+        &mut self,
+        address: impl Into<Expr>,
+        value: impl Into<Expr>,
+    ) -> Vec<Instr> {
+        let address = address.into();
+        if let Some(value) = address.value() {
+            assert!(
+                (i32::from(hw::VRAM.value)..i32::from(hw::VRAM_END)).contains(&value),
+                "queue_vram_write: address must be in VRAM"
+            );
+        }
+        let mut code = Block::new();
+        code.ld(R16::HL, address).ld(R8::A, value.into());
+        code.emit_all(self.queue_vram_write_from_registers());
+        code.into_instrs()
+    }
+
+    /// Queue `a` to the VRAM address in `hl`. Same result, clobbers and single-producer
+    /// contract as [`RustBoy::queue_vram_write`]; useful after `TileRef::load_address()`
+    /// or a runtime calculation. Invalid runtime addresses are rejected with carry set.
+    #[track_caller]
+    pub fn queue_vram_write_from_registers(&mut self) -> Vec<Instr> {
+        let enqueue = self.call_routine(&vram_queue::enqueue());
+        self.call_routine(&vram_queue::flush());
+        self.vram_queue = true;
+        enqueue
     }
 
     /// Add a sprite with its tile in one call
@@ -2007,9 +2221,10 @@ mod tests {
         );
 
         // MemoryFull: the program's variables fill WRAM0, and build() adds its own, the first
-        // of them the main loop's wVBlankFlag (it panicked in build(), in create_u8)
+        // of them the main loop's wVBlankFlag (it panicked in build(), in create_u8). The
+        // shadow OAM of the sprite takes the top 256 bytes (160, on a page of its own)
         let mut gb = animated();
-        for i in 0..4096 {
+        for i in 0..4096 - 256 {
             gb.vars.create_u8(&format!("wByte{}", i), 0);
         }
         let error = gb.build().unwrap_err();
@@ -2162,7 +2377,7 @@ mod tests {
 
         // The start-up code writes that tile index to Ball's OAM entry (entry 1)
         let cpu = run_startup(&mut gb);
-        assert_mem(&cpu, &oam(4 + 2), 4);
+        assert_mem(&cpu, &shadow(4 + 2), 4);
         assert_links(&gb.build().unwrap());
     }
 
@@ -2240,7 +2455,7 @@ mod tests {
             code.extend(body);
         }
         let mut cpu = TestCpu::default();
-        cpu.mem.insert(oam(4 + 2), 2);
+        cpu.mem.insert(shadow(4 + 2), 2);
         cpu.mem.insert("wFrameCounter".to_string(), 0);
         for (name, value) in gb.sprites.get_animation_variables() {
             cpu.mem.insert(name, value);
@@ -2248,7 +2463,7 @@ mod tests {
         let frames: Vec<u8> = (0..6)
             .map(|_| {
                 cpu.run(&code);
-                cpu.mem[&oam(4 + 2)]
+                cpu.mem[&shadow(4 + 2)]
             })
             .collect();
         assert_eq!(frames, [3, 4, 5, 2, 3, 4]);
@@ -2641,8 +2856,8 @@ mod tests {
         // Each sprite runs its own animation, on its own tiles
         assert!(out.contains("call Anim_Coin_Spin"), "{}", out);
         assert!(out.contains("call Anim_Gem_Spin"), "{}", out);
-        assert!(function(&out, "Anim_Coin_Spin").contains("_OAMRAM+2"));
-        assert!(function(&out, "Anim_Gem_Spin").contains("_OAMRAM+6"));
+        assert!(function(&out, "Anim_Coin_Spin").contains("wShadowOAM+2"));
+        assert!(function(&out, "Anim_Gem_Spin").contains("wShadowOAM+6"));
     }
 
     #[test]
@@ -2751,6 +2966,9 @@ mod tests {
     fn run_startup(gb: &mut RustBoy) -> TestCpu {
         let (code, mut cpu) = startup(gb);
         cpu.stubs.insert("Memcopy".to_string());
+        // The OAM DMA: the routine copied to HRAM, and its call (its calls are in the trace)
+        cpu.stubs.insert("InitOamDma".to_string());
+        cpu.stubs.insert(oam::OAM_DMA.to_string());
         cpu.run(&code);
         cpu
     }
@@ -2773,6 +2991,8 @@ mod tests {
         let mut cpu = TestCpu::default();
         cpu.mem.insert("rLY".to_string(), 144); // in VBlank: WaitVBlank returns at once
         cpu.consts.insert(lcdc_on, 0x83);
+        // The page of the shadow OAM, for the OAM DMA
+        cpu.consts.insert("HIGH(wShadowOAM)".to_string(), 0xCF);
         // The flags of the interrupt set-up
         for flag in [
             hw::IEF_VBLANK,
@@ -2803,6 +3023,15 @@ mod tests {
             "_OAMRAM".to_string()
         } else {
             format!("_OAMRAM+{}", i)
+        }
+    }
+
+    /// The memory symbol of shadow OAM byte `i`, as the test CPU names it
+    fn shadow(i: u16) -> String {
+        if i == 0 {
+            oam::SHADOW_OAM.to_string()
+        } else {
+            format!("{}+{}", oam::SHADOW_OAM, i)
         }
     }
 
@@ -2868,7 +3097,8 @@ mod tests {
             Event::Call(name) if name == "WaitVBlank" => "wait for VBlank",
             Event::Write(reg, 0) if reg == "rLCDC" => "LCD off",
             Event::Call(name) if name == "Memcopy" => "copy to VRAM",
-            Event::Write(addr, _) if addr.starts_with("_OAMRAM") => "OAM",
+            Event::Call(name) if name == "InitOamDma" || name == oam::OAM_DMA => "OAM",
+            Event::Write(addr, _) if addr.starts_with(oam::SHADOW_OAM) => "OAM",
             Event::Write(reg, _) if ["rBGP", "rOBP0", "rOBP1"].contains(&reg.as_str()) => {
                 "palettes"
             }
@@ -3130,16 +3360,296 @@ mod tests {
     }
 
     #[test]
+    fn test_generated_buffer_names_cannot_be_defined_by_the_program() {
+        type Setup = fn(&mut RustBoy, &str);
+        let setups: [(Setup, Definition); 6] = [
+            (
+                |gb, name| {
+                    gb.vars.create_u8(name, 0);
+                },
+                Definition::Variable(VarType::U8),
+            ),
+            (
+                |gb, name| {
+                    gb.define_const(name, 1);
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.raw(|asm| {
+                        asm.label(name);
+                    });
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_function_from(name, Vec::<Instr>::new());
+                    gb.keep_function(name);
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.external_symbol(name);
+                },
+                Definition::ExternalSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_function_from(
+                        "Other",
+                        vec![Instr::Label {
+                            name: name.to_string(),
+                        }],
+                    );
+                    gb.keep_function("Other");
+                },
+                Definition::CodeSymbol,
+            ),
+        ];
+        for name in [
+            oam::SHADOW_OAM,
+            oam::OAM_DMA,
+            vram_queue::BUFFER,
+            vram_queue::READ,
+            vram_queue::WRITE,
+        ] {
+            for (setup, first) in setups {
+                // Both automatic sprite DMA and explicitly requested DMA initialization
+                // reserve these names; an alias would call ROM instead of the HRAM code.
+                for with_sprite in [false, true] {
+                    let mut gb = RustBoy::new();
+                    if [vram_queue::BUFFER, vram_queue::READ, vram_queue::WRITE].contains(&name) {
+                        gb.queue_vram_write(hw::SCRN0, 1);
+                    }
+                    if with_sprite {
+                        gb.add_sprite("Dot", tiles(1), 8, 8, 0);
+                    } else {
+                        gb.use_function(BuiltinFunction::InitOamDma);
+                    }
+                    setup(&mut gb, name);
+                    assert_eq!(
+                        gb.build(),
+                        Err(Error::NameConflict {
+                            name: name.to_string(),
+                            first,
+                            second: Definition::GeneratedBuffer,
+                        }),
+                        "{name}, sprites: {with_sprite}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_vram_queue_api_checks_constants_and_routine_conflicts() {
+        for address in [
+            0,
+            i32::from(hw::VRAM.value) - 1,
+            i32::from(hw::VRAM_END),
+            65536,
+        ] {
+            assert!(panic_message(|| RustBoy::new().queue_vram_write(address, 1)).contains("VRAM"));
+        }
+        assert!(!panic_message(|| RustBoy::new().queue_vram_write(hw::SCRN0, 256)).is_empty());
+        for name in ["QueueVramWrite", "FlushVramQueue"] {
+            let mut gb = RustBoy::new();
+            gb.define_function_from(name, Vec::<Instr>::new());
+            assert!(
+                panic_message(|| gb.queue_vram_write(hw::SCRN0, 1)).contains("another routine")
+            );
+        }
+    }
+
+    #[test]
+    fn test_vram_queue_is_rejected_in_interrupt_handlers() {
+        // One producer: a handler that enqueues, directly or through a function, could
+        // fill the entry the main loop is writing
+        let direct = |gb: &mut RustBoy| {
+            let write = gb.queue_vram_write(hw::SCRN0, 1);
+            gb.on_vblank(write);
+        };
+        let through_function = |gb: &mut RustBoy| {
+            let write = gb.queue_vram_write(hw::SCRN0, 1);
+            let mut body = Block::new();
+            body.label("Inner").emit_all(write);
+            body.ret();
+            gb.define_function("Inner", body.into_instrs());
+            let mut outer = Block::new();
+            outer.label("Outer").call("Inner").ret();
+            gb.define_function("Outer", outer.into_instrs());
+            let call = gb.call("Outer");
+            gb.on_timer(
+                Timer::new(crate::stdlib::interrupts::TimerClock::Hz4096, 0),
+                call,
+            );
+        };
+        for (setup, handler) in [
+            (direct as fn(&mut RustBoy), "VBlankHandler"),
+            (through_function, "TimerHandler"),
+        ] {
+            let mut gb = RustBoy::new();
+            setup(&mut gb);
+            assert_eq!(
+                gb.build(),
+                Err(Error::MainLoopOnly {
+                    routine: "QueueVramWrite".to_string(),
+                    handler: handler.to_string(),
+                })
+            );
+        }
+        // From the main loop it builds
+        let mut gb = RustBoy::new();
+        let write = gb.queue_vram_write(hw::SCRN0, 1);
+        gb.add_to_main_loop(write);
+        assert!(gb.build().is_ok());
+    }
+
+    #[test]
+    fn test_vram_queue_reserves_memory_without_moving_variables() {
+        let mut gb = RustBoy::new();
+        let byte = gb.vars.create_u8("wUserByte", 7);
+        let address = gb.vars.get_address(byte.id());
+        let write = gb.queue_vram_write(hw::SCRN0, 9);
+        gb.add_to_main_loop(write);
+        assert_eq!(gb.vars.get_address(byte.id()), address);
+        let out = gb.build().unwrap();
+        assert_eq!(gb.build().unwrap(), out, "building remains idempotent");
+        assert!(out.contains("wVramQueue:\n    ds 39"));
+        assert!(out.contains("SECTION \"Variables\", WRAM0[$C000]"));
+        assert_links(&out);
+
+        let mut full = RustBoy::new();
+        full.queue_vram_write(hw::SCRN0, 1);
+        for i in 0..(4096 - 41) {
+            full.vars.create_u8(&format!("wByte{i}"), 0);
+        }
+        assert!(matches!(
+            full.build(),
+            Err(Error::MemoryFull {
+                region: MemoryRegion::Wram0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_dma_code_labels_cannot_be_defined_by_the_program() {
+        // InitOamDma's own labels: a second definition fails in rgbasm, or (an external
+        // symbol) makes InitOamDma copy other bytes to HRAM
+        type Setup = fn(&mut RustBoy, &str);
+        let setups: [(Setup, Definition); 5] = [
+            (
+                |gb, name| {
+                    gb.vars.create_u8(name, 0);
+                },
+                Definition::Variable(VarType::U8),
+            ),
+            (
+                |gb, name| {
+                    gb.raw(|asm| {
+                        asm.label(name);
+                    });
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_const(name, 1);
+                },
+                Definition::CodeSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.external_symbol(name);
+                },
+                Definition::ExternalSymbol,
+            ),
+            (
+                |gb, name| {
+                    gb.define_function_from(
+                        "Other",
+                        vec![Instr::Label {
+                            name: name.to_string(),
+                        }],
+                    );
+                    gb.keep_function("Other");
+                },
+                Definition::CodeSymbol,
+            ),
+        ];
+        for name in [oam::OAM_DMA_CODE, oam::OAM_DMA_CODE_END] {
+            for (setup, first) in setups {
+                for with_sprite in [false, true] {
+                    let mut gb = RustBoy::new();
+                    if with_sprite {
+                        gb.add_sprite("Dot", tiles(1), 8, 8, 0);
+                    } else {
+                        gb.use_function(BuiltinFunction::InitOamDma);
+                    }
+                    setup(&mut gb, name);
+                    assert_eq!(
+                        gb.build(),
+                        Err(Error::NameConflict {
+                            name: name.to_string(),
+                            first,
+                            second: Definition::BuiltinLabel,
+                        }),
+                        "{name}, sprites: {with_sprite}"
+                    );
+                }
+            }
+        }
+        // Without the builtin InitOamDma the names are free
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.label(oam::OAM_DMA_CODE);
+        });
+        assert!(gb.build().is_ok());
+    }
+
+    #[test]
     fn test_oam_is_cleared_before_the_sprites_are_written() {
+        // With sprites, the start-up writes the shadow OAM (B12): the OAM DMA routine to
+        // HRAM, the whole shadow OAM cleared, the sprites, then one OAM DMA, so OAM shows
+        // them from the first frame; OAM itself is never written by the CPU
         let mut gb = RustBoy::new();
         gb.add_sprite("Ball", tiles(1), 16, 24, 0);
 
         let cpu = run_startup(&mut gb);
-        let written: Vec<u8> = (0..4).map(|i| cpu.mem[&oam(i)]).collect();
+        let written: Vec<u8> = (0..4).map(|i| cpu.mem[&shadow(i)]).collect();
         assert_eq!(written, [24 + 16, 16 + 8, 0, 0], "Y, X, tile, flags");
         for i in 4..160 {
-            assert_mem(&cpu, &oam(i), 0);
+            assert_mem(&cpu, &shadow(i), 0);
         }
+        let position = |wanted: &Event| cpu.trace.iter().position(|event| event == wanted);
+        let init = position(&Event::Call("InitOamDma".to_string())).expect("InitOamDma");
+        let dma = position(&Event::Call(oam::OAM_DMA.to_string())).expect("an OAM DMA");
+        let shadow_writes: Vec<usize> = cpu
+            .trace
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| matches!(event, Event::Write(addr, _) if addr.starts_with(oam::SHADOW_OAM)))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(shadow_writes.len(), 160 + 4);
+        assert!(init < shadow_writes[0] && shadow_writes[163] < dma);
+        assert!(
+            !cpu.trace
+                .iter()
+                .any(|event| matches!(event, Event::Write(addr, _) if addr.starts_with("_OAMRAM"))),
+            "OAM written by the CPU"
+        );
+        // The DMA copies the shadow OAM's page, and the VBlank handler does it again first
+        let out = gb.build().unwrap();
+        let dma = "    ld a, HIGH(wShadowOAM)\n    call hOAMDMA\n";
+        assert!(out.matches(dma).count() == 2, "{}", out);
+        assert!(function(&out, "VBlankHandler").starts_with("VBlankHandler:\n    push af\n"));
+        assert!(function(&out, "VBlankHandler").contains(dma.trim_start()));
+        assert_links(&out);
     }
 
     #[test]
@@ -3415,6 +3925,10 @@ mod tests {
             ("wFrameCounter", 0xC006),
             ("wAnim_Coin_Current", 0xC007),
             ("wNewKeys", 0xC00A),
+            // The sprite's shadow OAM on the last page of WRAM0, and the OAM DMA routine at
+            // the top of the variables' HRAM (B12): no variable moved for them
+            ("wShadowOAM", 0xCF00),
+            ("hOAMDMA", 0xFFB8),
         ] {
             assert_eq!(symbols[name], (0, address), "{}", name);
         }
@@ -3972,8 +4486,8 @@ mod tests {
             (BLANK_TILE, [0, 0]),
         ] {
             let mut cpu = TestCpu::default();
-            cpu.mem.insert("_OAMRAM+4".to_string(), 57);
-            cpu.mem.insert("_OAMRAM+5".to_string(), 48);
+            cpu.mem.insert("wShadowOAM+4".to_string(), 57);
+            cpu.mem.insert("wShadowOAM+5".to_string(), 48);
             cpu.mem.insert(map(hit), tile);
             for (name, value) in [
                 ("BRICK_LEFT", BRICK_LEFT),

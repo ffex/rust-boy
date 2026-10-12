@@ -15,14 +15,15 @@
     ld hl, $8000
     ld bc, CoinEnd - Coin
     call Memcopy
+    call InitOamDma
     ld a, 0
     ld b, 160
-    ld hl, _OAMRAM
+    ld hl, wShadowOAM
     .clear_oam_2:
     ld [hli], a
     dec b
     jp nz, .clear_oam_2
-    ld hl, _OAMRAM
+    ld hl, wShadowOAM
     ld a, 88
     ld [hli], a
     ld a, 88
@@ -31,6 +32,8 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
+    ld a, HIGH(wShadowOAM)
+    call hOAMDMA
     ld a, 228
     ld [rBGP], a
     ld [rOBP0], a
@@ -156,8 +159,29 @@
     .done:
     ei
     ret
+    ; Copy the OAM DMA routine to HRAM: during a DMA the CPU reaches only HRAM
+    InitOamDma:
+    ld hl, OamDmaCode
+    ld b, OamDmaCodeEnd - OamDmaCode
+    ld c, LOW(hOAMDMA)
+    .copy:
+    ld a, [hli]
+    ldh [c], a
+    inc c
+    dec b
+    jr nz, .copy
+    ret
+    ; The OAM DMA routine (run from HRAM): a = the source page
+    OamDmaCode:
+    ldh [rDMA], a
+    ld a, 40
+    .wait:
+    dec a
+    jr nz, .wait
+    ret
+    OamDmaCodeEnd:
     Anim_Coin_CoinAnim:
-    ld a, [_OAMRAM+2]
+    ld a, [wShadowOAM+2]
     cp a, 0
     jr c, .reset_CoinAnim
     cp a, 6
@@ -166,10 +190,12 @@
     ld a, 255
     .next_CoinAnim:
     inc a
-    ld [_OAMRAM+2], a
+    ld [wShadowOAM+2], a
     ret
     VBlankHandler:
     push af
+    ld a, HIGH(wShadowOAM)
+    call hOAMDMA
     ld a, 1
     ld [wVBlankFlag], a
     pop af
@@ -179,6 +205,12 @@
     INCBIN "coin.2bpp"
     CoinEnd:
 
+    SECTION "Shadow OAM", WRAM0[$CF00]
+    wShadowOAM:
+    ds 160
+    SECTION "OAM DMA", HRAM[$FFB8]
+    hOAMDMA:
+    ds 8
     SECTION "Variables", WRAM0[$C000]
     wCurKeys: db
     wNewKeys: db

@@ -117,10 +117,13 @@ A `RustBoy` program runs once a frame, woken by the VBlank interrupt:
 
 - the start-up code turns interrupts off, sets everything up, enables the interrupts that have a handler in `rIE`,
   drops the requests made meanwhile (`rIF` = 0) and turns interrupts on (`ei`);
-- the **VBlank handler** runs at the start of each VBlank (line 144): the code given to `on_vblank`, then it tells the
-  main loop that a frame started;
+- the **VBlank handler** runs at the start of each VBlank (line 144): with sprites, first the OAM DMA that copies the
+  shadow OAM to OAM (see [Sprites](#sprites-and-the-shadow-oam-rustboy)), then the optional VRAM queue flush,
+  then the code given to `on_vblank`, then it
+  tells the main loop that a frame started;
 - the **main loop** waits for that asleep (`call WaitFrame`, a `halt`), then runs the animations and the
-  `add_to_main_loop` code, so it starts in VBlank too, once a frame;
+  `add_to_main_loop` code, so it starts in VBlank too, once a frame (how much of VBlank is left depends on the
+  handler: see [Queued VRAM writes](#queued-vram-writes-rustboy)'s cost);
 - the **other handlers** (`on_stat`, `on_timer`, `on_joypad`, or `on_interrupt` for any of them) run when their
   interrupt fires. Every handler saves the registers its code changes (what the code writes, or a routine's calling
   convention with `on_interrupt_routine`) and returns with `reti`, so the code it interrupts is not disturbed.
@@ -154,6 +157,60 @@ assert!(out.contains("TimerHandler:\n    push af\n    ld a, [wTicks]"));
 `rSTAT` and timer set-up). The **soft reset** jumps to the entry point (`$0100`), so the whole start-up runs again,
 as at power-on: every variable is set to its initial value, the `init()` code runs again; it happens once per press
 (holding the four buttons does not reset the game again and again).
+
+## Sprites and the shadow OAM (`RustBoy`)
+
+The PPU reads OAM, the sprite table, during most of each visible line: a CPU write to OAM then is lost. So a `RustBoy`
+program never writes OAM itself: its sprites live in a copy in WRAM, the **shadow OAM** (`wShadowOAM`, 160 bytes on the
+last page of WRAM0), which the moves, the animations and `get_x` / `get_y` / `get_pivot` read and write at any time. At
+the start of each VBlank the VBlank handler copies it to OAM with an **OAM DMA** (160 M-cycles), through the usual
+routine run from HRAM (`hOAMDMA`, the top 8 bytes of the HRAM variables' 64), which the start-up copies there. A sprite
+moved in one frame shows from the frame after next; the start-up runs one DMA before the LCD is turned on, so the
+first frame shows the sprites. A program without sprites has neither. `stdlib::graphics::oam` has the same pieces
+for a `stdlib` program (`Sprite::in_shadow_oam`, `init_oam_dma`, `run_oam_dma`, the sections).
+Two limits: the stack (from `$FFFE` down) has 62 bytes above `hOAMDMA` (`$FFB8`-`$FFBF`), so code nested more than 31
+calls or pushes deep overwrites the DMA routine; and the DMA runs when the VBlank handler does, so an interrupt handler
+(`on_stat`, `on_timer`) that delays it past VBlank makes it run during the next frame's drawing, where it fails for
+that frame.
+
+## Queued VRAM writes (`RustBoy`)
+
+Tilemap edits and score digits can be queued from game code without waiting for the PPU:
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let write = gb.queue_vram_write(hw::SCRN0, 7); // put tile 7 at the map's first cell
+gb.add_to_main_loop(write);
+let out = gb.build()?;
+assert!(out.contains("FlushVramQueue:"));
+# Ok::<(), Error>(())
+```
+
+The first call enables a FIFO of **12 pending byte writes**, using 41 bytes of WRAM0 without moving user
+variables. The VBlank handler flushes it **after OAM DMA and before user `on_vblank` code**. Entries are written
+in order, so the last queued write to one address wins. `queue_vram_write_from_registers()` takes the destination
+in `hl` and the byte in `a`, useful after `TileRef::load_address()` or a runtime calculation.
+
+Both helpers generate code that changes all registers and flags and preserves IME. Carry is clear when accepted;
+carry is set when the queue is full or a runtime address is outside VRAM. A rejected write is not queued: retry it
+later if it must arrive. Constant addresses outside VRAM and values outside a byte panic at the API call. Producer
+code must run only in initialization or the main loop, **never in an interrupt handler**: `build()` returns
+`Error::MainLoopOnly` when handler code reaches `QueueVramWrite`, directly or through a function (labels of `raw()`
+code are not followed). `FlushVramQueue` has one caller, the VBlank handler: do not call it. VBlank can safely
+interrupt it: the write cursor is published only when all entry bytes are ready.
+
+The consumer begins writes only on lines 144–152, leaving the last VBlank line as headroom. A late handler defers
+entries rather than writing during display rendering. On the test emulator, a full queue plus OAM DMA takes
+967 M-cycles of handler work, within the 1,140 M-cycle VBlank window; arbitrary user handlers can still exceed it.
+That time comes out of the main loop's VBlank. Measured on the test emulator, the main loop starts with about 920 M-cycles of VBlank left with a sprite
+and an empty queue, but only about 150 with 12 queued writes: main-loop code that touches VRAM directly (`GetTileByPixel`,
+`TileRef::set_tile`) then runs while the screen is drawn, where VRAM reads return `$FF` and writes are lost. A program
+that fills the queue should send all its VRAM writes through it: the `on_vblank` code runs after the flush, so it has
+no more VBlank left than the main loop.
+`stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
+Programs that never request the queue emit no queue code or storage.
 
 ## Low level (`asm`)
 
@@ -330,7 +387,8 @@ UPDATE_SNAPSHOTS=1 cargo test --test snapshots
 `tests/emulator.rs` builds ROMs with RGBDS and runs them on a small headless Game Boy written for the tests
 (`tests/support/gameboy.rs`, no dependency): the SM83 CPU M-cycle by M-cycle, interrupts, `halt`, the timer, the PPU's timing
 (modes, `LY`, `STAT`), OAM DMA, the joypad, MBC1/MBC5 ROM banking, but no picture. It blocks what the hardware
-blocks (OAM in modes 2 and 3, VRAM in mode 3) and logs every OAM write with its PPU mode; what it does not model is
+blocks (OAM in modes 2 and 3, VRAM in mode 3) and logs every OAM write with its PPU mode, and every OAM DMA; what it
+does not model is
 listed at the top of `gameboy.rs`. Each example is run
 with scripted input and checked through its memory: the Unbricked ball moves and bounces and the paddle follows
 the joypad, the FOSDEM player walks with its animation, the coin animates on A and stops on B. A test of your own:
@@ -377,7 +435,7 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM and HRAM
-  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
+  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and
   the timer, a soft reset (see [Frames and interrupts](#frames-and-interrupts-rustboy)), and routines (the builtins and

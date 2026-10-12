@@ -137,6 +137,11 @@ fn test_regions_are_consistent() {
     assert_eq!(OAM_END - OAMRAM.value, u16::from(OAM_SIZE));
     assert_eq!(OAM_SIZE, OAM_COUNT.value * OAM_ENTRY_SIZE.value);
     assert_eq!(HRAM_END, IE.value);
+    assert_eq!(LINE_MCYCLES * 4, 456, "456 dots a line");
+    assert_eq!(VBLANK_LINES, 154 - u16::from(SCRN_Y.value));
+    assert_eq!(VBLANK_MCYCLES, 1140);
+    assert_eq!(OAM_DMA_MCYCLES, 160);
+    assert_eq!(1 << OAM_DMA_SOURCE_ALIGN, 0x100, "a page");
     assert_eq!(IO.value, P1.value);
     assert_eq!(ROM_HEADER_END - ROM_HEADER, 0x50);
     assert_eq!(P1F_GET_NONE.value, P1F_GET_BTN.value | P1F_GET_DPAD.value);

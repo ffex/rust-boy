@@ -6,29 +6,6 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
-### Animation completion (Phase 3)
-
-- `enable_animation_events` / `take_animation_event` expose coalescing completion flags:
-  Once reaches its last frame; Loop wraps; PingPong returns to its first frame.
-- `set_animation_callback` binds a named function invoked after all sprite parts step,
-  preserving BC/DE/HL. Composite APIs emit one logical notification per group.
-- Explicit restart methods show the first frame and reset completion/direction/timing
-  state. Configure timing/events first, then generate restart snippets. Flags reflect
-  shadow OAM; the next DMA makes it visible. Polling events survive callback delivery.
-- Unknown callback names fail build; tracked animation calls from interrupt handlers
-  are rejected. Existing programs and snapshots without subscriptions remain unchanged.
-
-### Per-animation timing (Phase 3)
-
-- `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's period
-  (1..=255). Sprites with overrides get independent clocks; other animations on the same
-  sprite use the global default. Selection changes reset the clock, repeated enable
-  calls preserve it, and disabled frames stop it.
-- Composite/metasprite setters configure every part together. Clear methods remove
-  overrides. Each independently timed sprite uses two WRAM bytes; BC is preserved.
-- Programs without overrides, including all existing example snapshots, are unchanged.
-  The original `RustBoy::set_animation_delay` remains the global default.
-
 ### Highlights
 
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
@@ -113,6 +90,19 @@ together: every breaking change of the refactoring is in this release, so a prog
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
   per-part tiles/flags and OAM entries in creation order. Composite movement and animation
   apply to the whole group. Existing 16x16 calls retain names and generated output.
+- **Per-animation timing** (Phase 3): `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's
+  period (1..=255). Sprites with overrides get their own clock; their other animations use the global period.
+  Selection changes reset the clock, repeated enable calls keep it, disabled frames stop it. The composite setters
+  configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
+  preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
+  global default.
+- **Animation completion** (Phase 3): `enable_animation_events` / `take_animation_event` give coalescing completion
+  flags (Once reaches its last frame, Loop wraps, PingPong returns to its first frame); `set_animation_callback` binds
+  a named function called after all sprite parts stepped, with BC/DE/HL preserved; the composite APIs give one
+  notification per group. `restart_animation` shows the first frame and resets completion, direction and timing state:
+  configure timing and events first, then generate restart snippets. Flags describe the shadow OAM, visible at the
+  next DMA; polling events survive callback delivery. Unknown callback names fail `build()`; event-producing animation
+  calls from interrupt handlers are rejected. Programs without subscriptions, the examples too, are unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

@@ -587,7 +587,9 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
-  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
+  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want, and
+  completion events or callbacks; see [Per-animation timing](#per-animation-timing) and
+  [Animation completion and replay](#animation-completion-and-replay)), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and
   the timer, a soft reset (see [Frames and interrupts](#frames-and-interrupts-rustboy)), and routines (the builtins and
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too

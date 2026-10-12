@@ -644,6 +644,11 @@ impl SpriteManager {
     /// Changes AF only. Timed sprites wait a full period before their next step;
     /// shared-clock sprites use the next global tick. Main-loop/init only.
     ///
+    /// The snippet writes the state the sprite has **when it is generated**: set periods,
+    /// events and callbacks first. A snippet generated before `enable_animation_events` skips
+    /// the event state, and one generated before `clear_animation_delay` writes a timer that
+    /// no longer exists (rgbasm then fails on the undefined `wAnim_{name}_Timer`).
+    ///
     /// # Panics
     /// If `id` is not a sprite of this manager, or it has no animation `index`.
     pub fn restart_animation(&self, id: SpriteId, index: u8) -> Vec<Instr> {

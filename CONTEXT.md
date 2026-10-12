@@ -1379,3 +1379,14 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 typed sprite attributes
+
+`refactor-p3-sprite-flags` adds `SpriteFlags`, `ObjectPalette` and `SpritePriority` in
+`stdlib::graphics::sprites` (prelude exports). Engine sprite constructors and stdlib Sprite::new
+accept typed flags or existing raw u8 values; raw conversion preserves all bits, including custom
+CGB attributes. Builders set/clear only the corresponding DMG bit. `Sprite::set_flags` and
+`SpriteManager::set_flags` emit attribute writes without changing startup data; the latter writes
+shadow OAM and DMA applies it on the next frame. Coordinates/tile bytes and CPU flags are kept.
+Priority behind the background/window applies to nonzero colour indices; index 0 stays behind objects.
+Tests cover all 16 DMG combinations, raw-byte compatibility, independent bit clearing and OAM/DMA behavior.

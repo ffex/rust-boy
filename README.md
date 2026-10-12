@@ -504,3 +504,23 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Typed sprite attributes
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let flags = SpriteFlags::new().flip_x(true)
+    .palette(ObjectPalette::Palette1)
+    .priority(SpritePriority::BehindBackground);
+let sprite = gb.add_sprite("Player", TileSource::from_raw(&[["$ff"; 8]]), 24, 32, flags);
+gb.add_to_main_loop(gb.sprites.set_flags(sprite, flags.flip_x(false).flip_y(true)));
+# gb.build().unwrap();
+```
+
+Runtime attributes live in shadow OAM and appear after the next DMA; they leave
+position and tile indices intact. Raw `u8` flag values remain accepted. Behind-background
+priority hides the sprite behind nonzero background/window colour indices; colour 0
+stays behind the sprite. These flips affect individual hardware sprites, not the
+arrangement of a whole composite.

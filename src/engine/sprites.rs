@@ -900,6 +900,25 @@ impl SpriteManager {
         draw_sprites(&sprites)
     }
 
+    /// Set a sprite's runtime attributes in shadow OAM; startup attributes are unchanged.
+    /// Changes A only. Panics for an unknown sprite id.
+    pub fn set_flags(
+        &self,
+        id: SpriteId,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        Sprite::new(
+            sprite.oam_index,
+            sprite.x,
+            sprite.y,
+            sprite.tile_index,
+            sprite.flags,
+        )
+        .in_shadow_oam()
+        .set_flags(flags)
+    }
+
     /// Generate movement code for a specific sprite: add the value of the variable
     /// `var_name` to its X (changes `a`, `b` and the flags)
     ///

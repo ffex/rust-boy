@@ -61,6 +61,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
   keeps the scroll: set it in init.
+- **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
+  `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
+  existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
+  runtime, preserving coordinates and tile indices. Default/example output is unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

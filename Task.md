@@ -263,7 +263,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its
       map at start-up, and since [B19](CONTEXT.md#b19) a second tilemap on the same map panics
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
-- [ ] Typed sprite flags (flip X/Y, priority, palette)
+- [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
+      `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
+      with raw u8 compatibility and no changes to default/example output.
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score

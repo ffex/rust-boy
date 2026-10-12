@@ -237,6 +237,8 @@ gb.on_vblank(apply);
 supports white or grey. Runtime snippets change A and flags only; a direct
 `gb.set_palette(register, palette)` write preserves flags. Emit in init or VBlank
 for a stable whole-frame palette. Each colour moves at most one shade per stage.
+A fade leaves the palette byte in A, not the progress: to fade several registers,
+load the progress again before each `fade_palette`.
 
 ## Low level (`asm`)
 
@@ -460,7 +462,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM and HRAM
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), runtime palette
+  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and

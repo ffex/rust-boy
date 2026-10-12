@@ -7,7 +7,7 @@ use crate::asm::{Block, Condition, Instr, LabelAllocator, Mem, R8};
 use crate::hw;
 
 /// A DMG shade, ordered from white to black.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum Shade {
     /// White.
@@ -157,6 +157,7 @@ impl PaletteFade {
 
     /// Apply the stage selected by A (0..=3; larger values select stage 3).
     /// Changes A and flags; preserves other registers. Uses local allocated labels.
+    /// A holds the palette byte afterwards: reload the progress before another fade.
     pub fn emit(self, labels: &LabelAllocator, register: PaletteRegister) -> Vec<Instr> {
         let end = labels.local("fade_end");
         let mut code = Block::new();
@@ -177,6 +178,12 @@ impl PaletteFade {
 mod tests {
     use super::*;
     use crate::asm::test_cpu::TestCpu;
+
+    #[test]
+    fn shades_order_from_white_to_black() {
+        assert!(Shade::White < Shade::Light && Shade::Light < Shade::Dark);
+        assert!(Shade::Dark < Shade::Black);
+    }
 
     #[test]
     fn every_palette_fades_smoothly_to_and_from_every_solid_shade() {

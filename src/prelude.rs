@@ -4,10 +4,10 @@
 //! (`Definition`, `MemoryRegion`), sprites, tiles, variables, inputs), the control flow
 //! and routines of [`stdlib`](crate::stdlib) (`If`, `IfA`, `IfConst`, `IfCall`, `Call`,
 //! `Routine`, `Regs`, `PadButton`, the interrupts: `Interrupt`, `Stat`, `Timer`,
-//! `TimerClock`, and the palettes: `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`), the building blocks of [`asm`](crate::asm) for code
-//! written by hand (`Block`, `Expr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and
-//! `Emittable` with the `LabelAllocator` its `emit` takes), and the [`hw`]
-//! module itself (`hw::LCDC`, ...).
+//! `TimerClock`, and the palettes: `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`),
+//! the building blocks of [`asm`](crate::asm) for code written by hand (`Block`, `Expr`,
+//! `R8`, `R16`, `Mem`, `Condition`, `Section`, and `Emittable` with the `LabelAllocator`
+//! its `emit` takes), and the [`hw`] module itself (`hw::LCDC`, ...).
 //! Everything else is in its layer: [`asm`](crate::asm), [`stdlib`](crate::stdlib),
 //! [`engine`](crate::engine).
 //!

@@ -268,7 +268,8 @@ impl RustBoy {
     }
 
     /// Apply a nonblocking palette fade using A as progress (0..=3; >=3 completes).
-    /// Emit in VBlank after loading your progress variable. Changes A and flags only.
+    /// Emit in VBlank after loading your progress variable. Changes A and flags only:
+    /// A holds the palette byte afterwards, so load the progress again before the next fade.
     pub fn fade_palette(
         &self,
         register: crate::stdlib::graphics::palette::PaletteRegister,

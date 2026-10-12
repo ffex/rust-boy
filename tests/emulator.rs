@@ -2298,3 +2298,85 @@ fn starting_an_empty_song_silences_previous_sustained_notes() {
         assert_eq!(gb.read(dac.value), 0);
     }
 }
+
+#[test]
+fn huge_reservation_protects_sound_effect_registers_on_each_channel() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let envelope = Envelope::new(5, EnvelopeDirection::Decrease, 3);
+    let pulse = PulseEffect::new(1234, 11, Duty::ThreeQuarters, envelope);
+    let cases = [
+        (
+            Sfx::Pulse1(pulse, Sweep::default()),
+            1,
+            vec![
+                (hw::NR11, 0xf5),
+                (hw::NR12, 0x53),
+                (hw::NR13, 0xd2),
+                (hw::NR14, 0xc4),
+            ],
+        ),
+        (
+            Sfx::Pulse2(pulse),
+            2,
+            vec![
+                (hw::NR21, 0xf5),
+                (hw::NR22, 0x53),
+                (hw::NR23, 0xd2),
+                (hw::NR24, 0xc4),
+            ],
+        ),
+        (
+            Sfx::Wave(WaveEffect::new(
+                1234,
+                11,
+                WaveLevel::Quarter,
+                WavePattern::from_bytes([0x99; 16]),
+            )),
+            4,
+            vec![
+                (hw::NR30, 0x80),
+                (hw::NR31, 245),
+                (hw::NR32, 0x60),
+                (hw::NR33, 0xd2),
+                (hw::NR34, 0xc4),
+            ],
+        ),
+        (
+            Sfx::Noise(NoiseEffect::new(11, envelope, 7, NoiseWidth::Seven, 3)),
+            8,
+            vec![
+                (hw::NR41, 53),
+                (hw::NR42, 0x53),
+                (hw::NR43, 0x7b),
+                (hw::NR44, 0xc0),
+            ],
+        ),
+    ];
+    for (effect, mask, registers) in cases {
+        let mut game = RustBoy::new();
+        game.enable_music(
+            Song::from_rgbds(include_str!("../examples/music/song.asm"), "DemoSong"),
+            MusicClock::VBlank,
+        );
+        game.init(
+            [
+                game.reserve_music_channel(effect.channel()),
+                game.play_sfx(&effect),
+            ]
+            .concat(),
+        );
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(5);
+        assert_eq!(music_byte(&gb, MUSIC_MASK), mask);
+        for (register, value) in registers {
+            assert_eq!(
+                gb.read(register.value),
+                value,
+                "{effect:?}: {}",
+                register.name
+            );
+        }
+    }
+}

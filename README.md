@@ -118,7 +118,8 @@ A `RustBoy` program runs once a frame, woken by the VBlank interrupt:
 - the start-up code turns interrupts off, sets everything up, enables the interrupts that have a handler in `rIE`,
   drops the requests made meanwhile (`rIF` = 0) and turns interrupts on (`ei`);
 - the **VBlank handler** runs at the start of each VBlank (line 144): with sprites, first the OAM DMA that copies the
-  shadow OAM to OAM (see [Sprites](#sprites-and-the-shadow-oam-rustboy)), then the code given to `on_vblank`, then it
+  shadow OAM to OAM (see [Sprites](#sprites-and-the-shadow-oam-rustboy)), then the optional VRAM queue flush,
+  then the code given to `on_vblank`, then it
   tells the main loop that a frame started;
 - the **main loop** waits for that asleep (`call WaitFrame`, a `halt`), then runs the animations and the
   `add_to_main_loop` code, so it starts in VBlank too, once a frame;
@@ -166,6 +167,38 @@ routine run from HRAM (`hOAMDMA`, the top 8 bytes of the HRAM variables' 64), wh
 moved in one frame shows from the frame after next; the start-up runs one DMA before the LCD is turned on, so the
 first frame shows the sprites. A program without sprites has neither. `stdlib::graphics::oam` has the same pieces
 for a `stdlib` program (`Sprite::in_shadow_oam`, `init_oam_dma`, `run_oam_dma`, the sections).
+
+## Queued VRAM writes (`RustBoy`)
+
+Tilemap edits and score digits can be queued from game code without waiting for the PPU:
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let write = gb.queue_vram_write(hw::SCRN0, 7); // put tile 7 at the map's first cell
+gb.add_to_main_loop(write);
+let out = gb.build()?;
+assert!(out.contains("FlushVramQueue:"));
+# Ok::<(), Error>(())
+```
+
+The first call enables a FIFO of **12 pending byte writes**, using 41 bytes of WRAM0 without moving user
+variables. The VBlank handler flushes it **after OAM DMA and before user `on_vblank` code**. Entries are written
+in order, so the last queued write to one address wins. `queue_vram_write_from_registers()` takes the destination
+in `hl` and the byte in `a`, useful after `TileRef::load_address()` or a runtime calculation.
+
+Both helpers generate code that changes all registers and flags and preserves IME. Carry is clear when accepted;
+carry is set when the queue is full or a runtime address is outside VRAM. A rejected write is not queued: retry it
+later if it must arrive. Constant addresses outside VRAM and values outside a byte panic at the API call. Producer
+code must run only in initialization or the main loop, **never in an interrupt handler**. VBlank can safely interrupt
+it: the write cursor is published only when all entry bytes are ready.
+
+The consumer begins writes only on lines 144–152, leaving the last VBlank line as headroom. A late handler defers
+entries rather than writing during display rendering. On the test emulator, a full queue plus OAM DMA takes
+967 M-cycles of handler work, within the 1,140 M-cycle VBlank window; arbitrary user handlers can still exceed it.
+`stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
+Programs that never request the queue emit no queue code or storage.
 
 ## Low level (`asm`)
 

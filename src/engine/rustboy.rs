@@ -8,6 +8,7 @@ use crate::hw;
 use crate::stdlib::flow::Emittable;
 use crate::stdlib::graphics::oam::{self, OamTarget};
 use crate::stdlib::graphics::sprites::{clear_objects_screen, initialize_oam};
+use crate::stdlib::graphics::vram_queue;
 use crate::stdlib::inputs::select_all_keys;
 use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
@@ -80,6 +81,9 @@ pub struct RustBoy {
     /// reads the keys it updates
     updates_keys: bool,
 
+    /// Whether the program uses the bounded VRAM write queue.
+    vram_queue: bool,
+
     /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
     /// builtins, animation delay. The sprite size is also the sprite manager's, which
     /// needs it when a sprite is added: `with_config` and `set_sprite_size` set both
@@ -125,6 +129,7 @@ impl RustBoy {
             handlers: BTreeMap::new(),
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
+            vram_queue: false,
             config,
         }
     }
@@ -739,6 +744,9 @@ impl RustBoy {
         // init code, after every default it may want to change: variables, animations,
         // palettes, OAM (B11), interrupts. The LCD is still off, so it can write VRAM.
         let mut finish = Block::new();
+        if self.vram_queue {
+            finish.emit_all(vram_queue::initialize());
+        }
         if let Some(stat) = self.config.stat {
             finish.emit_all(interrupts::configure_stat(stat));
         }
@@ -889,16 +897,59 @@ impl RustBoy {
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
+        let mut buffers = Vec::new();
         if self.uses_shadow_oam()
             || functions
                 .names
                 .iter()
                 .any(|name| name == BuiltinFunction::InitOamDma.label())
         {
-            // These names are generated data, not user-defined functions or raw symbols.
-            // Reject all competing definitions before emitting duplicate labels or calling
-            // a user function in place of the HRAM DMA routine.
-            for name in [oam::SHADOW_OAM, oam::OAM_DMA] {
+            buffers.extend([
+                (
+                    oam::SHADOW_OAM,
+                    "Shadow OAM",
+                    MemoryRegion::Wram0,
+                    hw::OAM_SIZE.into(),
+                    hw::OAM_DMA_SOURCE_ALIGN,
+                ),
+                (
+                    oam::OAM_DMA,
+                    "OAM DMA",
+                    MemoryRegion::Hram,
+                    oam::oam_dma_size(),
+                    0,
+                ),
+            ]);
+        }
+        if self.vram_queue {
+            buffers.extend([
+                (
+                    vram_queue::BUFFER,
+                    "VRAM queue",
+                    MemoryRegion::Wram0,
+                    vram_queue::BUFFER_BYTES,
+                    0,
+                ),
+                (
+                    vram_queue::READ,
+                    "VRAM queue read cursor",
+                    MemoryRegion::Wram0,
+                    1,
+                    0,
+                ),
+                (
+                    vram_queue::WRITE,
+                    "VRAM queue write cursor",
+                    MemoryRegion::Wram0,
+                    1,
+                    0,
+                ),
+            ]);
+        }
+        {
+            // Generated RAM buffers cannot also be user-defined symbols: a reference
+            // must reach the reserved data or HRAM code, not a competing definition.
+            for &(name, _, _, _, _) in &buffers {
                 let first = if self.functions.is_external_symbol(name) {
                     Some(super::error::Definition::ExternalSymbol)
                 } else if code.iter().any(|body| defines(body, name))
@@ -939,22 +990,8 @@ impl RustBoy {
         // The shadow OAM, on a page of its own at the top of WRAM0, and the OAM DMA routine
         // at the top of the HRAM the variables may use (B12): the variables keep their
         // addresses. For the sprites, or for `InitOamDma` however the program calls it
-        let init_oam_dma = BuiltinFunction::InitOamDma.label();
-        if self.uses_shadow_oam() || functions.names.iter().any(|name| name == init_oam_dma) {
-            vars.reserve_buffer(
-                oam::SHADOW_OAM,
-                "Shadow OAM",
-                MemoryRegion::Wram0,
-                hw::OAM_SIZE.into(),
-                hw::OAM_DMA_SOURCE_ALIGN,
-            )?;
-            vars.reserve_buffer(
-                oam::OAM_DMA,
-                "OAM DMA",
-                MemoryRegion::Hram,
-                oam::oam_dma_size(),
-                0,
-            )?;
+        for (name, section, region, size, alignment) in buffers {
+            vars.reserve_buffer(name, section, region, size, alignment)?;
         }
         // Every variable now: they must fit
         vars.check_layout()?;
@@ -1001,6 +1038,12 @@ impl RustBoy {
             if interrupt == Interrupt::VBlank && self.uses_shadow_oam() {
                 code.extend(oam::run_oam_dma());
                 saves |= Regs::A | Regs::F;
+            }
+            if interrupt == Interrupt::VBlank && self.vram_queue {
+                code.push(Instr::Call {
+                    target: JumpTarget::Label(vram_queue::flush().name().to_string()),
+                });
+                saves |= vram_queue::flush().changes();
             }
             if let Some(handler) = given {
                 code.extend(handler.code.iter().cloned());
@@ -1313,6 +1356,59 @@ impl RustBoy {
     pub fn set_soft_reset(&mut self, on: bool) -> &mut Self {
         self.config.soft_reset = on;
         self
+    }
+
+    /// Queue a VRAM byte write from initialization or main-loop code. Automatically
+    /// enables a FIFO of 12 pending writes (41 WRAM bytes), flushed after OAM DMA and
+    /// before user VBlank code. Writes appear at the next flush. On return, carry is
+    /// clear if accepted, set if full or outside VRAM; rejected writes must be retried
+    /// by the caller if required. Changes all registers and flags, preserving IME.
+    ///
+    /// Do not call the generated code from interrupt handlers: the queue has one
+    /// producer. A late VBlank handler defers entries; arbitrary user handler work is
+    /// outside the queue's timing budget.
+    ///
+    /// # Panics
+    /// If a constant address is outside VRAM, a constant value does not fit a byte, or
+    /// another routine already occupies one of the queue routine names.
+    ///
+    /// # Example
+    /// ```
+    /// use rust_boy::prelude::*;
+    /// let mut gb = RustBoy::new();
+    /// let write = gb.queue_vram_write(hw::SCRN0, 7);
+    /// gb.add_to_main_loop(write);
+    /// assert!(gb.build()?.contains("FlushVramQueue:"));
+    /// # Ok::<(), Error>(())
+    /// ```
+    #[track_caller]
+    pub fn queue_vram_write(
+        &mut self,
+        address: impl Into<Expr>,
+        value: impl Into<Expr>,
+    ) -> Vec<Instr> {
+        let address = address.into();
+        if let Some(value) = address.value() {
+            assert!(
+                (i32::from(hw::VRAM.value)..i32::from(hw::VRAM_END)).contains(&value),
+                "queue_vram_write: address must be in VRAM"
+            );
+        }
+        let mut code = Block::new();
+        code.ld(R16::HL, address).ld(R8::A, value.into());
+        code.emit_all(self.queue_vram_write_from_registers());
+        code.into_instrs()
+    }
+
+    /// Queue `a` to the VRAM address in `hl`. Same result, clobbers and single-producer
+    /// contract as [`RustBoy::queue_vram_write`]; useful after `TileRef::load_address()`
+    /// or a runtime calculation. Invalid runtime addresses are rejected with carry set.
+    #[track_caller]
+    pub fn queue_vram_write_from_registers(&mut self) -> Vec<Instr> {
+        let enqueue = self.call_routine(&vram_queue::enqueue());
+        self.call_routine(&vram_queue::flush());
+        self.vram_queue = true;
+        enqueue
     }
 
     /// Add a sprite with its tile in one call
@@ -3214,7 +3310,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dma_buffer_names_cannot_be_defined_by_the_program() {
+    fn test_generated_buffer_names_cannot_be_defined_by_the_program() {
         type Setup = fn(&mut RustBoy, &str);
         let setups: [(Setup, Definition); 6] = [
             (
@@ -3263,12 +3359,21 @@ mod tests {
                 Definition::CodeSymbol,
             ),
         ];
-        for name in [oam::SHADOW_OAM, oam::OAM_DMA] {
+        for name in [
+            oam::SHADOW_OAM,
+            oam::OAM_DMA,
+            vram_queue::BUFFER,
+            vram_queue::READ,
+            vram_queue::WRITE,
+        ] {
             for (setup, first) in setups {
                 // Both automatic sprite DMA and explicitly requested DMA initialization
                 // reserve these names; an alias would call ROM instead of the HRAM code.
                 for with_sprite in [false, true] {
                     let mut gb = RustBoy::new();
+                    if [vram_queue::BUFFER, vram_queue::READ, vram_queue::WRITE].contains(&name) {
+                        gb.queue_vram_write(hw::SCRN0, 1);
+                    }
                     if with_sprite {
                         gb.add_sprite("Dot", tiles(1), 8, 8, 0);
                     } else {
@@ -3287,6 +3392,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_vram_queue_api_checks_constants_and_routine_conflicts() {
+        for address in [
+            0,
+            i32::from(hw::VRAM.value) - 1,
+            i32::from(hw::VRAM_END),
+            65536,
+        ] {
+            assert!(panic_message(|| RustBoy::new().queue_vram_write(address, 1)).contains("VRAM"));
+        }
+        assert!(!panic_message(|| RustBoy::new().queue_vram_write(hw::SCRN0, 256)).is_empty());
+        for name in ["QueueVramWrite", "FlushVramQueue"] {
+            let mut gb = RustBoy::new();
+            gb.define_function_from(name, Vec::<Instr>::new());
+            assert!(
+                panic_message(|| gb.queue_vram_write(hw::SCRN0, 1)).contains("another routine")
+            );
+        }
+    }
+
+    #[test]
+    fn test_vram_queue_reserves_memory_without_moving_variables() {
+        let mut gb = RustBoy::new();
+        let byte = gb.vars.create_u8("wUserByte", 7);
+        let address = gb.vars.get_address(byte.id());
+        let write = gb.queue_vram_write(hw::SCRN0, 9);
+        gb.add_to_main_loop(write);
+        assert_eq!(gb.vars.get_address(byte.id()), address);
+        let out = gb.build().unwrap();
+        assert_eq!(gb.build().unwrap(), out, "building remains idempotent");
+        assert!(out.contains("wVramQueue:\n    ds 39"));
+        assert!(out.contains("SECTION \"Variables\", WRAM0[$C000]"));
+        assert_links(&out);
+
+        let mut full = RustBoy::new();
+        full.queue_vram_write(hw::SCRN0, 1);
+        for i in 0..(4096 - 41) {
+            full.vars.create_u8(&format!("wByte{i}"), 0);
+        }
+        assert!(matches!(
+            full.build(),
+            Err(Error::MemoryFull {
+                region: MemoryRegion::Wram0,
+                ..
+            })
+        ));
     }
 
     #[test]

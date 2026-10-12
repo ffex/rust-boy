@@ -896,6 +896,13 @@ impl GameBoy {
         }
     }
 
+    /// Request interrupt sources without advancing time, for tests that inject an
+    /// interrupt at a particular instruction boundary (`IF` bits 0–4).
+    pub fn request_interrupt(&mut self, mask: u8) {
+        assert_eq!(mask & !0x1F, 0, "only hardware interrupt sources");
+        self.bus.interrupt_flag |= mask;
+    }
+
     /// The little-endian word at `address`
     pub fn read16(&self, address: u16) -> u16 {
         u16::from_le_bytes([self.read(address), self.read(address.wrapping_add(1))])

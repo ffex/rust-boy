@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
+use rust_boy::stdlib::graphics::vram_queue;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
 
@@ -1539,4 +1540,225 @@ fn engine_vblank_handler_fits_in_vblank() {
         assert!((180..=230).contains(&cycles), "{} M-cycles", cycles);
         eprintln!("VBlank handler with the OAM DMA: {} M-cycles", cycles);
     }
+}
+
+// ----- Queued VRAM writes -----
+
+/// Fill the queue in initialization (overflow is reported), then queue a full batch
+/// every frame. Optionally delay the producer into mode 3. OAM DMA shares the handler.
+fn vram_queue_rom(delay: u16) -> Rom {
+    let mut game = RustBoy::new();
+    game.add_sprite(
+        "QueueDot",
+        TileSource::from_raw(&[["`33333333"; 8]]),
+        8,
+        8,
+        0,
+    );
+    game.vars.create_u8("wRejectedWrites", 0);
+    let mut init = Block::new();
+    for i in 0..=vram_queue::CAPACITY {
+        init.emit_all(game.queue_vram_write(hw::SCRN0.value + u16::from(i), i + 1));
+        let accepted = game.labels().local("queue_accepted");
+        init.jr_cond(Condition::NC, &accepted)
+            .ld(R16::HL, "wRejectedWrites")
+            .inc(R8::AtHl)
+            .label(&accepted);
+    }
+    init.label("QueueInitDone");
+    game.init(init);
+    let mut work = Block::new();
+    if delay != 0 {
+        work.ld(R16::BC, delay).call("Delay");
+    }
+    work.label("QueueBatchStart");
+    for i in 0..vram_queue::CAPACITY {
+        work.emit_all(game.queue_vram_write(hw::SCRN1.value + u16::from(i), 100 + i));
+    }
+    game.add_to_main_loop(work);
+    Rom::build(&game.build().unwrap(), &[])
+}
+
+#[test]
+fn engine_vram_queue_full_batch_fits_with_oam_dma() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let rom = vram_queue_rom(0);
+    let mut gb = rom.boot();
+    assert!(gb.run_until_pc(gb.symbol("QueueInitDone"), 3));
+    assert!(
+        !gb.registers().ime,
+        "enqueue preserved disabled IME during init"
+    );
+    assert_eq!(gb.read_symbol("wRejectedWrites"), 1, "overflow is rejected");
+    assert_eq!(
+        gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)],
+        0,
+        "enqueue did not write VRAM before the first flush"
+    );
+    gb.run_frames(5);
+    for i in 0..vram_queue::CAPACITY {
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value) + usize::from(i)],
+            i + 1
+        );
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN1.value - hw::VRAM.value) + usize::from(i)],
+            100 + i
+        );
+    }
+    assert_eq!(
+        gb.vram()
+            [usize::from(hw::SCRN0.value - hw::VRAM.value) + usize::from(vram_queue::CAPACITY)],
+        0
+    );
+    let runs = vblank_handler_runs(&rom, 20);
+    for &(cycles, ly, mode) in &runs {
+        assert_eq!(
+            mode,
+            Mode::VBlank,
+            "handler ended after {cycles} cycles, line {ly}"
+        );
+        assert!(
+            cycles < u64::from(hw::VBLANK_MCYCLES) - 100,
+            "full queue plus DMA left less than 100 M-cycles: {cycles}"
+        );
+    }
+    eprintln!(
+        "Full VRAM queue and OAM DMA handler: {} M-cycles",
+        runs[0].0
+    );
+}
+
+#[test]
+fn engine_vram_queue_writes_in_vblank_even_with_delayed_game_logic() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let rom = vram_queue_rom(1004);
+    let mut gb = rom.boot();
+    let end = u64::from(hw::LINE_MCYCLES) * 154 * 12;
+    let write = gb.symbol("FlushVramQueue.write");
+    let mut count = 0;
+    while gb.cycles() < end {
+        if gb.registers().pc == write {
+            let (ly, mode) = gb.ly_mode();
+            assert_eq!(mode, Mode::VBlank, "VRAM write on line {ly}");
+            count += 1;
+        }
+        gb.step();
+    }
+    assert!(count > 50, "queue flushed only {count} entries");
+    assert_eq!(gb.blocked_accesses().0, 0);
+    assert_sprites_shown_by_dma_in_vblank(&gb);
+    for i in 0..vram_queue::CAPACITY {
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN1.value - hw::VRAM.value) + usize::from(i)],
+            100 + i
+        );
+    }
+}
+
+#[test]
+fn engine_vram_queue_publish_is_safe_at_every_instruction_boundary() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut work = Block::new();
+    work.emit_all(game.queue_vram_write(hw::SCRN0, 17))
+        .label("QueueInjectionBegin")
+        .emit_all(game.queue_vram_write(hw::SCRN0, 34))
+        .label("QueueInjectionDone")
+        .label(".park")
+        .halt()
+        .jr(".park");
+    game.add_to_main_loop(work);
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let begin = rom.symbols["QueueInjectionBegin"];
+    let done = rom.symbols["QueueInjectionDone"];
+    let enqueue = rom.symbols["QueueVramWrite"];
+    let mut reference = rom.boot();
+    assert!(reference.run_until_pc(begin, 3));
+    assert!(reference.run_until_pc(enqueue, 1));
+    let mut boundaries = Vec::new();
+    while reference.registers().pc != done {
+        boundaries.push(reference.registers().pc);
+        reference.step();
+        assert!(boundaries.len() < 100);
+    }
+    assert!(boundaries.len() > 20);
+    for boundary in boundaries {
+        let mut gb = rom.boot();
+        assert!(gb.run_until_pc(begin, 3));
+        assert!(gb.run_until_pc(enqueue, 1));
+        assert!(gb.run_until_pc(boundary, 1));
+        assert_eq!(gb.ly_mode().1, Mode::VBlank);
+        let before = gb.registers();
+        assert!(before.ime);
+        // Only a published entry may be consumed, even if every data byte has already
+        // been written. The interrupt must preserve the producer's registers and stack.
+        let expected = if gb.read_symbol(vram_queue::WRITE) == 6 {
+            34
+        } else {
+            17
+        };
+        gb.request_interrupt(hw::IEF_VBLANK.value);
+        gb.step();
+        assert!(gb.run_until_pc(boundary, 1));
+        assert_eq!(gb.registers(), before, "registers at ${boundary:04X}");
+        assert_eq!(
+            gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)],
+            expected,
+            "partial entry at ${boundary:04X}"
+        );
+        assert!(gb.run_until_pc(done, 1));
+        assert!(gb.registers().ime, "enqueue preserved enabled IME");
+        gb.run_frames(2);
+        assert_eq!(gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)], 34);
+        assert_eq!(
+            gb.read_symbol(vram_queue::READ),
+            gb.read_symbol(vram_queue::WRITE)
+        );
+        assert_eq!(gb.blocked_accesses().0, 0);
+    }
+}
+
+#[test]
+fn engine_vram_queue_late_flush_leaves_entries_for_the_next_vblank() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut work = Block::new();
+    work.di()
+        .emit_all(game.queue_vram_write(hw::SCRN0, 42))
+        .label("WaitLastVblankLine")
+        .ld_a_addr_def(hw::LY)
+        .cp(153)
+        .jr_cond(Condition::NZ, "WaitLastVblankLine")
+        .call("FlushVramQueue")
+        .label("QueueDeferred")
+        .ei()
+        .label(".park")
+        .halt()
+        .jr(".park");
+    game.add_to_main_loop(work);
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let mut gb = rom.boot();
+    assert!(gb.run_until_pc(gb.symbol("QueueDeferred"), 3));
+    assert_ne!(
+        gb.read_symbol(vram_queue::READ),
+        gb.read_symbol(vram_queue::WRITE)
+    );
+    assert_eq!(gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)], 0);
+    assert!(!gb.registers().ime, "flush preserved disabled IME");
+    gb.run_frames(2);
+    assert_eq!(gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)], 42);
+    assert_eq!(
+        gb.read_symbol(vram_queue::READ),
+        gb.read_symbol(vram_queue::WRITE)
+    );
+    assert_eq!(gb.blocked_accesses().0, 0);
 }

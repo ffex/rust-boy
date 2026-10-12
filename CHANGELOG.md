@@ -48,6 +48,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
   The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,
   constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
+- **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
+  `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
+  handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
+  invalid runtime address). Enqueue preserves IME and tolerates VBlank interruptions; late flushes
+  retain entries for the next VBlank. Queue code belongs only in init/main, not interrupt handlers.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

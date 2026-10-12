@@ -31,6 +31,8 @@ pub struct Animation {
     pub(crate) end_frame: u8,   // Relative end frame (e.g., 6)
     pub(crate) anim_type: AnimationType,
     pub(crate) index: u8, // Index of this animation within the sprite (0, 1, 2, ...)
+    /// Optional period in game frames; otherwise use the engine default.
+    pub(crate) delay: Option<u8>,
     pub(crate) frame_step: u8, // Tile increment per frame (1 for 8x8, 2 for 8x16)
 }
 

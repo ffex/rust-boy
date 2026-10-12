@@ -223,6 +223,34 @@ Y 0..=239); the constructor checks layout and capacity before registration. Hard
 parts share the configured size, and each 8x16 frame requires two aligned tiles.
 The older `add_sprite_16x16` helper keeps its existing labels and output.
 
+### Per-animation timing
+
+The global animation period is eight game frames by default. Override a particular
+animation while leaving other sprites on that shared clock:
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+let actor = gb.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 4]), 40, 40, 0);
+let walk = gb.sprites.add_animation(actor, "Walk", 0, 3, AnimationType::PingPong);
+gb.sprites.set_animation_delay(actor, walk, 3);
+gb.sprites.set_initial_animation(actor, walk);
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Periods are 1..=255 frames. A sprite with any override uses its own clock; animations
+on that sprite without an override use the global period through that clock. Switching
+selection resets the clock when the dispatcher observes it. Repeated enable calls for
+the selected animation keep its progress; a disabled frame stops/resets it. Existing
+frame stepping is unchanged, so selecting an animation does not immediately replace
+the displayed tile. Direct calls to animation functions bypass dispatcher timing.
+
+Use `set_composite_animation_delay(composite, index, frames)` to synchronize all
+metasprite parts. Clear overrides with `clear_animation_delay` or
+`clear_composite_animation_delay`. These are generation-time settings, with two WRAM
+bytes per independently timed sprite. Programs without overrides retain global timing.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:
@@ -516,15 +544,15 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
-  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
+  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want; see
+  [Per-animation timing](#per-animation-timing)), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and
   the timer, a soft reset (see [Frames and interrupts](#frames-and-interrupts-rustboy)), and routines (the builtins and
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too
   many tiles or sprites (40) panic with a clear message where they are added, as do unknown sprite ids and animation
   names; variables that do not fit in WRAM0 or HRAM make `build()` return `Error::MemoryFull` (a problem of the whole program,
   like a name defined twice: `build()` returns an `Error` for those, and a wrong call panics where it is made). The output is deterministic: things appear in the order you created them.
-- **Known limits:** all animations share one speed,
-  there is no sound yet, and the engine puts everything in one ROM bank (`asm` programs can open `ROMX` sections, but
+- **Known limits:** there is no sound yet, and the engine puts everything in one ROM bank (`asm` programs can open `ROMX` sections, but
   nothing switches banks yet). The full list, with fixes planned, is in
   [CONTEXT.md](CONTEXT.md).
 

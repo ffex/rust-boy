@@ -106,7 +106,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   the whole program by construction: `If*` → `.end_if_N`, `.else_N`, `.then_N`; `check_key` →
   `.check_left_N`, `.check_left_end_N`; a limited move → `.sprite0_left_limit_store_N`, `…_end_N`;
   `clear_objects_screen` → `.clear_oam_N` (was the global `ClearOam`); the animation dispatcher →
-  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`. The code
+  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`; when an animation
+  has a period of its own, the per-sprite dispatcher (since `refactor-p3-animation-speed`) →
+  `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`. The code
   `build()` generates (start-up, dispatcher) uses a fork of the allocator (`LabelAllocator::fork`: the same
   sequence from where it is, not shared), so two builds print the same labels ([B14](#b14)). Local labels never
   change the RGBDS scope, so they can go inside an `If` body. Global labels are left to routines and functions,
@@ -241,6 +243,18 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   moves stop the leading member at the limit and keep every part's offset; composite animation works in both sizes.
   Emulator tests: an irregular six-part layout moved towards the four limits in both sizes (tiles and flags kept),
   animation of every part, typed flags on every part of a 16x16 sprite and of a metasprite.
+
+- **Per-animation speed** (since `refactor-p3-animation-speed`): `SpriteManager::set_animation_delay(sprite, index,
+  frames)` sets a period of 1..=255 game frames for one animation at generation time. A sprite with any override gets
+  its own timer and previous-selection byte (`wAnim_{name}_Timer`, `wAnim_{name}_Previous`); its other animations use
+  the global period through that timer. A selection change seen by the dispatcher resets the clock; enabling the
+  selected animation again does not stall it. A disabled selection stops the clock, and enabling again after a
+  disabled frame starts a full period. Sprites without overrides keep the shared global counter, and programs without
+  overrides generate the same asm. The dispatcher saves BC (B the selection, C the shared-counter predicate); the
+  animation functions keep their AF-only convention and remain the only frame stepping, so Once and PingPong behave as
+  before. Composite setters (`set_composite_animation_delay`) configure every part and check all indices first;
+  `clear_animation_delay` / `clear_composite_animation_delay` remove overrides. Direct calls of an animation function
+  step at once, outside the dispatcher's timing.
 
 - **Typed sprite attributes** (since `refactor-p3-sprite-flags`): `SpriteFlags`, `ObjectPalette` and `SpritePriority`
   in `stdlib::graphics::sprites` (prelude exports). `Sprite::new`, `RustBoy::add_sprite` and `add_sprite_16x16` take
@@ -1403,7 +1417,7 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, no text/numbers. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
-- **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
+- **Animation:** per-animation periods since `refactor-p3-animation-speed`; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,

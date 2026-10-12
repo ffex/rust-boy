@@ -99,6 +99,8 @@ pub fn memcopy() -> Routine {
         .with_returns(Regs::BC | Regs::DE | Regs::HL)
         .with_clobbers(Regs::A | Regs::F)
 }
+/// Turn the LCD off by writing `LCDCF_OFF`: every other LCDC setting is cleared too.
+/// Emit only in VBlank. To keep the program's LCDC settings, use [`lcd_off`].
 pub fn turn_off_screen() -> Vec<Instr> {
     let mut asm = Block::new();
     // Turn off LCD
@@ -106,12 +108,35 @@ pub fn turn_off_screen() -> Vec<Instr> {
     asm.into_instrs()
 }
 
+/// Turn the LCD on by writing `LCDCF_ON | LCDCF_BGON | LCDCF_OBJON`: the `$9800` background map,
+/// 8x8 sprites and no window, whatever the program configured. To keep them, use [`lcd_on`].
 pub fn turn_on_screen() -> Vec<Instr> {
     let mut asm = Block::new();
     // Turn on LCD
     let on = Expr::from(hw::LCDCF_ON) | hw::LCDCF_BGON | hw::LCDCF_OBJON;
     asm.ld(R8::A, on).ld_addr_def_a(hw::LCDC);
     asm.into_instrs()
+}
+
+/// Turn the LCD off (LCDC bit 7), preserving every other LCDC bit: the maps, sprite size and
+/// window settings come back with [`lcd_on`]. Emit only in VBlank: turning the LCD off
+/// outside it can damage a DMG. Changes A and flags only.
+pub fn lcd_off() -> Vec<Instr> {
+    let mut code = Block::new();
+    code.ldh(R8::A, Mem::addr(hw::LCDC))
+        .and(Expr::low(!Expr::from(hw::LCDCF_ON)))
+        .ldh(Mem::addr(hw::LCDC), R8::A);
+    code.into_instrs()
+}
+
+/// Turn the LCD on (LCDC bit 7), preserving every other LCDC bit, e.g. after [`lcd_off`] and a
+/// runtime tilemap copy. Changes A and flags only.
+pub fn lcd_on() -> Vec<Instr> {
+    let mut code = Block::new();
+    code.ldh(R8::A, Mem::addr(hw::LCDC))
+        .or(hw::LCDCF_ON)
+        .ldh(Mem::addr(hw::LCDC), R8::A);
+    code.into_instrs()
 }
 
 /// The `WaitVBlank` routine: wait until the LCD is in VBlank (`rLY` from 144 to 153)
@@ -147,10 +172,10 @@ pub fn wait_not_vblank() -> Routine {
 ///
 /// This is the only `GetTileByPixel`: `RustBoy` emits this one too
 /// (`BuiltinFunction::GetTileByPixel`). Its contract:
-/// - Reads: `b` = X and `c` = Y, in pixels on the background map at `$9800` (0 to 255;
+/// - Reads: `b` = X and `c` = Y, in pixels on the background map selected by LCDC bit 3 (0 to 255;
 ///   the screen pixel when `rSCX` and `rSCY` are 0). `get_pivot` (of a `stdlib` `Sprite`,
 ///   or of the `RustBoy` sprite manager) loads them from a sprite's position.
-/// - Returns: `hl` = the address of that tile in the map, `$9800 + (Y / 8) * 32 + X / 8`,
+/// - Returns: `hl` = the address of that tile in the map, `map_base + (Y / 8) * 32 + X / 8`,
 ///   and `a` = the tile index stored there (`[hl]`). So a caller can test the tile at
 ///   once (`IfConst`, `IfA`, `IfCall`), then change it through `hl` (`TileRef`).
 /// - Clobbers: `bc` and the flags; `de` is kept.
@@ -161,8 +186,7 @@ pub fn get_tile_by_pixel() -> Routine {
 
     asm.comment("Convert a pixel position to a tilemap address and read the tile there");
     asm.comment(&format!(
-        "hl = ${:04X} + X / 8 + (Y / 8) * {}",
-        hw::SCRN0.value,
+        "hl = active background map + X / 8 + (Y / 8) * {}",
         hw::SCRN_VX_B.value
     ));
     asm.comment("@param b: X");
@@ -199,6 +223,12 @@ pub fn get_tile_by_pixel() -> Routine {
 
     // Add the offset to the tilemap's base address
     asm.ld(R16::BC, Expr::hex(hw::SCRN0.value));
+    // Read the active background map at runtime, including changes made in a handler.
+    asm.ld_a_addr_def(hw::LCDC);
+    asm.and(hw::LCDCF_BG9C00);
+    asm.jr_cond(Condition::Z, ".map_selected");
+    asm.ld(R16::BC, Expr::hex(hw::SCRN1.value));
+    asm.label(".map_selected");
     asm.add_hl(R16::BC);
 
     // And read the tile there
@@ -249,32 +279,76 @@ mod tests {
         (addr % 251) as u8
     }
 
-    /// A CPU whose background map at `$9800` holds [`tile_at`]
+    /// A CPU whose background maps at `$9800` and `$9C00` hold [`tile_at`], showing `$9800`
     fn cpu_with_map() -> TestCpu {
+        cpu_with_lcdc(0)
+    }
+
+    /// [`cpu_with_map`] with `rLCDC` = `lcdc`
+    fn cpu_with_lcdc(lcdc: u8) -> TestCpu {
         let mut cpu = TestCpu::default();
-        for addr in 0x9800..0x9C00 {
+        cpu.mem.insert(hw::LCDC.name.to_string(), lcdc);
+        cpu.consts
+            .insert(hw::LCDCF_BG9C00.name.to_string(), hw::LCDCF_BG9C00.value);
+        for addr in 0x9800..0xA000 {
             cpu.mem.insert(format!("${:04X}", addr), tile_at(addr));
         }
         cpu
     }
 
     #[test]
+    fn lcd_off_and_on_flip_only_bit_7() {
+        for code in [lcd_off(), lcd_on()] {
+            assert_eq!(Regs::written_by(&code).unwrap() | Regs::AF, Regs::AF);
+        }
+        // Every other bit set or clear (BG map $9C00, 8x16 sprites, window on its $9C00 map)
+        for others in [0x7F, 0x00, 0x6E] {
+            let mut cpu = cpu_with_lcdc(others | hw::LCDCF_ON.value);
+            cpu.consts
+                .insert(hw::LCDCF_ON.name.to_string(), hw::LCDCF_ON.value);
+            cpu.run(&lcd_off());
+            assert_eq!(cpu.mem.get(hw::LCDC.name), Some(&others));
+            cpu.run(&lcd_on());
+            assert_eq!(
+                cpu.mem.get(hw::LCDC.name),
+                Some(&(others | hw::LCDCF_ON.value))
+            );
+        }
+    }
+
+    #[test]
     fn test_get_tile_by_pixel_returns_the_address_and_the_tile() {
         // B23: one contract. In: b = X, c = Y (pixels). Out: hl = $9800 + (Y/8)*32 + X/8,
         // a = [hl]; de kept. (The stdlib copy did not return the tile in a.)
+        // The map is the one LCDC bit 3 selects: $9C00 when set, whatever the other bits
         let routine = get_tile_by_pixel();
         let positions = [0u8, 1, 7, 8, 9, 100, 143, 159, 255];
-        for x in positions {
-            for y in positions {
-                let mut cpu = cpu_with_map();
-                (cpu.b, cpu.c, cpu.d, cpu.e) = (x, y, 0x12, 0x34);
-                cpu.run(routine.body());
-                let addr = 0x9800 + u16::from(y / 8) * 32 + u16::from(x / 8);
-                let hl = u16::from_be_bytes([cpu.h, cpu.l]);
-                assert_eq!(hl, addr, "hl for X {} Y {}", x, y);
-                assert_eq!(cpu.a, tile_at(addr), "a for X {} Y {}", x, y);
-                assert_eq!((cpu.d, cpu.e), (0x12, 0x34), "de kept");
-                assert!(cpu.trace.is_empty(), "no writes: {:?}", cpu.trace);
+        let lcdc_on = hw::LCDCF_ON.value | hw::LCDCF_BGON.value;
+        for (lcdc, map) in [
+            (0, 0x9800u16),
+            (lcdc_on, 0x9800),
+            (hw::LCDCF_BG9C00.value, 0x9C00),
+            (lcdc_on | hw::LCDCF_BG9C00.value, 0x9C00),
+        ] {
+            for x in positions {
+                for y in positions {
+                    let mut cpu = cpu_with_lcdc(lcdc);
+                    (cpu.b, cpu.c, cpu.d, cpu.e) = (x, y, 0x12, 0x34);
+                    cpu.run(routine.body());
+                    let addr = map + u16::from(y / 8) * 32 + u16::from(x / 8);
+                    let hl = u16::from_be_bytes([cpu.h, cpu.l]);
+                    assert_eq!(hl, addr, "hl for LCDC {:#04x} X {} Y {}", lcdc, x, y);
+                    assert_eq!(
+                        cpu.a,
+                        tile_at(addr),
+                        "a for LCDC {:#04x} X {} Y {}",
+                        lcdc,
+                        x,
+                        y
+                    );
+                    assert_eq!((cpu.d, cpu.e), (0x12, 0x34), "de kept");
+                    assert!(cpu.trace.is_empty(), "no writes: {:?}", cpu.trace);
+                }
             }
         }
     }

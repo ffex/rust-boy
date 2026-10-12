@@ -232,6 +232,32 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Window layer** (since `refactor-p3-window`): `stdlib::graphics::window` has stateless snippets (position with the
+  WX + 7 conversion and its bounds in `screen_to_raw`, raw WX/WY, show/hide, window map), reused by
+  `RustBoy::set_window_position`, `show_window` and `select_window_tilemap`; they change only A and flags and keep the
+  other LCDC bits. `RustBoyConfig::window(Window::new(map, x, y))` (or `RustBoy::set_window`) makes start-up write
+  WX/WY with the LCD off, before user init code, and add `LCDCF_WINON` (and `LCDCF_WIN9C00`) to the LCD-on value. The
+  window shares the background tiles and BGP and needs LCDC bit 0 on DMG. `show_window(true)` without a configured
+  window writes no position: it shows at the boot values WX=0, WY=0 unless the program sets one. `build()` writes the
+  whole LCD-on LCDC value after init code, so `show_window` and `select_window_tilemap` act from VBlank code, not from
+  init (`test_window_from_the_config_at_start_up`); a configured window cannot start hidden today.
+
+- **Runtime tilemaps** (since `refactor-p3-runtime-tilemaps`): `TileManager::add_tilemap_rom` keeps level or screen
+  maps in ROM, emitted in creation order and left out of the start-up copies: they reserve no VRAM map (`get_address`
+  returns `None`), so any number of them coexist, and the one-tilemap-per-map check of [B19](#b19) covers start-up maps
+  only. `copy_tilemap(id, area)` copies a registered map to either VRAM map with the single `Memcopy`; a full map
+  exceeds VBlank, so it runs with the LCD off. `stdlib::graphics::utility::lcd_off`/`lcd_on` flip only LCDC bit 7 and
+  keep the configured maps, sprite size and window (`turn_off_screen`/`turn_on_screen` write fixed values). Short maps
+  leave the destination's trailing rows unchanged; empty maps copy nothing. The single ROM0 bank limits how many
+  1 KiB maps fit; an overflow is an `rgblink` error. Emulator tests: two full levels into both maps with every byte
+  checked, an empty copy, a configured LCDC (BG `$9C00`, 8x16, window) kept across the copy, a short map over a full
+  one, and no blocked VRAM access.
+
+- **Tile lookup** (since `refactor-p3-tilemap-lookup`): the shared `GetTileByPixel` reads LCDC bit 3 at runtime and
+  returns the tile address and index from the current background map, at `$9800` or `$9C00`. Coordinates remain map
+  pixels (callers add SCX/SCY when starting from screen pixels); the calling convention is unchanged. Unit tests on the
+  test CPU and emulator tests cover both maps, pixel boundaries and a map change in a VBlank handler.
+
 - **Background camera** (since `refactor-p3-scrolling`): `stdlib::graphics::scroll` has three stateless snippets,
   reused by `RustBoy::set_background_scroll`, `scroll_background_by` and `follow_background_point`. They write
   `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and
@@ -569,11 +595,12 @@ The problems are where each layer reaches across the line:
    even if unused, none) and `animation_delay` (8). The defaults are the settings `RustBoy::new` had, so the default
    output is byte-identical (`test_config_defaults_reproduce_the_output`: the defaults, the same program from `new()`,
    the default config and every default written out, and the exact palette and LCDC lines). `RustBoyConfig` and `Lcdc`
-   are `#[non_exhaustive]` (a setting can be added later, e.g. the window in Phase 3): build one from `default()` with
-   the builder methods, one per field. The setters stay and change the same settings (`set_sprite_size`,
+   are `#[non_exhaustive]` (a setting can be added later, as the window was in `refactor-p3-window`): build one from
+   `default()` with the builder methods, one per field. The setters stay and change the same settings (`set_sprite_size`,
    `set_background_tilemap`, `set_animation_delay`, `use_function`, and `set_palettes`, new); the sprite size is also the
    sprite manager's, which needs it when a sprite is added, so both are set together. The background tile data
-   (`LCDCF_BG8800`, the engine's VRAM layout) and the window (off; Phase 3) are not settings. Tests:
+   (`LCDCF_BG8800`, the engine's VRAM layout) is not a setting; the window is one since `refactor-p3-window`
+   (`RustBoyConfig::window`, off by default). Tests:
    `test_config_and_setters_give_the_same_program`, `test_a_forced_builtin_comes_from_the_config`,
    `test_palettes_from_the_config` and `test_lcdc_flags_from_the_config` (the start-up code on `gb_asm::test_cpu`: each
    palette register and the `rLCDC` value). `fosdem` uses `with_config` (the same asm). Not breaking, except for one row:
@@ -1053,8 +1080,10 @@ the two maps; `TileManager::add_tilemap_at(name, area, rows)` puts a tilemap at 
 start of its map, so one would replace the other), and so does a tilemap of more than 32 rows (it ran into the next map,
 or out of VRAM from `$9C00`). **`RustBoy::set_background_tilemap(area)`** chooses the map the background shows: `build()`
 adds `| LCDCF_BG9C00` to the LCD-on value for `Map9C00` (for `Map9800`, the default, the LCDC line is unchanged: the flag
-is 0). Not done: the window layer, which could show the other map (Phase 3), and `GetTileByPixel`, which still reads the
-`$9800` map (documented on `set_background_tilemap`). No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
+is 0). Window support exists since `refactor-p3-window`: startup configuration and runtime positioning, map selection
+and show/hide operations. Since `refactor-p3-tilemap-lookup`, `GetTileByPixel` follows LCDC bit 3 at runtime. Since
+`refactor-p3-runtime-tilemaps`, ROM-only tilemaps (`add_tilemap_rom`) are exempt from the one-per-map panic: they
+are not copied at start-up, and `copy_tilemap` chooses the map at runtime. No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
 and `test_a_tilemap_has_at_most_32_rows` (both failed before: no panic), `test_a_tilemap_at_9c00` (the start-up code with
 the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCDC value; linked with RGBDS).
 
@@ -1109,7 +1138,7 @@ label, two contracts. Memcopy, WaitVBlank, WaitNotVBlank and UpdateKeys are also
 `src/bin/unbricked.rs` has a third copy. *Fix:* one routine registry.
 **Status: fixed** on `refactor-p1-builtins`. There is one `GetTileByPixel`, in `gb_std`
 (`src/stdlib/graphics/utility.rs:159`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
-the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them);
+the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them; since `refactor-p3-tilemap-lookup`, on the map LCDC bit 3 selects);
 out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it changes `bc` and the flags and keeps
 `de` (documented on the function). `BuiltinFunction::generate` (`src/engine/functions.rs:83`, the code of `BuiltinFunction::routine`, `:71`, since `refactor-p2-routines`) returns the
 `gb_std` routine for Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel (the other four were
@@ -1343,9 +1372,9 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no window layer, palette writes/fades exist since `refactor-p3-palettes`, no metasprites beyond 16×16, no text/numbers (a `$9C00` map
-  exists since [B19](#b19), without a window layer). Background scrolling exists since `refactor-p3-scrolling` (see
-  §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+- **Graphics:** no metasprites beyond 16×16, no text/numbers. Background scrolling exists since
+  `refactor-p3-scrolling` and the window layer since `refactor-p3-window` (see §2); `GetTileByPixel` still takes map
+  pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).

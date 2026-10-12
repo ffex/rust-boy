@@ -329,7 +329,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Entities: spawn / despawn
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
 - [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
-- [ ] RNG
+- [x] RNG (branch `refactor-p3-rng`): `stdlib::random::random_u8` advances a deterministic 8-bit maximal-length
+      LFSR, returns the next byte in A and stores its state in `wRandomSeed`; a zero state falls back to `$A7`.
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters

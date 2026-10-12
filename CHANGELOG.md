@@ -96,6 +96,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
   preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
   global default.
+- **Pseudo-random bytes** (Phase 3): `stdlib::random::random_u8` returns the next byte of a
+  repeatable 8-bit LFSR sequence in A and stores its state in `wRandomSeed`; zero state falls back to `$A7`.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

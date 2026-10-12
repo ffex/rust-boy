@@ -9,7 +9,7 @@ use crate::{
     engine::animations::Animation,
     hw,
     stdlib::graphics::sprites::{
-        MoveDir, Sprite, draw_sprites, move_coord_limit, move_coord_var, oam_address, pivot,
+        MoveDir, OamTarget, Sprite, draw_sprites, move_coord_limit, move_coord_var, pivot,
     },
 };
 
@@ -52,6 +52,10 @@ fn animation_label(sprite: &str, animation: &str) -> String {
 fn direction_var(sprite: &str) -> String {
     format!("wAnim_{}_Dir", sprite)
 }
+
+/// Where every sprite of a `RustBoy` program lives: its code reads and writes the shadow
+/// OAM, at any time, and the VBlank handler copies it to OAM with an OAM DMA (B12)
+pub(crate) const SHADOW: OamTarget = OamTarget::Shadow;
 
 /// Unique identifier for a sprite instance
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -228,13 +232,14 @@ impl Axis {
         }
     }
 
-    /// The address of the sprite's coordinate in OAM: Y is byte 0 of its entry, X byte 1
+    /// The address of the sprite's coordinate in the shadow OAM: Y is byte 0 of its entry,
+    /// X byte 1
     fn oam_address(self, sprite: &SpriteData) -> Expr {
         let byte = match self {
             Axis::Y => hw::OAMA_Y,
             Axis::X => hw::OAMA_X,
         };
-        oam_address(sprite.oam_index, byte)
+        SHADOW.entry(sprite.oam_index, byte)
     }
 }
 
@@ -880,16 +885,17 @@ impl SpriteManager {
         )
     }
 
-    /// Generate the code that writes every sprite to OAM, at start-up: `stdlib`'s
-    /// [`draw_sprites`], in OAM order (the OAM was cleared before, with
-    /// `stdlib::graphics::sprites::clear_objects_screen`)
+    /// Generate the code that writes every sprite to the shadow OAM, at start-up: `stdlib`'s
+    /// [`draw_sprites`], in OAM order (the shadow OAM was cleared before, with
+    /// `stdlib::graphics::sprites::clear_objects_screen`, and an OAM DMA copies it to OAM
+    /// before the LCD is turned on)
     pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
         let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
         sorted_sprites.sort_by_key(|s| s.oam_index);
         // `add` checked that each position fits in OAM (B17)
         let sprites: Vec<Sprite> = sorted_sprites
             .into_iter()
-            .map(|s| Sprite::new(s.oam_index, s.x, s.y, s.tile_index, s.flags))
+            .map(|s| Sprite::new(s.oam_index, s.x, s.y, s.tile_index, s.flags).in_shadow_oam())
             .collect();
         draw_sprites(&sprites)
     }
@@ -983,7 +989,7 @@ impl SpriteManager {
     /// If there is no sprite `id`, or an offset is out of -255 to 255 (on a 256-pixel map,
     /// 256 is 0: a mistake).
     pub fn get_pivot(&self, id: SpriteId, x_offset: i16, y_offset: i16) -> Vec<Instr> {
-        pivot(self.sprite(id).oam_index, x_offset, y_offset)
+        pivot(SHADOW, self.sprite(id).oam_index, x_offset, y_offset)
     }
 
     /// Get sprite Y position (its OAM Y, into `a`)
@@ -1155,14 +1161,15 @@ mod tests {
     use crate::stdlib::graphics::sprites::MoveDir;
     use crate::stdlib::graphics::sprites::tests::{DISTANCES, LIMITS, expected_move};
 
-    /// A test CPU whose OAM holds every sprite at its initial position
+    /// A test CPU whose shadow OAM holds every sprite at its initial position
     fn cpu_with_oam(sm: &SpriteManager) -> TestCpu {
         let mut cpu = TestCpu::default();
         for sprite in sm.sprites.values() {
             let entry = sprite.oam_index * 4;
-            cpu.mem.insert(format!("_OAMRAM+{}", entry), sprite.y + 16);
             cpu.mem
-                .insert(format!("_OAMRAM+{}", entry + 1), sprite.x + 8);
+                .insert(format!("wShadowOAM+{}", entry), sprite.y + 16);
+            cpu.mem
+                .insert(format!("wShadowOAM+{}", entry + 1), sprite.x + 8);
         }
         cpu
     }
@@ -1185,11 +1192,11 @@ mod tests {
         ];
         let mut sm = SpriteManager::new(LabelAllocator::new());
         sm.add_for_test("Paddle", 16, 128, 0, 1);
-        // OAM entry 1: Y at _OAMRAM+4, X at _OAMRAM+5
+        // shadow OAM entry 1: Y at wShadowOAM+4, X at wShadowOAM+5
         let ball = sm.add_for_test("Ball", 32, 100, 0, 1);
 
         for (name, method, byte, dir) in moves {
-            let moved = format!("_OAMRAM+{}", 4 + byte);
+            let moved = format!("wShadowOAM+{}", 4 + byte);
             for distance in DISTANCES {
                 for limit in LIMITS {
                     let code = method(&sm, ball, distance, limit);
@@ -1221,27 +1228,27 @@ mod tests {
         let mut cpu = cpu_with_oam(&sm);
         for frame in 0..300 {
             cpu.run(&left);
-            let x = cpu.mem["_OAMRAM+1"];
+            let x = cpu.mem["wShadowOAM+1"];
             assert!(x >= 15, "frame {}: X {} is past the limit 15", frame, x);
         }
-        assert_eq!(cpu.mem["_OAMRAM+1"], 15, "the sprite stops on the limit");
+        assert_eq!(cpu.mem["wShadowOAM+1"], 15, "the sprite stops on the limit");
 
         // A sprite already past the limit is not pushed further (it went 9, 8, ..., 0, 255, ...)
-        cpu.mem.insert("_OAMRAM+1".to_string(), 10);
+        cpu.mem.insert("wShadowOAM+1".to_string(), 10);
         for _ in 0..300 {
             cpu.run(&left);
         }
-        assert_eq!(cpu.mem["_OAMRAM+1"], 10);
+        assert_eq!(cpu.mem["wShadowOAM+1"], 10);
 
         // Same to the right: step 3 from X 24 towards 100 goes ..., 96, 99, then stops on 100
         let right = sm.move_right_limit(ball, 3, 100);
-        cpu.mem.insert("_OAMRAM+1".to_string(), 24);
+        cpu.mem.insert("wShadowOAM+1".to_string(), 24);
         for frame in 0..300 {
             cpu.run(&right);
-            let x = cpu.mem["_OAMRAM+1"];
+            let x = cpu.mem["wShadowOAM+1"];
             assert!(x <= 100, "frame {}: X {} is past the limit 100", frame, x);
         }
-        assert_eq!(cpu.mem["_OAMRAM+1"], 100);
+        assert_eq!(cpu.mem["wShadowOAM+1"], 100);
     }
 
     type CompositeMove = fn(&SpriteManager, CompositeSpriteId, u8, u8) -> Vec<Instr>;
@@ -1262,7 +1269,7 @@ mod tests {
         );
         // OAM entry 0 is the left half (Y 88, X 88), entry 1 the right half (Y 88, X 96)
         let halves = |cpu: &TestCpu| {
-            let m = |n: u8| cpu.mem[&format!("_OAMRAM+{}", n)];
+            let m = |n: u8| cpu.mem[&format!("wShadowOAM+{}", n)];
             ((m(0), m(1)), (m(4), m(5)))
         };
         // (name, method, direction, axis byte in the OAM entry, limit) as in the fosdem example
@@ -1351,8 +1358,8 @@ mod tests {
         let ball = sm.add_for_test("Ball", 32, 100, 0, 1);
         crate::stdlib::graphics::sprites::tests::check_pivot(
             |x, y| sm.get_pivot(ball, x, y),
-            "_OAMRAM+4",
-            "_OAMRAM+5",
+            "wShadowOAM+4",
+            "wShadowOAM+5",
         );
     }
 
@@ -1626,7 +1633,7 @@ mod tests {
     fn animation_cpu(sm: &SpriteManager) -> TestCpu {
         let mut cpu = TestCpu::default();
         for sprite in sm.sprites.values() {
-            let tile = format!("_OAMRAM+{}", sprite.oam_index * 4 + 2);
+            let tile = format!("wShadowOAM+{}", sprite.oam_index * 4 + 2);
             cpu.mem.insert(tile, sprite.tile_index);
         }
         cpu.mem.insert("wFrameCounter".to_string(), 0);
@@ -1639,7 +1646,7 @@ mod tests {
     /// The frame `sprite` shows (its tile, counted in frames from its first tile)
     fn shown_frame(sm: &SpriteManager, cpu: &TestCpu, sprite: SpriteId) -> u8 {
         let data = sm.get(sprite).unwrap();
-        let tile = cpu.mem[&format!("_OAMRAM+{}", data.oam_index * 4 + 2)];
+        let tile = cpu.mem[&format!("wShadowOAM+{}", data.oam_index * 4 + 2)];
         (tile - data.tile_index) / sm.size().tiles_per_sprite()
     }
 

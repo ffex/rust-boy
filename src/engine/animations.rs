@@ -1,6 +1,6 @@
 use crate::asm::{Block, Condition, Expr, Instr, R8};
 use crate::hw;
-use crate::stdlib::graphics::sprites::oam_address;
+use crate::stdlib::graphics::oam::OamTarget;
 
 /// How an animation goes on after its last frame
 ///
@@ -54,9 +54,10 @@ impl Animation {
         }
     }
 
-    /// OAM address of the sprite's tile index: byte 2 of its entry (Y, X, tile, flags)
+    /// Shadow OAM address of the sprite's tile index: byte 2 of its entry (Y, X, tile,
+    /// flags)
     fn oam_tile_addr(&self) -> Expr {
-        oam_address(self.oam_index, hw::OAMA_TILEID)
+        OamTarget::Shadow.entry(self.oam_index, hw::OAMA_TILEID)
     }
 
     /// Absolute tile indices of the first and last frames; frames are `frame_step` tiles

@@ -44,9 +44,17 @@ together: every breaking change of the refactoring is in this release, so a prog
   (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
   conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
+- **Sprites** (Phase 3): every sprite of a `RustBoy` program lives in a shadow OAM in WRAM, which the VBlank handler
+  copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
+  The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,
+  constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
+  With the builtin `InitOamDma`, so are the labels of the code it copies, `OamDmaCode` and `OamDmaCodeEnd`
+  (`Definition::BuiltinLabel`).
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
+  - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
+    macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
 
 ### Toolchain
 
@@ -185,6 +193,22 @@ interrupts on, and the main loop sleeps in `halt` until the VBlank handler has r
 | raw `Data` code in a program without variables got `SECTION "Raw Data", WRAM0` | it goes in the `SECTION "Variables", WRAM0[$C000]` of `wVBlankFlag`, like raw data after variables |
 | a joypad interrupt, a timer or `rSTAT` set up by hand in `raw()` code | `on_joypad`, `on_timer(Timer, code)`, `on_stat(Stat, code)`, or `RustBoyConfig::stat` / `timer`; hand-written set-up still works, but `rIE` is written by the start-up code (VBlank and the interrupts with a handler): enable more with `enable_interrupt` (in `init()` or later), or OR your bits in by hand (`ldh a, [rIE]`, `or a, IEF_TIMER`, `ldh [rIE], a`). Writing `rIE` turns off what it leaves out: the handlers stop (VBlank is enabled again by `WaitFrame`) |
 | (new) | `RustBoy::on_interrupt`, `on_interrupt_routine` (a routine that reads no register), `on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `enable_interrupt`, `disable_interrupt`, `set_soft_reset`; `RustBoyConfig::stat`, `timer`, `soft_reset`; `stdlib::interrupts` (`Interrupt`, `Stat`, `Timer`, `TimerClock`, `vector`, `handler`, `wait_frame`, `enable`, `disable`, ...), `stdlib::inputs::check_soft_reset`, `select_all_keys`; `hw::DIV`, `TIMA`, `TMA`, `TAC`, `TACF_*`, `VECTOR_*`, `STACK_TOP`; the prelude exports `Interrupt`, `Stat`, `Timer`, `TimerClock` |
+
+### 7. Sprites (Phase 3)
+
+The sprites of a `RustBoy` program live in a shadow OAM (`wShadowOAM`, WRAM0), copied to OAM by an OAM DMA at the start
+of each VBlank (B12; see [CONTEXT.md](CONTEXT.md#b12)).
+
+| Before | After |
+|---|---|
+| sprite code (moves, `get_x` / `get_y` / `get_pivot`, animations, the start-up) read and wrote OAM, `_OAMRAM+n`: a move that ran outside VBlank was lost | it reads and writes `wShadowOAM+n`; the VBlank handler copies it to OAM. Raw code that touches a sprite's OAM bytes must use `wShadowOAM` too: OAM is overwritten every VBlank |
+| a sprite moved in a frame showed from the next one | from the one after (the DMA of the next VBlank copies it) |
+| the VBlank handler took 26 M-cycles with nothing of the program's; the main loop's code started 44 M-cycles after line 144 | with sprites, 193 M-cycles (the DMA); the main loop's code starts about 220 M-cycles after line 144 |
+| WRAM0 had 4096 bytes for variables, HRAM 64 | with sprites, the last page of WRAM0 is the shadow OAM's (`$CF00`-`$CFFF`, so 3840 bytes for variables) and the top 8 bytes of the HRAM variables' are the DMA routine's (`$FFB8`-`$FFBF`, so 56). No variable moves; a `raw()` section fixed there overlaps them (rgblink fails), and variables that no longer fit make `build()` return `Error::MemoryFull` |
+| `BuiltinFunction::ALL: [BuiltinFunction; 8]` | `InitOamDma` is a builtin (it copies the DMA routine to HRAM): an exhaustive `match` needs its arm |
+| `Definition` had 6 variants | `Definition::GeneratedBuffer`: a variable named `wShadowOAM` or `hOAMDMA` in a program with sprites is `Error::NameConflict`; `Definition::BuiltinLabel`: so is a label or variable `OamDmaCode` or `OamDmaCodeEnd` |
+| `stdlib` `Sprite { id, x, y, tile, flags }` (a struct literal) | it has a field `oam: OamTarget` (`OamTarget::Oam`, as `Sprite::new` sets it, or `OamTarget::Shadow`): add it, or use `Sprite::new(..)` and `.in_shadow_oam()` |
+| (new) | `stdlib::graphics::oam`: `OamTarget`, `SHADOW_OAM`, `OAM_DMA`, `init_oam_dma`, `run_oam_dma`, `shadow_oam_section`, `oam_dma_section`, `oam_dma_size`; `stdlib::graphics::sprites::initialize_oam(target)`; `hw::OAM_DMA_SOURCE_ALIGN`, `OAM_DMA_MCYCLES`, `LINE_MCYCLES`, `VBLANK_LINES`, `VBLANK_MCYCLES` |
 
 ### For users of the `refactor` branch
 

@@ -199,6 +199,30 @@ pub(crate) struct Variable {
     pub region: MemoryRegion,
 }
 
+/// A block of RAM `build()` reserves for the code it generates: the shadow OAM, the OAM
+/// DMA routine in HRAM; laid out at the top of its region, in its own section
+#[derive(Debug, Clone)]
+struct Buffer {
+    /// Its label (`wShadowOAM`)
+    label: String,
+    /// The name of its section (`Shadow OAM`)
+    section: String,
+    region: MemoryRegion,
+    size: u16,
+    /// Its address is a multiple of `2^align_bits` (8 for a page)
+    align_bits: u8,
+}
+
+/// Where the variables and buffers are, as far as they fit: what
+/// [`VariableManager::layout`] finds
+struct Placement {
+    variables: BTreeMap<VarId, u16>,
+    /// The address of each buffer, in the order of [`VariableManager::buffers`]
+    buffers: Vec<Option<u16>>,
+    /// The first variable or buffer that does not fit
+    error: Option<Error>,
+}
+
 /// Where a new variable goes
 #[derive(Clone, Copy)]
 enum Place<'a> {
@@ -222,7 +246,9 @@ enum Place<'a> {
 /// The variables get their addresses when the program is built, together with the ones
 /// `build()` adds (the animations', the routines'): the HRAM ones from $FF80, then each
 /// `WRAM0` section in the order it was first used, from $C000, each variable after the one
-/// before it in its section. Each section is printed at its address (`SECTION "Variables",
+/// before it in its section. The blocks of RAM `build()` reserves for the code it
+/// generates (the shadow OAM, the HRAM routine of the OAM DMA) go at the top of their
+/// region, so they move no variable. Each section is printed at its address (`SECTION "Variables",
 /// WRAM0[$C000]`, `SECTION "HRAM Variables", HRAM[$FF80]`), so [`get_address`] is where
 /// rgblink puts the variable, and the linker places the program's own sections (a `raw()`
 /// `SECTION`) around them. Variables that do not fit make `build()` return
@@ -238,6 +264,8 @@ pub struct VariableManager {
     sections: Vec<(String, Vec<VarId>)>,
     /// The HRAM variables, in creation order
     hram: Vec<VarId>,
+    /// The blocks of RAM `build()` reserves, in the order they were reserved
+    buffers: Vec<Buffer>,
 }
 
 impl VariableManager {
@@ -247,6 +275,7 @@ impl VariableManager {
             next_id: 0,
             sections: Vec::new(),
             hram: Vec::new(),
+            buffers: Vec::new(),
         }
     }
 
@@ -390,6 +419,48 @@ impl VariableManager {
         }
     }
 
+    /// Reserve `size` bytes of `region` (`Wram0` or `Hram`), at an address that is a
+    /// multiple of `2^align_bits`, for the code `build()` generates: `label:` in the section
+    /// `section`, laid out at the top of the region, below the buffers reserved before, so
+    /// no variable moves (see [`buffer_address`](Self::buffer_address))
+    ///
+    /// `Err` ([`Error::NameConflict`]) if a variable has the name `label`. Reserving one
+    /// label twice keeps the first.
+    pub(crate) fn reserve_buffer(
+        &mut self,
+        label: &str,
+        section: &str,
+        region: MemoryRegion,
+        size: u16,
+        align_bits: u8,
+    ) -> Result<(), Error> {
+        if let Some(existing) = self.variables.values().find(|v| v.name == label) {
+            return Err(Error::NameConflict {
+                name: label.to_string(),
+                first: Definition::Variable(existing.var_type),
+                second: Definition::GeneratedBuffer,
+            });
+        }
+        if !self.buffers.iter().any(|buffer| buffer.label == label) {
+            self.buffers.push(Buffer {
+                label: label.to_string(),
+                section: section.to_string(),
+                region,
+                size,
+                align_bits,
+            });
+        }
+        Ok(())
+    }
+
+    /// The address of the buffer `label` ([`reserve_buffer`](Self::reserve_buffer)), where
+    /// rgblink puts it; `None` for no such buffer, or one that does not fit
+    #[cfg(test)]
+    pub(crate) fn buffer_address(&self, label: &str) -> Option<u16> {
+        let index = self.buffers.iter().position(|b| b.label == label)?;
+        self.layout().buffers[index]
+    }
+
     #[track_caller]
     fn create_var(&mut self, name: &str, var_type: VarType, initial: i32, place: Place) -> Var {
         let region = match place {
@@ -410,6 +481,11 @@ impl VariableManager {
             !(matches!(place, Place::Hram) && name == crate::stdlib::interrupts::VBLANK_FLAG),
             "variable `{}`: it is the main loop's frame flag, which build() creates in WRAM0; \
              it cannot be an HRAM variable",
+            name
+        );
+        assert!(
+            !self.buffers.iter().any(|buffer| buffer.label == name),
+            "variable `{}`: build() reserves a block of RAM with that name",
             name
         );
         if let Some((&id, existing)) = self.variables.iter().find(|(_, v)| v.name == name) {
@@ -462,12 +538,15 @@ impl VariableManager {
         }
     }
 
-    /// The address of each variable, as far as they fit, and [`Error::MemoryFull`] for the
-    /// first one that does not: the HRAM variables from $FF80, then the WRAM0 ones from
-    /// $C000, section by section in their order (each variable after the one before it in
-    /// its section)
-    fn addresses(&self) -> (BTreeMap<VarId, u16>, Option<Error>) {
-        let mut addresses = BTreeMap::new();
+    /// The address of each variable and buffer, as far as they fit, and
+    /// [`Error::MemoryFull`] for the first one that does not: in each region (HRAM, then
+    /// WRAM0), the buffers from the top down, in the order they were reserved, then the
+    /// variables from the bottom up, the HRAM ones from $FF80, the WRAM0 ones from $C000,
+    /// section by section in their order (each variable after the one before it in its
+    /// section)
+    fn layout(&self) -> Placement {
+        let mut variables = BTreeMap::new();
+        let mut buffers = vec![None; self.buffers.len()];
         let mut error = None;
         let regions = [
             (MemoryRegion::Hram, vec![&self.hram]),
@@ -478,13 +557,25 @@ impl VariableManager {
         ];
         for (region, sections) in regions {
             let mut allocator = MemoryAllocator::new(region);
+            for (index, buffer) in self.buffers.iter().enumerate() {
+                if buffer.region != region {
+                    continue;
+                }
+                let what = format!("`{}` ({} bytes)", buffer.label, buffer.size);
+                match allocator.try_allocate_top(buffer.size, buffer.align_bits, &what) {
+                    Ok(address) => buffers[index] = Some(address),
+                    Err(full) => {
+                        error.get_or_insert(full);
+                    }
+                }
+            }
             for id in sections.into_iter().flatten() {
                 let var = &self.variables[id];
                 let size = var.var_type.size();
                 let what = format!("variable `{}` ({} bytes)", var.name, size);
                 match allocator.try_allocate(size.into(), &what) {
                     Ok(address) => {
-                        addresses.insert(*id, address);
+                        variables.insert(*id, address);
                     }
                     Err(full) => {
                         error.get_or_insert(full);
@@ -493,14 +584,18 @@ impl VariableManager {
                 }
             }
         }
-        (addresses, error)
+        Placement {
+            variables,
+            buffers,
+            error,
+        }
     }
 
-    /// `Err` ([`Error::MemoryFull`]) if the variables do not fit in WRAM0 or HRAM
+    /// `Err` ([`Error::MemoryFull`]) if the variables and buffers do not fit in WRAM0 or HRAM
     pub(crate) fn check_layout(&self) -> Result<(), Error> {
-        match self.addresses() {
-            (_, Some(error)) => Err(error),
-            (_, None) => Ok(()),
+        match self.layout().error {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 
@@ -521,7 +616,7 @@ impl VariableManager {
     /// for an unknown id, or a variable that does not fit (`build()` then returns
     /// [`Error::MemoryFull`]).
     pub fn get_address(&self, id: VarId) -> Option<u16> {
-        self.addresses().0.get(&id).copied()
+        self.layout().variables.get(&id).copied()
     }
 
     /// Get the variable type
@@ -529,17 +624,31 @@ impl VariableManager {
         self.variables.get(&id).map(|v| v.var_type)
     }
 
-    /// Generate variable section instructions for the Data chunk: the HRAM section, then
-    /// the `WRAM0` sections (so the last section is a `WRAM0` one, where the `raw()` data
-    /// goes), each at the address of its first variable
+    /// Generate variable section instructions for the Data chunk: the buffers' sections
+    /// (`wShadowOAM: ds 160`), the HRAM section, then the `WRAM0` sections (so the last
+    /// section is a `WRAM0` one, where the `raw()` data goes), each at the address of its
+    /// first variable
     ///
     /// The addresses are the ones [`check_layout`](Self::check_layout) accepted; a section
     /// whose variables do not fit (which `build()` reports first) floats.
     pub(crate) fn generate_sections(&self) -> Vec<Instr> {
         use crate::asm::Block;
 
-        let addresses = self.addresses().0;
+        let placement = self.layout();
+        let addresses = placement.variables;
         let mut asm = Block::new();
+        for (buffer, address) in self.buffers.iter().zip(placement.buffers) {
+            let section = match buffer.region {
+                MemoryRegion::Hram => Section::hram(&buffer.section),
+                _ => Section::wram0(&buffer.section),
+            };
+            asm.section(match address {
+                Some(address) => section.at(address),
+                None => section,
+            });
+            asm.label(&buffer.label);
+            asm.ds(&buffer.size.to_string());
+        }
         let hram = (!self.hram.is_empty()).then_some((Section::hram(HRAM_SECTION), &self.hram));
         let wram0 = self
             .sections
@@ -1021,6 +1130,90 @@ mod tests {
             message.contains("wLives") && message.contains("out of range"),
             "{}",
             message
+        );
+    }
+
+    // ==================== Buffers (B12) ====================
+
+    #[test]
+    fn test_buffers_go_at_the_top_and_move_no_variable() {
+        let mut vm = VariableManager::new();
+        let a = vm.create_u8("wA", 0);
+        let h = vm.create_hram_u8("hH", 0);
+        let before = (vm.get_address(a.id()), vm.get_address(h.id()));
+        vm.reserve_buffer("wShadowOAM", "Shadow OAM", MemoryRegion::Wram0, 160, 8)
+            .unwrap();
+        vm.reserve_buffer("hOAMDMA", "OAM DMA", MemoryRegion::Hram, 8, 0)
+            .unwrap();
+        // Reserving a label again keeps the first
+        vm.reserve_buffer("wShadowOAM", "Other", MemoryRegion::Wram0, 1, 0)
+            .unwrap();
+        let b = vm.create_u8("wB", 0);
+        assert_eq!(
+            (vm.get_address(a.id()), vm.get_address(h.id())),
+            before,
+            "the variables keep their addresses"
+        );
+        assert_eq!(before, (Some(0xC000), Some(0xFF80)));
+        assert_eq!(vm.get_address(b.id()), Some(0xC001));
+        assert_eq!(vm.buffer_address("wShadowOAM"), Some(0xCF00));
+        assert_eq!(vm.buffer_address("hOAMDMA"), Some(0xFFB8));
+        assert_eq!(vm.buffer_address("wNone"), None);
+        assert_eq!(
+            lines(vm.generate_sections()),
+            [
+                "SECTION \"Shadow OAM\", WRAM0[$CF00]",
+                "wShadowOAM:",
+                "ds 160",
+                "SECTION \"OAM DMA\", HRAM[$FFB8]",
+                "hOAMDMA:",
+                "ds 8",
+                "SECTION \"HRAM Variables\", HRAM[$FF80]",
+                "hH: db",
+                "SECTION \"Variables\", WRAM0[$C000]",
+                "wA: db",
+                "wB: db",
+            ]
+        );
+        assert_eq!(vm.check_layout(), Ok(()));
+        // No initial value: the code that uses a buffer sets it up
+        assert!(
+            !lines(vm.generate_init_code())
+                .iter()
+                .any(|line| line.contains("wShadowOAM") || line.contains("hOAMDMA"))
+        );
+    }
+
+    #[test]
+    fn test_buffers_and_variables_share_their_region() {
+        // HRAM: 64 bytes for the variables; the DMA routine takes the top 8
+        let mut vm = VariableManager::new();
+        for i in 0..56 {
+            vm.create_hram_u8(&format!("hByte{}", i), 0);
+        }
+        vm.reserve_buffer("hOAMDMA", "OAM DMA", MemoryRegion::Hram, 8, 0)
+            .unwrap();
+        assert_eq!(vm.check_layout(), Ok(()));
+        vm.create_hram_u8("hOneMore", 0);
+        assert_eq!(
+            vm.check_layout(),
+            Err(Error::MemoryFull {
+                region: MemoryRegion::Hram,
+                what: "variable `hOneMore` (1 bytes)".to_string(),
+                needed: 1,
+                available: 0,
+            })
+        );
+        // A variable with the buffer's name: one of them would be unreachable
+        let mut vm = VariableManager::new();
+        vm.create_u16("wShadowOAM", 0);
+        assert_eq!(
+            vm.reserve_buffer("wShadowOAM", "Shadow OAM", MemoryRegion::Wram0, 160, 8),
+            Err(Error::NameConflict {
+                name: "wShadowOAM".to_string(),
+                first: Definition::Variable(VarType::U16),
+                second: Definition::GeneratedBuffer,
+            })
         );
     }
 }

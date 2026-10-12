@@ -27,7 +27,9 @@
 //!   the CPU cannot reach OAM nor the bus the DMA reads (VRAM, or the external bus:
 //!   ROM, cartridge RAM, WRAM); a read there gives `$FF`, a write is dropped. Each
 //!   blocked access is counted, and every CPU write to OAM is logged ([`OamWrite`]), so a
-//!   test can see when a program touches OAM outside VBlank and HBlank ([B12]).
+//!   test can see when a program touches OAM outside VBlank and HBlank ([B12]); so is every
+//!   OAM DMA ([`OamDma`]: its source, and the line and PPU mode of its first and last
+//!   byte), so a test can see that the shadow OAM reaches OAM in VBlank.
 //! - The joypad (`P1`), whose interrupt comes when one of its four lines goes from high to
 //!   low: a button pressed in a group `P1` selects, or a group selected while one of its
 //!   buttons is held (nothing with no group selected); the serial port (the bytes a program
@@ -151,6 +153,22 @@ pub struct OamWrite {
     pub dropped: bool,
 }
 
+/// An OAM DMA, and when it copied
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OamDma {
+    /// The page it copied, `$XX00`
+    pub source: u16,
+    /// The M-cycle of its first byte
+    pub cycle: u64,
+    /// `LY` and the PPU mode when it copied its first byte
+    pub first: (u8, Mode),
+    /// `LY` and the PPU mode when it copied its last byte (`None` while it runs, or if a
+    /// new DMA stopped it)
+    pub last: Option<(u8, Mode)>,
+    /// Whether the LCD was on at its first byte
+    pub lcd_on: bool,
+}
+
 /// The CPU registers
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Registers {
@@ -262,6 +280,7 @@ struct Bus {
     /// The address of the instruction running, for [`OamWrite::pc`]
     current_pc: u16,
     oam_writes: Vec<OamWrite>,
+    oam_dmas: Vec<OamDma>,
     blocked_vram_writes: u64,
     blocked_vram_reads: u64,
     blocked_oam_reads: u64,
@@ -341,6 +360,7 @@ impl Bus {
             cycles: 0,
             current_pc: 0x0100,
             oam_writes: Vec::new(),
+            oam_dmas: Vec::new(),
             blocked_vram_writes: 0,
             blocked_vram_reads: 0,
             blocked_oam_reads: 0,
@@ -445,6 +465,13 @@ impl Bus {
                 // It starts (a DMA already running stops here)
                 self.dma_source = self.dma_next_source;
                 self.dma_index = Some(0);
+                self.oam_dmas.push(OamDma {
+                    source: self.dma_source,
+                    cycle: self.cycles,
+                    first: (self.ly, self.mode()),
+                    last: None,
+                    lcd_on: self.lcd_on(),
+                });
             }
         }
         if let Some(index) = self.dma_index {
@@ -454,6 +481,12 @@ impl Bus {
                 let byte = self.peek(self.dma_source.wrapping_add(index));
                 self.oam[usize::from(index)] = byte;
                 self.dma_index = Some(index + 1);
+                if index == 0x9F {
+                    let last = (self.ly, self.mode());
+                    if let Some(dma) = self.oam_dmas.last_mut() {
+                        dma.last = Some(last);
+                    }
+                }
             }
         }
     }
@@ -934,6 +967,11 @@ impl GameBoy {
     /// Every CPU write to OAM so far, with when it happened
     pub fn oam_writes(&self) -> &[OamWrite] {
         &self.bus.oam_writes
+    }
+
+    /// Every OAM DMA so far, with when it copied
+    pub fn oam_dmas(&self) -> &[OamDma] {
+        &self.bus.oam_dmas
     }
 
     /// The CPU writes to OAM the hardware dropped (mode 2 or 3, or during a DMA)

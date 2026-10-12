@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
+use rust_boy::stdlib::flow::{For, IfConst, SwitchA, While};
 use rust_boy::stdlib::graphics::vram_queue;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
@@ -919,6 +920,51 @@ fn store_ly(var: &str) -> Block {
 /// Build `gb` into a ROM
 fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
+}
+
+#[test]
+fn flow_loops_and_switch_execute_on_the_gameboy() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    let count = game.vars.create_u8("wFlowCount", 0);
+    game.vars.create_u8("wFlowCase", 0);
+
+    let mut increment = Block::new();
+    increment
+        .ld_a_addr_def("wFlowCount")
+        .inc(R8::A)
+        .ld_addr_def_a("wFlowCount");
+    game.add_to_main_loop(For::times(5, increment));
+
+    let mut truth = Block::new();
+    truth.ld_a(1);
+    let mut falsehood = Block::new();
+    falsehood.ld_a(0);
+    let condition = IfConst::lt(count.get(), 8, truth).or_else(falsehood);
+    game.add_to_main_loop(While::new(condition, {
+        let mut code = Block::new();
+        code.ld_a_addr_def("wFlowCount")
+            .inc(R8::A)
+            .ld_addr_def_a("wFlowCount");
+        code
+    }));
+
+    let mut case = Block::new();
+    case.ld_a(0xA2).ld_addr_def_a("wFlowCase");
+    let mut fallback = Block::new();
+    fallback.ld_a(0xFF).ld_addr_def_a("wFlowCase");
+    let mut setup_switch = Block::new();
+    setup_switch.ld_a(2);
+    game.add_to_main_loop(setup_switch);
+    game.add_to_main_loop(SwitchA::new().case(2, case).default(fallback));
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wFlowCount"), 8);
+    assert_eq!(gb.read_symbol("wFlowCase"), 0xA2);
 }
 
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a

@@ -332,7 +332,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
-- [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
+- [x] Control flow (`refactor-p3-control-flow`): `While` with a condition emitter that leaves its
+      truth value in `a`, fixed-count `For::times` (zero through 255), and `SwitchA` with byte cases
+      and an optional default.
+- [ ] Functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
       `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads
       `wCurKeys` after `UpdateKeys` at the end of each frame and jumps to `$0100`, so the whole start-up runs again;

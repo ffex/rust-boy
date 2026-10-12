@@ -1418,7 +1418,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
-- **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
+- **Engine:** scenes and RNG are covered by Phase 3 branches; unsigned arithmetic is in `stdlib::math`, and
+  `While`, fixed-count `For`, and `SwitchA` are in `stdlib::flow` (`refactor-p3-control-flow`). Collision and
+  functions with parameters remain (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since

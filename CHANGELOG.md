@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Flow control** (`stdlib::flow`): `While` loops on an A-register truth value, `For::times`
+  runs a fixed number of iterations, and `SwitchA` selects a byte case or default body.
+
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.

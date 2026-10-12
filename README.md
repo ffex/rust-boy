@@ -168,6 +168,10 @@ routine run from HRAM (`hOAMDMA`, the top 8 bytes of the HRAM variables' 64), wh
 moved in one frame shows from the frame after next; the start-up runs one DMA before the LCD is turned on, so the
 first frame shows the sprites. A program without sprites has neither. `stdlib::graphics::oam` has the same pieces
 for a `stdlib` program (`Sprite::in_shadow_oam`, `init_oam_dma`, `run_oam_dma`, the sections).
+Two limits: the stack (from `$FFFE` down) has 62 bytes above `hOAMDMA` (`$FFB8`-`$FFBF`), so code nested more than 31
+calls or pushes deep overwrites the DMA routine; and the DMA runs when the VBlank handler does, so an interrupt handler
+(`on_stat`, `on_timer`) that delays it past VBlank makes it run during the next frame's drawing, where it fails for
+that frame.
 
 ## Queued VRAM writes (`RustBoy`)
 

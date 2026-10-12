@@ -60,7 +60,8 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
-  - the pinned test-ROM download script verifies checksums with both macOS and GNU `sha256sum`.
+  - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
+    macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
 
 ### Toolchain
 
@@ -213,7 +214,7 @@ of each VBlank (B12; see [CONTEXT.md](CONTEXT.md#b12)).
 | the VBlank handler took 26 M-cycles with nothing of the program's; the main loop's code started 44 M-cycles after line 144 | with sprites, 193 M-cycles (the DMA); the main loop's code starts about 220 M-cycles after line 144 |
 | WRAM0 had 4096 bytes for variables, HRAM 64 | with sprites, the last page of WRAM0 is the shadow OAM's (`$CF00`-`$CFFF`, so 3840 bytes for variables) and the top 8 bytes of the HRAM variables' are the DMA routine's (`$FFB8`-`$FFBF`, so 56). No variable moves; a `raw()` section fixed there overlaps them (rgblink fails), and variables that no longer fit make `build()` return `Error::MemoryFull` |
 | `BuiltinFunction::ALL: [BuiltinFunction; 8]` | `InitOamDma` is a builtin (it copies the DMA routine to HRAM): an exhaustive `match` needs its arm |
-| `Definition` had 6 variants | `Definition::GeneratedBuffer`: a variable named `wShadowOAM` or `hOAMDMA` in a program with sprites is `Error::NameConflict`; `Definition::BuiltinLabel`: so is a label `OamDmaCode` or `OamDmaCodeEnd` |
+| `Definition` had 6 variants | `Definition::GeneratedBuffer`: a variable named `wShadowOAM` or `hOAMDMA` in a program with sprites is `Error::NameConflict`; `Definition::BuiltinLabel`: so is a label or variable `OamDmaCode` or `OamDmaCodeEnd` |
 | `stdlib` `Sprite { id, x, y, tile, flags }` (a struct literal) | it has a field `oam: OamTarget` (`OamTarget::Oam`, as `Sprite::new` sets it, or `OamTarget::Shadow`): add it, or use `Sprite::new(..)` and `.in_shadow_oam()` |
 | (new) | `stdlib::graphics::oam`: `OamTarget`, `SHADOW_OAM`, `OAM_DMA`, `init_oam_dma`, `run_oam_dma`, `shadow_oam_section`, `oam_dma_section`, `oam_dma_size`; `stdlib::graphics::sprites::initialize_oam(target)`; `hw::OAM_DMA_SOURCE_ALIGN`, `OAM_DMA_MCYCLES`, `LINE_MCYCLES`, `VBLANK_LINES`, `VBLANK_MCYCLES` |
 

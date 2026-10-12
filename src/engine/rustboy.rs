@@ -983,7 +983,7 @@ impl RustBoy {
             && !self.functions.is_user_function(init_oam_dma)
         {
             // The builtin InitOamDma defines the labels of the DMA code it copies: a second
-            // definition would fail in rgbasm, or copy other bytes to HRAM
+            // definition (a variable too) would fail in rgbasm, or copy other bytes to HRAM
             for name in [oam::OAM_DMA_CODE, oam::OAM_DMA_CODE_END] {
                 // InitOamDma defines it once; another function's definition is a second one
                 let in_functions = functions
@@ -991,7 +991,10 @@ impl RustBoy {
                     .iter()
                     .filter(|instr| defines(std::slice::from_ref(*instr), name))
                     .count();
-                let first = if self.functions.is_external_symbol(name) {
+                let variable = vars.names().find(|(var, _)| *var == name);
+                let first = if let Some((_, var_type)) = variable {
+                    Some(super::error::Definition::Variable(var_type))
+                } else if self.functions.is_external_symbol(name) {
                     Some(super::error::Definition::ExternalSymbol)
                 } else if code.iter().any(|body| defines(body, name)) || in_functions > 1 {
                     Some(super::error::Definition::CodeSymbol)
@@ -3533,7 +3536,13 @@ mod tests {
         // InitOamDma's own labels: a second definition fails in rgbasm, or (an external
         // symbol) makes InitOamDma copy other bytes to HRAM
         type Setup = fn(&mut RustBoy, &str);
-        let setups: [(Setup, Definition); 4] = [
+        let setups: [(Setup, Definition); 5] = [
+            (
+                |gb, name| {
+                    gb.vars.create_u8(name, 0);
+                },
+                Definition::Variable(VarType::U8),
+            ),
             (
                 |gb, name| {
                     gb.raw(|asm| {

@@ -277,7 +277,8 @@ let asm = gb.build()?;
 `Once` emits once when it reaches its last frame, including a first update that is
 already on that frame. Changing selection away and back rearms it, but preserves the
 existing tile/replay rules. `Loop` emits on last→first wrap; `PingPong` on returning to
-the first frame. Single-frame loops/ping-pong emit every update; single-frame Once
+the first frame. Single-frame loops/ping-pong emit every update after the first (entering one
+from another tile is not a completion); single-frame Once
 emits once. Events describe shadow OAM, which becomes visible at the following DMA.
 
 `enable_animation_events` enables polling without a callback. `take_animation_event`

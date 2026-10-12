@@ -592,8 +592,9 @@ impl SpriteManager {
 
     /// Enable coalescing completion events for this animation. Once reports reaching
     /// its last frame once per activation/restart; Loop reports last→first wrap;
-    /// PingPong reports returning to its first frame. Single-frame loops report every
-    /// update. Events describe shadow state; visibility follows at the next DMA.
+    /// PingPong reports returning to its first frame. Entering an animation from a tile outside
+    /// its frames is not a completion. Single-frame Loop and PingPong report every update
+    /// after that. Events describe shadow state; visibility follows at the next DMA.
     ///
     /// # Panics
     /// If `id` is not a sprite of this manager, or it has no animation `index`.
@@ -2716,40 +2717,83 @@ mod tests {
     }
 
     #[test]
-    fn entering_a_ping_pong_from_outside_its_frames_is_not_a_completion() {
-        // A sprite showing a tile below or above the PingPong's frames, switched to it: the
-        // first step puts the first frame back, which is not the end of a cycle
-        for (from, from_frames) in [("Low", (0, 1)), ("High", (5, 6))] {
-            let mut sm = SpriteManager::new(LabelAllocator::new());
-            let sprite = sm.add_for_test("Actor", 0, 0, 0, 7);
-            let before = sm.add_animation(
-                sprite,
-                from,
-                from_frames.0,
-                from_frames.1,
-                AnimationType::Loop,
-            );
-            let bounce = sm.add_animation(sprite, "Bounce", 2, 4, AnimationType::PingPong);
-            sm.set_initial_animation(sprite, before);
-            sm.enable_animation_events(sprite, bounce);
-            let code = animation_program(&sm, 1);
-            let mut cpu = animation_cpu(&sm);
-            cpu.run(&code);
-            let shown = shown_frame(&sm, &cpu, sprite);
-            assert!(
-                (from_frames.0..=from_frames.1).contains(&shown),
-                "{from}: {shown}"
-            );
-            cpu.run(&sm.enable_animation(sprite, bounce));
-            cpu.run(&code);
-            assert_eq!(
-                shown_frame(&sm, &cpu, sprite),
-                2,
-                "{from}: back on the first frame"
-            );
-            cpu.run(&sm.take_animation_event(sprite, bounce));
-            assert_eq!(cpu.a, 0, "{from}: no completion");
+    fn entering_a_cycle_from_outside_its_frames_is_not_a_completion() {
+        // A sprite showing a tile below or above the frames of a Loop or PingPong (one frame
+        // or several), switched to it: the first step puts the first frame back, which is not
+        // the end of a cycle; a one-frame animation reports every update after that
+        for (kind, frames) in [
+            (AnimationType::PingPong, (2, 4)),
+            (AnimationType::Loop, (2, 4)),
+            (AnimationType::PingPong, (3, 3)),
+            (AnimationType::Loop, (3, 3)),
+        ] {
+            for (from, from_frames) in [("Low", (0, 1)), ("High", (5, 6))] {
+                let case = format!("{kind:?} {frames:?} from {from}");
+                let mut sm = SpriteManager::new(LabelAllocator::new());
+                let sprite = sm.add_for_test("Actor", 0, 0, 0, 7);
+                let before = sm.add_animation(
+                    sprite,
+                    from,
+                    from_frames.0,
+                    from_frames.1,
+                    AnimationType::Loop,
+                );
+                let cycle = sm.add_animation(sprite, "Cycle", frames.0, frames.1, kind.clone());
+                sm.set_initial_animation(sprite, before);
+                sm.enable_animation_events(sprite, cycle);
+                let code = animation_program(&sm, 1);
+                let mut cpu = animation_cpu(&sm);
+                cpu.run(&code);
+                let shown = shown_frame(&sm, &cpu, sprite);
+                assert!(
+                    (from_frames.0..=from_frames.1).contains(&shown),
+                    "{case}: {shown}"
+                );
+                cpu.run(&sm.enable_animation(sprite, cycle));
+                cpu.run(&code);
+                assert_eq!(
+                    shown_frame(&sm, &cpu, sprite),
+                    frames.0,
+                    "{case}: first frame"
+                );
+                cpu.run(&sm.take_animation_event(sprite, cycle));
+                assert_eq!(cpu.a, 0, "{case}: no completion");
+                if frames.0 == frames.1 {
+                    cpu.run(&code);
+                    cpu.run(&sm.take_animation_event(sprite, cycle));
+                    assert_eq!(cpu.a, 1, "{case}: one frame, a completion per update");
+                }
+            }
         }
+    }
+
+    #[test]
+    fn a_restart_mid_period_waits_a_full_period() {
+        // Restarting a timed sprite in the middle of its period (the selection does not change,
+        // so only the restart's timer write starts the count again)
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Timed", 0, 0, 0, 3);
+        sm.add_animation(sprite, "Walk", 0, 2, AnimationType::Loop);
+        sm.set_initial_animation(sprite, 0);
+        sm.set_animation_delay(sprite, 0, 4);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        for _ in 0..6 {
+            cpu.run(&code);
+        }
+        assert_eq!(
+            shown_frame(&sm, &cpu, sprite),
+            1,
+            "stepped on frame 4, 2 into the next"
+        );
+        cpu.run(&sm.restart_animation(sprite, 0));
+        let shown: Vec<u8> = (0..4)
+            .map(|_| {
+                cpu.run(&code);
+                shown_frame(&sm, &cpu, sprite)
+            })
+            .collect();
+        assert_eq!(shown, [0, 0, 0, 1]);
     }
 
     #[test]

@@ -93,7 +93,12 @@ impl Animation {
                     .cp(first)
                     .jr_cond(Condition::NZ, ".event_end");
             }
-            AnimationType::PingPong => {}
+            // One frame: every update completes a cycle, except entering it from another tile
+            AnimationType::PingPong => {
+                code.ld(R8::A, R8::B)
+                    .cp(first)
+                    .jr_cond(Condition::NZ, ".event_end");
+            }
         }
         code.ld_a(1).ld_addr_def_a(self.event_var(sprite));
         if self.callback.is_some() {

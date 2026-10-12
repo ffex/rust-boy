@@ -1280,7 +1280,7 @@ sprites, using `gb_std`'s `initialize_objects_screen` + `clear_objects_screen` (
 that loop; it now only writes the initial sprites), and sets `rBGP`, `rOBP0` **and `rOBP1`** to `%11100100`
 (colour i is shade i, so a sprite with the OBP1 flag looks like one with OBP0 until the program changes it),
 before LCD on. Tests: `test_oam_is_cleared_without_sprites`, `test_oam_is_cleared_before_the_sprites_are_written`,
-`test_every_palette_is_set`. A palette API stays in Phase 3.
+`test_every_palette_is_set`. A runtime typed palette API and nonblocking fades exist since `refactor-p3-palettes`.
 
 #### B29
 **Documentation errors in code and README.**
@@ -1343,7 +1343,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no window layer, no palette API/fades, no metasprites beyond 16×16, no text/numbers (a `$9C00` map
+- **Graphics:** no window layer, palette writes/fades exist since `refactor-p3-palettes`, no metasprites beyond 16×16, no text/numbers (a `$9C00` map
   exists since [B19](#b19), without a window layer). Background scrolling exists since `refactor-p3-scrolling` (see
   §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
@@ -1379,3 +1379,14 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 palettes and fades
+
+`refactor-p3-palettes` adds typed DMG `Palette`, `Shade` and `PaletteRegister` in stateless
+`stdlib::graphics::palette`, reused by `RustBoy::set_palette` and `fade_palette`. Existing startup
+`Palettes` bytes remain compatible. `PaletteFade` supplies four shade-saturating stages, fade-in from
+a solid shade or fade-out to one; runtime A selects the stage, values >=3 stay complete. The game
+owns progress/timing; these snippets have no hidden variables, waits or blocking loops and work in
+VBlank. Writes change A; fades change A/flags only. BGP is shared by the background/window and
+object colour index 0 stays transparent. Unit tests exhaust all 256 palette bytes against all four
+solid shades; emulator tests check concurrent register fades, clamping and init overrides.

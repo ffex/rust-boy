@@ -61,6 +61,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
   keeps the scroll: set it in init.
+- **Palettes and fades** (Phase 3): typed `Palette`, `Shade`, `PaletteRegister`,
+  runtime `RustBoy::set_palette`, and four-stage `PaletteFade` through `fade_palette`.
+  Load progress into A and apply in VBlank; the game controls speed, and progress >=3
+  holds the final stage. Fade from/to a solid shade without blocking the main loop.
+  Existing startup `Palettes` bytes and example output remain compatible.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

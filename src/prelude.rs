@@ -47,3 +47,5 @@ pub use crate::stdlib::flow::{Call, If, IfA, IfCall, IfConst};
 pub use crate::stdlib::inputs::PadButton;
 pub use crate::stdlib::interrupts::{Interrupt, Stat, Timer, TimerClock};
 pub use crate::stdlib::routine::{Regs, Routine};
+
+pub use crate::stdlib::graphics::palette::{Palette, PaletteFade, PaletteRegister, Shade};

@@ -262,7 +262,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))
 - [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its
       map at start-up, and since [B19](CONTEXT.md#b19) a second tilemap on the same map panics
-- [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
+- [x] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out (branch `refactor-p3-palettes`):
+      typed `Palette`/`Shade`/`PaletteRegister`, runtime writes, four-stage nonblocking `PaletteFade`;
+      progress supplied in A, clamps at 3, supports fades from/to white or black (or either grey).
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
 - [ ] Sprite show / hide, OAM slot allocation

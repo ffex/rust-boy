@@ -1819,3 +1819,64 @@ fn engine_background_scroll_init_survives_and_zero_delta_is_idle() {
     assert_eq!(gb.read(hw::SCX.value), 255);
     assert_eq!(gb.read(hw::SCY.value), 128);
 }
+
+#[test]
+fn palettes_and_nonblocking_fades_follow_progress_in_vblank() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for solid in [Shade::White, Shade::Black] {
+        for fade_in in [true, false] {
+            let mut game = RustBoy::new();
+            let bg = Palette::from(0xe4);
+            let ob0 = Palette::from(0x1b);
+            let ob1 = Palette::from(0x72);
+            let fades = [
+                (PaletteRegister::Background, bg),
+                (PaletteRegister::Object0, ob0),
+                (PaletteRegister::Object1, ob1),
+            ]
+            .map(|(register, palette)| {
+                (
+                    register,
+                    if fade_in {
+                        PaletteFade::fade_in(palette, solid)
+                    } else {
+                        PaletteFade::fade_out(palette, solid)
+                    },
+                )
+            });
+            let progress = game.vars.create_u8("wPaletteProgress", 0);
+            let mut code = Block::new();
+            for (register, fade) in fades {
+                code.emit_all(progress.get())
+                    .emit_all(game.fade_palette(register, fade));
+            }
+            game.on_vblank(code);
+            let mut gb = engine_rom(&game).boot();
+            assert!(gb.run_until_pc(gb.symbol("Main"), 5));
+            for step in [0, 1, 2, 3, 4, 255] {
+                gb.write_ram(gb.symbol("wPaletteProgress"), step);
+                gb.run_frames(1);
+                for (register, fade) in fades {
+                    assert_eq!(gb.read(register.register().value), fade.at(step).byte());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_palette_writes_override_startup_independently() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.init(game.set_palette(PaletteRegister::Background, Palette::from(0x1b)));
+    game.on_vblank(game.set_palette(PaletteRegister::Object1, Palette::solid(Shade::Dark)));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read(hw::BGP.value), 0x1b);
+    assert_eq!(gb.read(hw::OBP0.value), Palettes::IDENTITY);
+    assert_eq!(gb.read(hw::OBP1.value), 0xaa);
+}

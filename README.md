@@ -504,3 +504,29 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Runtime palettes and fades
+
+DMG palettes map four colour indices to shades. The background and window share BGP;
+object index 0 stays transparent. Startup `Palettes` still accepts hardware bytes.
+Use typed palettes for runtime writes and `PaletteFade` for nonblocking fade-in/out:
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let step = gb.vars.create_u8("wFadeProgress", 0);
+let fade = PaletteFade::fade_in(Palette::default(), Shade::White);
+let mut apply = Block::new();
+apply.emit_all(step.get())
+    .emit_all(gb.fade_palette(PaletteRegister::Background, fade));
+gb.on_vblank(apply);
+// Advance wFadeProgress from 0 to 3 at your chosen frame interval.
+// Values >=3 keep the final palette; reset to 0 to restart.
+# gb.build().unwrap();
+```
+
+`PaletteFade::fade_out(palette, Shade::Black)` fades to black; either direction also
+supports white or grey. Runtime snippets change A and flags only; a direct
+`gb.set_palette(register, palette)` write preserves flags. Emit in init or VBlank
+for a stable whole-frame palette. Each colour moves at most one shade per stage.

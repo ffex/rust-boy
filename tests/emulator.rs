@@ -1888,3 +1888,46 @@ fn get_tile_by_pixel_follows_active_background_map() {
         }
     }
 }
+
+#[test]
+fn engine_audio_power_and_mixer_are_configured_before_user_init() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for (config, power, volume, routing) in [
+        (AudioConfig::Off, 0, None, None),
+        (
+            AudioConfig::On(Mixer::default()),
+            0x80,
+            Some(0x77),
+            Some(0xff),
+        ),
+        (
+            AudioConfig::On(Mixer::new(2, 4, hw::AUDTERM_2_LEFT.value)),
+            0x80,
+            Some(0x24),
+            Some(0x20),
+        ),
+    ] {
+        let game = RustBoy::with_config(RustBoyConfig::default().audio(config));
+        let rom = engine_rom(&game);
+        let mut gb = rom.boot();
+        gb.run_frames(3);
+        // This emulator stores audio IO bytes but does not synthesize/clock an APU.
+        assert_eq!(gb.read(hw::NR52.value) & hw::AUDENA_ON.value, power);
+        if let Some(volume) = volume {
+            assert_eq!(gb.read(hw::NR50.value), volume);
+        }
+        if let Some(routing) = routing {
+            assert_eq!(gb.read(hw::NR51.value), routing);
+        }
+    }
+    let mut game =
+        RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+    game.init(rust_boy::stdlib::audio::set_mixer(Mixer::new(1, 2, 0)));
+    let rom = engine_rom(&game);
+    let mut gb = rom.boot();
+    gb.run_frames(3);
+    assert_eq!(gb.read(hw::NR50.value), 0x12);
+    assert_eq!(gb.read(hw::NR51.value), 0);
+}

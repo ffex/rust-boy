@@ -276,7 +276,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] End-of-animation events / callbacks
 
 ### Audio *(nothing exists today)*
-- [ ] APU init (sound on/off at boot), register constants in `hw`
+- [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in
+      inherited/off/on startup policy, validated mixer, shared stateless power snippets)
 - [ ] Sound-effect API for channels 1–4 (`play_sfx`)
 - [ ] Music: integrate a driver (e.g. hUGEDriver)
 

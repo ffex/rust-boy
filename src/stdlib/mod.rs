@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod flow;
 pub mod graphics;
 mod hw_symbols;

@@ -1384,3 +1384,16 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 APU initialization (`refactor-p3-apu`)
+
+`stdlib::audio` owns the stateless power/mixer snippets. `AudioConfig::Inherit` is the
+compatibility default and emits no audio instructions; `Off` writes NR52 off; `On`
+first powers off to reset channel state, then powers on and writes NR50/NR51. The
+configuration runs before user init on both cold startup and soft reset. `Mixer`
+validates 0..=7 left/right volume, disconnects VIN, and accepts NR51 routing flags;
+zero volume is not mute. Wave RAM is not cleared and no channel is triggered. All
+audio registers, wave RAM and existing hardware.inc flags are exported through hw.
+The emulator currently stores audio IO but does not synthesize or clock APU channels;
+tests verify register writes/startup ordering and assembly, with NR52 reset semantics
+checked against Pan Docs. Sound effects and driver integration remain separate tasks.

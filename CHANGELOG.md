@@ -2,8 +2,8 @@
 
 ## Unreleased: the refactoring (`refactor` → `main`)
 
-The refactoring of [Task.md](Task.md) Phases 0 to 2, released together: every breaking change of the
-refactoring is in this release, so a program migrates once. The reasons are in
+The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features done before the release, released
+together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
 ### Highlights
@@ -39,6 +39,11 @@ refactoring is in this release, so a program migrates once. The reasons are in
   - B11: `init()` code overwritten;
   - B13: non-deterministic output;
   - B14–B28: more fixes, listed in CONTEXT.md §4.
+- **Frames and interrupts** (Phase 3): the main loop sleeps until the VBlank interrupt (`halt`) instead of polling
+  `rLY`; handlers for the VBlank, STAT, timer, serial and joypad interrupts that save the registers their code changes
+  (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
+  conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
+  (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -161,6 +166,25 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | the `If` counter (`.end_if_N`), and fixed labels for the snippets | every generated label comes from the program's `asm::LabelAllocator`, `asm.labels()` / `gb.labels()` (B7) |
 | generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`, `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
 | a `jr` out of range (or to an external symbol) failed in rgbasm | it is printed as `jp`, one byte longer. Code of fixed size or timing must write jumps that reach. A target `Label + 2`, or `@` used elsewhere than `ds N - @`, leaves the program unrelaxed |
+
+### 6. Frames and interrupts (Phase 3, `refactor-p3-interrupts`)
+
+A `RustBoy` program's main loop is now woken by the VBlank interrupt: the start-up code enables it and turns
+interrupts on, and the main loop sleeps in `halt` until the VBlank handler has run (see
+[CONTEXT.md](CONTEXT.md#key-concepts), "The frame model and interrupts").
+
+| Before | After |
+|---|---|
+| the main loop polled `rLY`: `call WaitNotVBlank`, `call WaitVBlank` | `call WaitFrame`: asleep until the VBlank handler ran. The main loop's code starts 44 M-cycles after VBlank starts (about 28 later than before), and still once a frame. `WaitNotVBlank` is no longer emitted unless the program calls it |
+| interrupts were never enabled: the main loop and every function ran with interrupts off | they run with interrupts on (`ei` ends the start-up): the VBlank handler (and the program's handlers) can run between any two instructions, for about 20 M-cycles. Code that must not be interrupted (cycle-counted code) needs `di` / `ei` around it. The `init()` code still runs with interrupts off |
+| `EntryPoint:` `call WaitVBlank`, ... | `EntryPoint:` `di`, `ld sp, $FFFE`, `call WaitVBlank`, ...; then `rIE` is set before the `init()` code, and `rIF` cleared and `ei` after the LCD is turned on |
+| a `raw()` section at an interrupt vector (`ROM0[$40]`, ...) | overlaps the engine's vector (rgblink fails): give the code to `on_vblank` / `on_interrupt` instead |
+| `BuiltinFunction` had 6 variants; `BuiltinFunction::ALL: [BuiltinFunction; 6]` | 8: `WaitFrame` and `CheckSoftReset` are builtins (`ALL: [BuiltinFunction; 8]`); an exhaustive `match` needs their arms. A user function named `WaitFrame` or `CheckSoftReset` replaces them, as for any builtin |
+| a function named `VBlankHandler`, `StatHandler`, `TimerHandler`, `SerialHandler` or `JoypadHandler` | the engine's handler has that name: `build()` returns `Error::NameConflict` (`Definition::GeneratedFunction`) for one it generates |
+| a program without WRAM variables had none | every program has `wVBlankFlag` (1 byte of WRAM0, before the variables `build()` adds for animations and routines); a variable of that name with another type is `Error::NameConflict`, and a program whose variables fill WRAM0 has 1 byte less |
+| raw `Data` code in a program without variables got `SECTION "Raw Data", WRAM0` | it goes in the `SECTION "Variables", WRAM0[$C000]` of `wVBlankFlag`, like raw data after variables |
+| a joypad interrupt, a timer or `rSTAT` set up by hand in `raw()` code | `on_joypad`, `on_timer(Timer, code)`, `on_stat(Stat, code)`, or `RustBoyConfig::stat` / `timer`; hand-written set-up still works, but `rIE` is written by the start-up code (VBlank and the interrupts with a handler): set your bits in `init()` code, which runs after it |
+| (new) | `RustBoy::on_interrupt`, `on_interrupt_routine`, `on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `enable_interrupt`, `disable_interrupt`, `set_soft_reset`; `RustBoyConfig::stat`, `timer`, `soft_reset`; `stdlib::interrupts` (`Interrupt`, `Stat`, `Timer`, `TimerClock`, `vector`, `handler`, `wait_frame`, `enable`, `disable`, ...), `stdlib::inputs::check_soft_reset`, `select_all_keys`; `hw::DIV`, `TIMA`, `TMA`, `TAC`, `TACF_*`, `VECTOR_*`, `STACK_TOP`; the prelude exports `Interrupt`, `Stat`, `Timer`, `TimerClock` |
 
 ### For users of the `refactor` branch
 

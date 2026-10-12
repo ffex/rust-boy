@@ -49,7 +49,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 | Check | Status |
 |---|---|
 | `cargo build --lib` | ✅ builds with no warnings; `cargo clippy --all-targets -- -D warnings` passes |
-| `cargo test` | ✅ 312 library unit tests (and one in the `basic_usage` bin), the snapshot tests of the 6 examples (`tests/snapshots.rs`, which also tests its diff) and the doctests (README examples, the `prelude` module, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
+| `cargo test` | ✅ 331 library unit tests (and one in the `basic_usage` bin), the snapshot tests of the 6 examples (`tests/snapshots.rs`, which also tests its diff) and the doctests (README examples, the `prelude` module, `rust_boy::Error`, `RustBoy::build`, `RustBoyConfig`, `RustBoy::with_config`, `VariableManager::create_hram_u8`, `Asm::try_emit`, the `hw` module, the `gb_std::routine` module, `Regs::written_by`, `draw_sprites`, `RustBoy::define_routine`, `RustBoy::call_routine`, `Block`, the `gb_asm::section` module, the builders' `section`, `Asm::emit`, `Asm::blank_line`, `Layout`, the builders' `ld` and the compile-fail proofs that `ld 1, 2`, `inc 5`, `add a, hl` and `cp a, [wCount]` do not compile, `Expr`, `LabelAllocator`, `Asm::labels`, `Asm::emit_code`, `Asm::program`, `RustBoy::labels`, `RustBoy::keep_function`, `RustBoy::external_symbol`, `RustBoy::raw`, `RustBoy::add_sprite_tiles`, `Var`) pass (was: 8 type errors, fixed — [B1](#b1)) |
 | bin `coin-anim` | ✅ compiles (was broken, fixed — [B2](#b2)); the 8×8 frames render right (were drawn as 8×16 pairs, fixed — [B4](#b4)) |
 | bin `unbricked_rustboy` | ✅ assembles and links with RGBDS 1.0.4 (was: "`wCurKeys` already defined", fixed — [B3](#b3)); Paddle and Ball each draw their own tile ([B4](#b4)) |
 | bin `unbricked_std` | ✅ assembles and links with RGBDS 1.0.4; paddle bounce fixed ([B5](#b5)) |
@@ -67,8 +67,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 | Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
 | Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address once the program's variables are created (the variables `build()` adds go at the end of the last `WRAM0` section and move none; checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
 | Snapshot tests | ✅ since Phase 3 (`refactor-p3-tooling`) the asm each example prints is committed as `examples/<bin>/main.asm` (the old files were stale snapshots from `main`, regenerated), and `tests/snapshots.rs` fails with a unified diff when the output differs; `UPDATE_SNAPSHOTS=1 cargo test --test snapshots` rewrites them |
-| Headless-emulator tests | ✅ since Phase 3 (`refactor-p3-tooling-emulator`) `tests/emulator.rs` builds ROMs with RGBDS and runs them on a DMG emulator written for the tests (`tests/support/gameboy.rs`, no dependency: the SM83 M-cycle by M-cycle, interrupts with the `ei` delay, `halt` and the halt bug, timer, PPU timing without pixels, OAM DMA, joypad, MBC1/MBC5 ROM banking; OAM blocked in modes 2-3 and VRAM in mode 3, as on the hardware; its known limits are listed at its top), checked against Blargg's `cpu_instrs` (11), `instr_timing` and `mem_timing` (3) ROMs and by its own tests of interrupts (VBlank with a `halt` loop, `ei; halt` and `halt` with one pending, `ei; di`, the `ei` delay, STAT on `LYC`, timer), the first line after LCD on and the OAM DMA window; a test runs frames with scripted input and reads WRAM, HRAM, VRAM, OAM, the registers and every OAM write with its PPU mode. One test per example (the Unbricked ball moves and bounces, bricks break, the paddle stops at its limit; the FOSDEM player walks as one block with its animation; the coin animates on A, stops on B; `basic_usage` loops), each also checking that every OAM write lands in VBlank, and [B12](#b12) as it is today. They run with `RGBDS_LINK_CHECK` (in CI); cross-checked once against PyBoy 2.6.0 (identical OAM traces over 390 frames with input for the 3 Unbricked examples) |
+| Headless-emulator tests | ✅ since Phase 3 (`refactor-p3-tooling-emulator`) `tests/emulator.rs` builds ROMs with RGBDS and runs them on a DMG emulator written for the tests (`tests/support/gameboy.rs`, no dependency: the SM83 M-cycle by M-cycle, interrupts with the `ei` delay, `halt` and the halt bug, timer, PPU timing without pixels, OAM DMA, joypad (its interrupt only from a selected group of keys, since `refactor-p3-interrupts`), MBC1/MBC5 ROM banking; OAM blocked in modes 2-3 and VRAM in mode 3, as on the hardware; its known limits are listed at its top), checked against Blargg's `cpu_instrs` (11), `instr_timing` and `mem_timing` (3) ROMs and by its own tests of interrupts (VBlank with a `halt` loop, `ei; halt` and `halt` with one pending, `ei; di`, the `ei` delay, STAT on `LYC`, timer), the first line after LCD on and the OAM DMA window; a test runs frames with scripted input and reads WRAM, HRAM, VRAM, OAM, the registers and every OAM write with its PPU mode. One test per example (the Unbricked ball moves and bounces, bricks break, the paddle stops at its limit; the FOSDEM player walks as one block with its animation; the coin animates on A, stops on B; `basic_usage` loops), each also checking that every OAM write lands in VBlank, and [B12](#b12) as it is today. They run with `RGBDS_LINK_CHECK` (in CI); cross-checked once against PyBoy 2.6.0 (identical OAM traces over 390 frames with input for the 3 Unbricked examples) |
 | Build & run | ✅ since Phase 3 (`refactor-p3-tooling-run`) `scripts/run.sh <bin>` builds `target/examples/<bin>/main.{gb,sym,map}` with RGBDS, and `--run` opens it in an emulator (`$GB_EMULATOR`, or the first found of SameBoy, mGBA, Gambatte, bgb, also through wine, PyBoy; none: it prints the paths); `scripts/assemble-examples.sh` uses it, and CI keeps the `.sym` and `.map` files with the ROMs |
+| Frame model and interrupts | ✅ since Phase 3 (`refactor-p3-interrupts`) the main loop sleeps until the VBlank interrupt (`call WaitFrame`, `halt` with interrupts off, so no VBlank is missed) instead of polling `rLY`; the VBlank handler runs the `on_vblank` code and wakes it; handlers for the STAT, timer, serial and joypad interrupts (`RustBoy::on_interrupt`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt_routine`) save the registers their code changes; `rSTAT`/`rLYC` and the timer are settings (`RustBoyConfig::stat` / `timer`); `enable_interrupt` / `disable_interrupt` while the program runs; an opt-in soft reset (`set_soft_reset`). See [Key concepts](#key-concepts). Tests on the test emulator (`tests/emulator.rs`, `engine_*`): one VBlank handler and one main loop a frame, at line 144, the CPU in `halt` over 95% of the time, no handler before the first VBlank; no missed frame whatever interrupt ends just before VBlank; STAT on LYC and HBlank; the timer's period and reload; every register kept across handlers; enable / disable at run time; a joypad press (also mid-frame, with `UpdateKeys`); the soft reset once per press, the stack set again. 17 mutations of the feature (no `halt`, no `rIF` clear, a check-then-`halt` `WaitFrame`, no saved registers, no armed check, no `ld sp`, ...) each fail one of them |
 | CI | ✅ GitHub Actions: fmt, clippy `-D warnings`, tests (stable and Rust 1.85), every example assembled with RGBDS 1.0.4, the whole-program unit tests linked with it (`RGBDS_LINK_CHECK`, since [B26](#b26)), and the emulator tests with the Blargg ROMs (since `refactor-p3-tooling-emulator`; RGBDS, the ROMs and the Cargo builds are cached) |
 | Committed build artifacts | ✅ none (the 12 `*.gb` / `*.o` files were untracked; `.gitignore` covers them) |
 
@@ -79,7 +80,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 | Layer | Path | LOC | Role |
 |---|---|---|---|
 | **L1 `asm`** (was `gb_asm`) | `src/asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `program.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
-| **L2 `stdlib`** (was `gb_std`) | `src/stdlib/` (`flow/`, `graphics/`, `inputs.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3300 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), `Sprite` and the sprite snippets the engine uses too (`draw_sprites`, moves, `get_pivot`; its own `SpriteManager` is gone since `refactor-p2-routines-sprites`), `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
+| **L2 `stdlib`** (was `gb_std`) | `src/stdlib/` (`flow/`, `graphics/`, `inputs.rs`, `interrupts.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3900 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, and since `refactor-p3-interrupts` WaitFrame and CheckSoftReset, the interrupt pieces (`stdlib::interrupts`: vectors, handlers, `rIE`/`rIF`, `rSTAT`, the timer), each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), `Sprite` and the sprite snippets the engine uses too (`draw_sprites`, moves, `get_pivot`; its own `SpriteManager` is gone since `refactor-p2-routines-sprites`), `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
 | **L3 `engine`** (was `rust_boy`) | `src/engine/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`, `error.rs`) | ~2900 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` and its `Error` (since `refactor-p2-engine-api-errors`) |
 | **`prelude`** | `src/prelude.rs` | ~40 | Re-exports of the common types of every layer and `hw` (`use rust_boy::prelude::*`), since `refactor-p2-engine-api-prelude` |
 | **`hw`** (data) | `src/hw.rs` | ~390 | Hardware facts as pure data (since [B22](#b22); complete since Phase 2 `refactor-p2-hw`): `hw::Symbol`s, each a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM layout and the screen sizes (`hw::SYMBOLS` lists them), the facts with no `hardware.inc` name as plain numbers, and `oam_offset`; depends on nothing, used by `gb_std` (which turns a `Symbol` into an `Expr`, `src/stdlib/hw_symbols.rs`), `rust_boy` and the examples, not by `gb_asm` |
@@ -155,14 +156,15 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `hw::Symbol<T>` is a `hardware.inc` name and its value (`T` = `u16` for an address, `u8` for a flag or a count):
   `hw::LCDC` is `rLCDC` = `$FF40`. The Rust name is the `hardware.inc` name without its `r` / `_` prefix (`OAMRAM` is
   `_OAMRAM`, flags keep their whole name), except `OAM_ENTRY_SIZE` (`sizeof_OAM_ATTRS`). It defines the I/O registers
-  (`rP1`, `rIF`, `rLCDC`, `rSTAT`, `rSCY`/`rSCX`, `rLY`, `rLYC`, `rDMA`, `rBGP`, `rOBP0`/`rOBP1`, `rWY`/`rWX`, `rIE`; not
-  the audio ones, which nothing uses yet), their flags (`P1F_*`, `LCDCF_*`, `STATF_*`, `IEF_*`, `PADF_*`/`PADB_*`), the
+  (`rP1`, `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `rIF`, `rLCDC`, `rSTAT`, `rSCY`/`rSCX`, `rLY`, `rLYC`, `rDMA`, `rBGP`, `rOBP0`/`rOBP1`, `rWY`/`rWX`, `rIE`; not
+  the audio ones, which nothing uses yet), their flags (`P1F_*`, `TACF_*`, `LCDCF_*`, `STATF_*`, `IEF_*`, `PADF_*`/`PADB_*`), the
   memory map (`_VRAM`, `_VRAM8000`/`8800`/`9000`, `_SCRN0`/`_SCRN1`, `_SRAM`, `_RAM`, `_RAMBANK`, `_OAMRAM`, `_IO`,
   `_HRAM`), the OAM layout (`OAM_COUNT`, `sizeof_OAM_ATTRS`, `OAMA_*`, `OAMF_*`/`OAMB_*`) and the screen sizes
   (`SCRN_X`, `SCRN_Y`, `SCRN_VX_B`, …), all listed in `hw::SYMBOLS`. What `hardware.inc` has no name for is a plain
   number: the tile regions as `RustBoy` uses them (`VRAM_OBJ_TILES`, `VRAM_BG_TILES`, …), region ends (`WRAM0_END`,
   `OAM_END`, `HRAM_END`, `VRAM_END`), `OAM_SIZE`, `OAM_X_OFFSET`/`OAM_Y_OFFSET`, `TILE_SIZE`/`TILE_WIDTH`,
-  `ROM_HEADER`/`ROM_HEADER_END`. `hw::oam_offset(index, hw::OAMA_X)` is the offset of a byte of an OAM entry, and panics
+  `ROM_HEADER`/`ROM_HEADER_END`, and since `refactor-p3-interrupts` the interrupt vectors (`VECTOR_VBLANK`, ...) and
+`STACK_TOP`. `hw::oam_offset(index, hw::OAMA_X)` is the offset of a byte of an OAM entry, and panics
   past OAM or on any symbol but the four `OAMA_*` (`hw::OAM_ENTRY_BYTES`; `OAMB_BANK1`, whose value is 3, panics too).
   `gb_std` turns a `Symbol` into an `Expr`, `Operand` or `AluOperand` by its name (`src/stdlib/hw_symbols.rs`: the
   first layer that sees both, so `hw` stays data and `gb_asm` does not know it); the 8-bit ALU (`AluOperand`) takes
@@ -224,28 +226,76 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **The frame model and interrupts** (since `refactor-p3-interrupts`; `src/stdlib/interrupts.rs`, `RustBoy::on_interrupt`
+  and `build_layout` in `src/engine/rustboy.rs`). A `RustBoy` program runs once a frame, woken by the VBlank interrupt:
+  - **Start-up**: `EntryPoint` turns interrupts off (`di`) and sets `SP` = `$FFFE` (`hw::STACK_TOP`; for a soft reset,
+    which jumps there from anywhere), sets everything up, then the interrupt sources (`rLYC`/`rSTAT` from
+    `RustBoyConfig::stat`, the timer from `RustBoyConfig::timer`, both `rP1` groups selected for a joypad handler) and
+    `rIE` (VBlank and every interrupt with a handler), then the `init()` code (which can change them), LCD on, `rIF` = 0
+    (the requests made during the start-up, such as the VBlank it waited for, are dropped) and `ei`.
+  - **VBlank handler** (`VBlankHandler`, from the vector at `$40`): at the start of each VBlank (line 144), the
+    `on_vblank` code, then `wVBlankFlag` = 1 (`interrupts::signal_frame`). It is the place for what must run in VBlank
+    whatever the main loop does: the OAM DMA of the shadow OAM ([B12](#b12)) goes first in it.
+  - **Main loop**: `Main:` `call WaitFrame` (clear `wVBlankFlag`, then: `di`, check it, `halt` with interrupts off, `ei`,
+    again; `halt` with interrupts off ends when an interrupt is pending, without taking it, so a VBlank that comes
+    between the check and the `halt` wakes it and is taken by the `ei` before the next check, where a
+    check-then-`halt` loop would sleep a whole frame), then the animations, the `add_to_main_loop` code, the raw
+    `MainLoop` code, the soft-reset check, `jp Main`. The game logic stays here: it starts in VBlank, 44 M-cycles
+    after line 144 starts in a program without VBlank code (the dispatch, the handler and `WaitFrame`'s return, on the
+    test emulator; the `rLY` polling started about 28 M-cycles earlier), and
+    runs once a frame. A frame whose work outlasts the frame waits for the next VBlank, as before.
+  - **Other handlers** (`StatHandler`, `TimerHandler`, `SerialHandler`, `JoypadHandler`): when their interrupt fires,
+    in VBlank or not; they wake the main loop's `halt`, which sleeps again. A handler runs with interrupts off, so none
+    interrupts another; it delays the code it interrupts (the main loop's OAM writes too, while [B12](#b12) is open).
+  - **Registers**: a handler (`interrupts::handler`) `push`es the pairs of the registers its code may change, in the
+    calling-convention model of [Routines](#key-concepts): `Regs::written_by` of the code (every register when it
+    cannot tell: a `call`, raw code), or the routine's `Routine::changes` for `on_interrupt_routine`, plus `a` for the
+    VBlank flag; it `pop`s them and returns with `reti`. Code given to a handler must not return (it panics).
+  - **API**: `on_interrupt(interrupt, code)` (several calls append, in order), `on_interrupt_routine`, `on_vblank`,
+    `on_stat(Stat, code)`, `on_timer(Timer, code)` (the `Stat` / `Timer` is the one setting: another one panics),
+    `on_joypad`; `enable_interrupt` / `disable_interrupt` return the code that switches one in `rIE` while the program
+    runs (an interrupt switched without a handler gets a `reti` vector; disabling VBlank panics: the main loop waits for
+    it); `set_soft_reset`. A vector is written only for VBlank and the interrupts that have a handler or are switched,
+    each `SECTION "<name> interrupt", ROM0[$40]`... before the header. The handlers are generated names: a function of
+    that name is `Error::NameConflict` (`Definition::GeneratedFunction`).
+  - **Joypad**: the hardware requests the joypad interrupt when a line of `rP1` goes low, only in a selected group;
+    `UpdateKeys` leaves none selected, so with a joypad handler the start-up and the end of each frame select both. A
+    group selected while a button is held requests it too (each frame while held, through `UpdateKeys`).
+  - **Soft reset** (`stdlib::inputs::check_soft_reset`, `CheckSoftReset`): at the end of the frame, after the
+    `UpdateKeys` of `add_inputs` (or one `build()` adds), A + B + Select + Start held make it `jp $0100`: the whole
+    start-up runs again, as after the boot ROM (every variable to its initial value, the `init()` code again; registers
+    the start-up does not write and RAM no variable holds keep their values). Once per press: it resets only when the
+    four were not all held at some frame since the last start-up (`wSoftResetArmed`, 0 at start-up), so holding them
+    does not reset the game every frame.
+
 ### What `RustBoy::build()` emits (`src/engine/rustboy.rs:637-857`, `build` prints the program of the `Layout` `build_layout` returns)
 
-1. **Header**: `INCLUDE "hardware.inc"`, `SECTION "Header", ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
+1. **Header**: `INCLUDE "hardware.inc"`, the interrupt vectors (`SECTION "VBlank interrupt", ROM0[$40]`, `jp
+   VBlankHandler`, and one for each other interrupt with a handler, since `refactor-p3-interrupts`), `SECTION "Header",
+   ROM0[$100]`, `jp EntryPoint`, `ds $150 - @, 0`.
    Everything after this stays in that one ROM0 section (no further `SECTION` for code/data).
 2. **Constants**: `DEF name EQU value` for each `define_const*`.
-3. **Init**: `EntryPoint:` → `call WaitVBlank` → LCD off → `Memcopy` every non-empty tile/tilemap blob to VRAM ([B27](#b27)) →
+3. **Init**: `EntryPoint:` → `di`, `ld sp, $FFFE` (since `refactor-p3-interrupts`) → `call WaitVBlank` → LCD off → `Memcopy` every non-empty tile/tilemap blob to VRAM ([B27](#b27)) →
    clear the whole OAM (always, with `gb_std`'s `initialize_objects_screen` + `clear_objects_screen`) and write
    the initial sprites → `rBGP`, `rOBP0`, `rOBP1` = `%11100100` → create animation variables → **variable
-   initialisation** → **user `init()` code** → LCD on (`LCDCF_ON|BGON|OBJON` + `OBJ8`, or `OBJ16` after
+   initialisation** → the interrupt sources and `rIE` (since `refactor-p3-interrupts`) → **user `init()` code** → LCD on
+   → `rIF` = 0, `ei` (since `refactor-p3-interrupts`) (`LCDCF_ON|BGON|OBJON` + `OBJ8`, or `OBJ16` after
    `set_sprite_size(Size8x16)`). Since `refactor-p2-engine-api-config` these values come from the program's
    `RustBoyConfig`: `palettes` (`%11100100` each by default; `a` is loaded once per value), `lcdc` (`BGON`, `OBJON`),
    `sprite_size`, `background_tilemap` (`| LCDCF_BG9C00`). (Since [B11](#b11)/[B28](#b28); before, user code ran before the variables were
    set, the palettes after LCD on, `rOBP1` was never set and the OAM was cleared only when sprites existed.)
-4. **MainLoop**: `Main:` → `call WaitNotVBlank` → `call WaitVBlank` → animation dispatcher → user main-loop
-   code (incl. `UpdateKeys` + key checks) → `jp Main`.
+4. **MainLoop**: `Main:` → `call WaitFrame` (it was `call WaitNotVBlank` → `call WaitVBlank`, polling `rLY`, until
+   `refactor-p3-interrupts`) → animation dispatcher → user main-loop code (incl. `UpdateKeys` + key checks) → raw
+   `MainLoop` code → with the soft reset, `call UpdateKeys` (without inputs) and `call CheckSoftReset` → with a joypad
+   handler, both key groups selected → `jp Main`.
 5. **Main (legacy)**: whatever was written through `RustBoy::raw()` to its default chunk (reached only through a
    label). Since [B15](#b15) the raw code written to the other chunks goes at the end of the same chunk (`Init`
    before LCD on, `MainLoop` before `jp Main`, see `RustBoy::raw`).
 6. **Functions** (since [B24](#b24)/[B26](#b26), worked out once all the code is known, before the variables): the
    builtins, then the user functions, that the code and the animation functions refer to, directly or through
    other functions (their bodies and, since `refactor-p2-routines`, their dependencies), plus the ones forced with
-   `use_function` / `keep_function`; then the `Anim_*` functions. The variables an emitted routine needs (`wCurKeys`,
+   `use_function` / `keep_function`; then the `Anim_*` functions; then the interrupt handlers (`VBlankHandler`, and
+   one for each other interrupt with code, since `refactor-p3-interrupts`). The variables an emitted routine needs (`wCurKeys`,
    `wNewKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
    variable initialisation (step 3) and the Data chunk include them.
 7. **Tiles / Tilemap**: `Label:` + `dw`/`INCBIN` + `LabelEnd:`; **Data**: `SECTION "Variables", WRAM0` + `name: db/dw`
@@ -769,7 +819,11 @@ loop fits in VBlank (~1140 M-cycles; `unbricked_rustboy` already uses ~600). Gro
 **Status: open; today's behaviour is tested** (`refactor-p3-tooling-emulator`, `b12_oam_written_outside_vblank_is_lost` in
 `tests/emulator.rs`): a `RustBoy` program that moves a sprite after ~7000 M-cycles of `Delay` moves it while the PPU is
 in mode 3 of line 52, so the read gives `$FF`, the write is dropped and the sprite never moves; without the delay it
-moves one pixel a frame. The 6 examples write OAM only in VBlank today (each example test checks it).
+moves one pixel a frame. The 6 examples write OAM only in VBlank today (each example test checks it). Since
+`refactor-p3-interrupts` the main loop is woken by the VBlank interrupt, about 28 M-cycles later in the frame than the
+`rLY` polling, so the test's delay is 1004 iterations (1002 to 1007 land in mode 3 of line 52; it was 1008, 1006 to
+1011); the behaviour it documents is the same. The fix has its place: the OAM DMA goes first in the VBlank handler
+(`RustBoy::generate_handlers`), where it runs at the start of every VBlank whatever the main loop does.
 
 ### P2
 
@@ -810,8 +864,10 @@ chunk the raw code wrote, each one right after the code it generates for that ch
 (so it runs, like `init()` code); `MainLoop` in the main loop after the `add_to_main_loop` code and before `jp Main` (it
 runs every frame); `Main` where it was, after `jp Main` (reached only through a label); `Functions` after the generated
 functions; `Data` after the variable sections (so inside the last `WRAM0` one, unless the raw code opens a `SECTION`;
-in a program without variables, raw `Data` code that does not start with a `SECTION` gets `SECTION "Raw Data", WRAM0`,
-where it used to land in the ROM0 section of the code: `test_raw_data_always_lands_in_wram`). The raw `Functions` and `Data` code is scanned like the rest, so a
+in a program without variables, raw `Data` code that does not start with a `SECTION` got `SECTION "Raw Data", WRAM0`,
+where it used to land in the ROM0 section of the code: `test_raw_data_always_lands_in_wram`. Since
+`refactor-p3-interrupts` every program has a `WRAM0` variable, the main loop's `wVBlankFlag`, so the raw data always
+lands in the last `WRAM0` variable section and that default section, which could no longer be reached, was removed). The raw `Functions` and `Data` code is scanned like the rest, so a
 builtin a raw routine calls is emitted (with its variables) and a name it defines is the program's ([B26](#b26)). The
 `raw()` doc example is now a compiled doctest: a labelled routine called from the main loop, and `MainLoop` code. No
 example changes (no example writes to another chunk). Tests: `test_raw_keeps_every_chunk` (each chunk, a second
@@ -1215,10 +1271,11 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Graphics:** no shadow OAM/DMA, no scrolling, no window layer, no palette API/fades, no
   metasprites beyond 16×16, no text/numbers (a `$9C00` map exists since [B19](#b19), without a window layer).
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
-- **Engine:** polling instead of VBlank interrupt + `halt`; no interrupts/timers, scenes, RNG, collision,
-  16-bit math, loops/switch.
+- **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
+  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
-  rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine does not use the new instructions yet.
+  rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
+  `refactor-p3-interrupts`.
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a

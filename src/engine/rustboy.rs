@@ -233,12 +233,15 @@ impl RustBoy {
 
     /// Add initialization code (runs once at startup)
     ///
-    /// The start-up code runs, in order: LCD off, tile data copied to VRAM, OAM cleared
-    /// and the sprites written, default palettes (`rBGP`, `rOBP0`, `rOBP1`), every
-    /// variable set to its initial value (animation variables included), **this code**,
-    /// then LCD on. So the code here can change any variable, animation or palette, and
-    /// runs with the LCD off (VRAM and OAM can be written freely). `rLCDC` is the
-    /// exception: `build()` sets it after this code to turn the LCD on.
+    /// The start-up code runs, in order: interrupts off, LCD off, tile data copied to VRAM,
+    /// OAM cleared and the sprites written, default palettes (`rBGP`, `rOBP0`, `rOBP1`),
+    /// every variable set to its initial value (animation variables included), the
+    /// interrupt sources (`rSTAT`, `rLYC`, the timer) and `rIE`, **this code**, then LCD on,
+    /// pending interrupts dropped (`rIF` = 0) and interrupts on (`ei`). So the code here can
+    /// change any variable, animation, palette or interrupt setting, and runs with the LCD
+    /// and interrupts off (VRAM and OAM can be written freely). `rLCDC` is the exception:
+    /// `build()` sets it after this code to turn the LCD on. A soft reset
+    /// ([`RustBoy::set_soft_reset`]) runs the whole start-up again, this code too.
     ///
     /// Do not wait for VBlank here (`call WaitVBlank`, a loop on `rLY`): with the LCD
     /// off, `rLY` stays 0 and the wait never ends.

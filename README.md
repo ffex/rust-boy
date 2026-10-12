@@ -111,6 +111,50 @@ Control flow uses the same model: `If` uses `a`, `b` and the flags (`If::clobber
 and `b` = right), `IfConst` `a` and the flags, `IfA` and `IfCall` the flags. Left code that may change `b` (a call, for
 example) is wrapped in `push bc` / `pop bc`, so the compare always reads the right value.
 
+## Frames and interrupts (`RustBoy`)
+
+A `RustBoy` program runs once a frame, woken by the VBlank interrupt:
+
+- the start-up code turns interrupts off, sets everything up, enables the interrupts that have a handler in `rIE`,
+  drops the requests made meanwhile (`rIF` = 0) and turns interrupts on (`ei`);
+- the **VBlank handler** runs at the start of each VBlank (line 144): the code given to `on_vblank`, then it tells the
+  main loop that a frame started;
+- the **main loop** waits for that asleep (`call WaitFrame`, a `halt`), then runs the animations and the
+  `add_to_main_loop` code, so it starts in VBlank too, once a frame;
+- the **other handlers** (`on_stat`, `on_timer`, `on_joypad`, or `on_interrupt` for any of them) run when their
+  interrupt fires. Every handler saves the registers its code changes (what the code writes, or a routine's calling
+  convention with `on_interrupt_routine`) and returns with `reti`, so the code it interrupts is not disturbed.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let ticks = gb.vars.create_u8("wTicks", 0);
+
+// 64 times a second: 64 steps of the 4096 Hz clock, from 192 to 255
+let mut tick = Block::new();
+tick.ld_a_addr_def(ticks.name()).inc(R8::A).ld_addr_def_a(ticks.name());
+gb.on_timer(Timer::new(TimerClock::Hz4096, 192), tick);
+
+// On line 100: change the background scroll for the bottom of the screen
+let mut split = Block::new();
+split.ld_a(8).ldh(Mem::addr(hw::SCX), R8::A);
+gb.on_stat(Stat::new().line(100), split);
+
+// Hold A + B + Select + Start to start the game again
+gb.set_soft_reset(true);
+
+let out = gb.build()?;
+assert!(out.contains("TimerHandler:\n    push af\n    ld a, [wTicks]"));
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`enable_interrupt` / `disable_interrupt` give the code that switches one on or off while the program runs, and
+`stdlib::interrupts` has the pieces for a program written with `stdlib` (vectors, handlers, `WaitFrame`, the
+`rSTAT` and timer set-up). The **soft reset** jumps to the entry point (`$0100`), so the whole start-up runs again,
+as at power-on: every variable is set to its initial value, the `init()` code runs again; it happens once per press
+(holding the four buttons does not reset the game again and again).
+
 ## Low level (`asm`)
 
 The same building blocks the engine uses, one instruction at a time. An `Asm` is a program: it is printed in the
@@ -334,7 +378,9 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), OAM sprites (8×8, or 8×16 with `set_sprite_size`), 16×16 composite sprites
-  (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, and routines (the builtins and
+  (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
+  the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and
+  the timer, a soft reset (see [Frames and interrupts](#frames-and-interrupts-rustboy)), and routines (the builtins and
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too
   many tiles or sprites (40) panic with a clear message where they are added, as do unknown sprite ids and animation
   names; variables that do not fit in WRAM0 or HRAM make `build()` return `Error::MemoryFull` (a problem of the whole program,

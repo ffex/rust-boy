@@ -2112,6 +2112,36 @@ fn window_init_position_override_and_disabled_default() {
 }
 
 #[test]
+fn configured_window_can_start_hidden_even_with_background_disabled() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(
+        RustBoyConfig::default()
+            .lcdc(Lcdc::default().background(false))
+            .window(Window::from_raw(TilemapArea::Map9C00, 7, 112).visible_on_startup(false)),
+    );
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    let lcdc = gb.read(hw::LCDC.value);
+    assert_eq!(lcdc & hw::LCDCF_BGON.value, 0);
+    assert_eq!(lcdc & hw::LCDCF_WINON.value, 0, "configured hidden");
+    assert_ne!(
+        lcdc & hw::LCDCF_WIN9C00.value,
+        0,
+        "map config still applies"
+    );
+    assert_eq!((gb.read(hw::WX.value), gb.read(hw::WY.value)), (7, 112));
+
+    game.on_vblank(game.show_window(true));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    let lcdc = gb.read(hw::LCDC.value);
+    assert_ne!(lcdc & hw::LCDCF_WINON.value, 0, "runtime show is retained");
+    assert_eq!(lcdc & hw::LCDCF_BGON.value, 0, "DMG master bit remains off");
+}
+
+#[test]
 fn get_tile_by_pixel_follows_active_background_map() {
     if !rgbds_enabled() {
         return;

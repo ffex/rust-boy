@@ -195,6 +195,13 @@ arrangement of a whole composite: a 16x16 composite flipped in X mirrors each
 half in place, so swap the halves' tiles too. Change a composite's attributes per member sprite
 (`get_composite_sprites`).
 
+## Window (`RustBoy`)
+
+Configure a window with `Window::new(map, x, y)`; use `Window::from_raw(map, wx, wy)` for clipping or off-screen
+coordinates. It is visible at startup by default, or use `.visible_on_startup(false)` to show it later with
+`show_window(true)`. On DMG, `Lcdc::background(false)` disables both the background and window. Startup configuration
+owns the final LCDC value; run runtime visibility changes in VBlank.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:

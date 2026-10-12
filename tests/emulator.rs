@@ -921,6 +921,34 @@ fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
 }
 
+#[test]
+fn tile_collision_checks_solid_ids_after_camera_scroll() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    for (solid_tiles, expected) in [(vec![5], 1), (vec![6], 0), (vec![5, 6], 1)] {
+        let mut game = RustBoy::new();
+        let x = game.vars.create_u8("wCollisionX", 0);
+        let y = game.vars.create_u8("wCollisionY", 0);
+        let hit = game.vars.create_u8("wCollisionHit", 0);
+        let mut init = Block::new();
+        init.emit_all(game.set_background_scroll(8, 0))
+            .ld_a(5)
+            .ld_addr_def_a(Expr::from(hw::SCRN0) + 1);
+        game.init(init);
+        game.add_to_main_loop(TileCollision::new(solid_tiles).at_screen_pixel(
+            x.get(),
+            y.get(),
+            hit.set(1),
+        ));
+
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(5);
+        assert_eq!(gb.read_symbol("wCollisionHit"), expected);
+    }
+}
+
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a
 /// `halt`
 fn halted_share(gb: &mut GameBoy, frames: u64, samples: u64) -> f64 {

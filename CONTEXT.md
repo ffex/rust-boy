@@ -1395,8 +1395,11 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   (see §2); `GetTileByPixel` takes map pixels, while `GetTileByScreenPixel` adds SCX/SCY for screen-space collision
   checks (Phase 3 follow-up).
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
-- **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
-  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
+- **Engine:** screen-pixel solid-tile sampling is available through `TileCollision` (stacked on
+  `refactor-p3-scroll-collision`); sprite AABB checks are in PR #75. Collision response and
+  entities remain follow-ups; scenes, RNG, math and control flow have Phase 3 branches. The
+  VBlank interrupt + `halt` main loop, interrupt handlers, timer and soft reset exist since
+  `refactor-p3-interrupts`.
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.

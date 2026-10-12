@@ -257,8 +257,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       helper that adds SCX/SCY before `GetTileByPixel`, or a scroll-aware variant); whether sprites should get world
       coordinates or a "follow sprite" helper (today `follow_background_point` needs world positions kept by the program)
 - [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
-- [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
-      (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))
+- [x] `GetTileByPixel` for the `$9C00` map (branch `refactor-p3-tilemap-lookup`):
+      reads LCDC bit 3 at runtime; follows both configured and runtime background-map selection.
 - [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its
       map at start-up, and since [B19](CONTEXT.md#b19) a second tilemap on the same map panics
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out

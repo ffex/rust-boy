@@ -228,6 +228,9 @@ fn test_check_soft_reset_convention() {
 fn test_get_tile_by_pixel_convention() {
     let pixel = |x: u8, y: u8| {
         move |cpu: &mut TestCpu| {
+            cpu.mem.insert(hw::LCDC.name.to_string(), 0);
+            cpu.consts
+                .insert(hw::LCDCF_BG9C00.name.to_string(), hw::LCDCF_BG9C00.value);
             for addr in hw::SCRN0.value..hw::SCRN1.value {
                 cpu.mem.insert(format!("${:04X}", addr), (addr % 251) as u8);
             }

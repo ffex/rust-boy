@@ -147,10 +147,10 @@ pub fn wait_not_vblank() -> Routine {
 ///
 /// This is the only `GetTileByPixel`: `RustBoy` emits this one too
 /// (`BuiltinFunction::GetTileByPixel`). Its contract:
-/// - Reads: `b` = X and `c` = Y, in pixels on the background map at `$9800` (0 to 255;
+/// - Reads: `b` = X and `c` = Y, in pixels on the background map selected by LCDC bit 3 (0 to 255;
 ///   the screen pixel when `rSCX` and `rSCY` are 0). `get_pivot` (of a `stdlib` `Sprite`,
 ///   or of the `RustBoy` sprite manager) loads them from a sprite's position.
-/// - Returns: `hl` = the address of that tile in the map, `$9800 + (Y / 8) * 32 + X / 8`,
+/// - Returns: `hl` = the address of that tile in the map, `map_base + (Y / 8) * 32 + X / 8`,
 ///   and `a` = the tile index stored there (`[hl]`). So a caller can test the tile at
 ///   once (`IfConst`, `IfA`, `IfCall`), then change it through `hl` (`TileRef`).
 /// - Clobbers: `bc` and the flags; `de` is kept.
@@ -160,11 +160,7 @@ pub fn get_tile_by_pixel() -> Routine {
     let mut asm = Block::new();
 
     asm.comment("Convert a pixel position to a tilemap address and read the tile there");
-    asm.comment(&format!(
-        "hl = ${:04X} + X / 8 + (Y / 8) * {}",
-        hw::SCRN0.value,
-        hw::SCRN_VX_B.value
-    ));
+    asm.comment("hl = active background map + X / 8 + (Y / 8) * 32");
     asm.comment("@param b: X");
     asm.comment("@param c: Y");
     asm.comment("@return hl: tile address");
@@ -199,6 +195,12 @@ pub fn get_tile_by_pixel() -> Routine {
 
     // Add the offset to the tilemap's base address
     asm.ld(R16::BC, Expr::hex(hw::SCRN0.value));
+    // Read the active background map at runtime, including changes made in a handler.
+    asm.ld_a_addr_def(hw::LCDC);
+    asm.and(hw::LCDCF_BG9C00);
+    asm.jr_cond(Condition::Z, ".map_selected");
+    asm.ld(R16::BC, Expr::hex(hw::SCRN1.value));
+    asm.label(".map_selected");
     asm.add_hl(R16::BC);
 
     // And read the tile there
@@ -252,6 +254,9 @@ mod tests {
     /// A CPU whose background map at `$9800` holds [`tile_at`]
     fn cpu_with_map() -> TestCpu {
         let mut cpu = TestCpu::default();
+        cpu.mem.insert(hw::LCDC.name.to_string(), 0);
+        cpu.consts
+            .insert(hw::LCDCF_BG9C00.name.to_string(), hw::LCDCF_BG9C00.value);
         for addr in 0x9800..0x9C00 {
             cpu.mem.insert(format!("${:04X}", addr), tile_at(addr));
         }

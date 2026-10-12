@@ -1052,8 +1052,8 @@ the two maps; `TileManager::add_tilemap_at(name, area, rows)` puts a tilemap at 
 start of its map, so one would replace the other), and so does a tilemap of more than 32 rows (it ran into the next map,
 or out of VRAM from `$9C00`). **`RustBoy::set_background_tilemap(area)`** chooses the map the background shows: `build()`
 adds `| LCDCF_BG9C00` to the LCD-on value for `Map9C00` (for `Map9800`, the default, the LCDC line is unchanged: the flag
-is 0). Not done: the window layer, which could show the other map (Phase 3), and `GetTileByPixel`, which still reads the
-`$9800` map (documented on `set_background_tilemap`). No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
+is 0). Not done: the window layer, which could show the other map (Phase 3), while `GetTileByPixel` now follows LCDC bit 3 at runtime since
+`refactor-p3-tilemap-lookup`. No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
 and `test_a_tilemap_has_at_most_32_rows` (both failed before: no panic), `test_a_tilemap_at_9c00` (the start-up code with
 the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCDC value; linked with RGBDS).
 
@@ -1378,3 +1378,11 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 tilemap lookup
+
+Since `refactor-p3-tilemap-lookup`, the shared `GetTileByPixel` reads LCDC bit 3 at runtime
+and returns the tile address and index from the current background map, at `$9800` or `$9C00`.
+Coordinates remain map pixels; callers add camera scroll when starting from screen pixels.
+The calling convention is unchanged; the routine adds a register read and conditional map selection.
+Emulator tests cover both configured maps, pixel boundaries and changing maps in a VBlank handler.

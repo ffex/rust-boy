@@ -60,6 +60,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates.
+- **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
+  LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
+  or `$9C00`; map-pixel coordinates and the calling convention are unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

@@ -6,6 +6,17 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
+### Per-animation timing (Phase 3)
+
+- `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's period
+  (1..=255). Sprites with overrides get independent clocks; other animations on the same
+  sprite use the global default. Selection changes reset the clock, repeated enable
+  calls preserve it, and disabled frames stop it.
+- Composite/metasprite setters configure every part together. Clear methods remove
+  overrides. Each independently timed sprite uses two WRAM bytes; BC is preserved.
+- Programs without overrides, including all existing example snapshots, are unchanged.
+  The original `RustBoy::set_animation_delay` remains the global default.
+
 ### Highlights
 
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),

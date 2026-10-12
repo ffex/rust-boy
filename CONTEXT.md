@@ -1390,3 +1390,24 @@ names and unchanged example output. Position, capacity and tile/alignment errors
 registration. Existing composite movement uses the leading member at each edge and keeps every
 part at its original offset; composite animation works in both hardware sizes. Emulator tests
 exercise an irregular six-part layout, all four limits and both sprite sizes, preserving tile/flags.
+
+### Phase 3 per-animation speed (`refactor-p3-animation-speed`)
+
+`SpriteManager::set_animation_delay` sets a compile-time period of 1..=255 game frames
+for an animation. A sprite with any override gains a timer and previous-selection byte
+(`wAnim_{name}_Timer`, `wAnim_{name}_Previous`); its other animations use the global
+period through that independent timer. Selection changes observed at dispatch reset the
+clock; repeated enable calls for the selected animation do not stall it. Disabled
+selections stop the clock, and re-enabling after an observed disabled frame starts a
+full period. The shared global counter still drives sprites without overrides; programs
+without overrides generate their existing assembly unchanged. The new dispatcher saves
+BC, uses B for selection and C for the shared-counter predicate, and preserves the
+existing AF-only calling convention. Existing animation functions remain the sole
+source of frame stepping, so Once and PingPong keep their existing frame semantics.
+
+Composite/metasprite period setters configure every part and validate all indices
+before mutation. Normal composite enable/disable calls preserve synchronization;
+changing individual members separately can desynchronize them. Clear methods remove
+compile-time overrides and return a sprite to the shared clock once none remain.
+Timing governs the main-loop dispatcher; direct calls to animation functions still
+step immediately. Completion events/callbacks remain the next animation task.

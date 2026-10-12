@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use super::memory::{MemoryAllocator, MemoryRegion};
 use super::tiles::TileId;
 use crate::{
-    asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, is_identifier},
+    asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, R16Stack, is_identifier},
     engine::animations::Animation,
     hw,
     stdlib::graphics::sprites::{
@@ -575,10 +575,65 @@ impl SpriteManager {
             end_frame,
             anim_type,
             index,
+            delay: None,
             frame_step,
         };
         sprite.animations.push(animation);
         index
+    }
+
+    /// Override this animation's period in game frames (1..=255).
+    /// The sprite gains an independent clock; other animations on it use the global
+    /// period unless overridden too. Switching selection resets its clock; repeatedly
+    /// enabling the already selected animation does not reset or stall it.
+    /// Panics for an unknown sprite/index or a zero period.
+    pub fn set_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8, delay: u8) {
+        assert!(delay > 0, "per-animation delay must be 1..=255");
+        let sprite = self.sprite_mut(sprite_id);
+        sprite.check_animation_index(animation_index);
+        sprite.animations[usize::from(animation_index)].delay = Some(delay);
+    }
+
+    /// Remove an override. With no overrides left on this sprite it returns to the
+    /// shared global clock. Panics for an unknown sprite/index.
+    pub fn clear_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8) {
+        let sprite = self.sprite_mut(sprite_id);
+        sprite.check_animation_index(animation_index);
+        sprite.animations[usize::from(animation_index)].delay = None;
+    }
+
+    /// Apply an animation period to every part of a composite/metasprite. Normal
+    /// composite enable/disable calls keep all parts synchronized. Validate all parts
+    /// before changing any of them. Panics for zero delay or unknown ids/indices.
+    pub fn set_composite_animation_delay(
+        &mut self,
+        composite_id: CompositeSpriteId,
+        animation_index: u8,
+        delay: u8,
+    ) {
+        assert!(delay > 0, "per-animation delay must be 1..=255");
+        let ids = self.composite(composite_id).sprites.clone();
+        for id in &ids {
+            self.sprite(*id).check_animation_index(animation_index);
+        }
+        for id in ids {
+            self.set_animation_delay(id, animation_index, delay);
+        }
+    }
+
+    /// Remove an override from all parts, validating first.
+    pub fn clear_composite_animation_delay(
+        &mut self,
+        composite_id: CompositeSpriteId,
+        animation_index: u8,
+    ) {
+        let ids = self.composite(composite_id).sprites.clone();
+        for id in &ids {
+            self.sprite(*id).check_animation_index(animation_index);
+        }
+        for id in ids {
+            self.clear_animation_delay(id, animation_index);
+        }
     }
 
     /// Panics unless the frames `start..=end`, `step` tiles apart, are all among the
@@ -1126,6 +1181,13 @@ impl SpriteManager {
         labels: &LabelAllocator,
         delay_value: u8,
     ) -> Vec<Instr> {
+        if self
+            .sprites
+            .values()
+            .any(|sprite| sprite.animations.iter().any(|anim| anim.delay.is_some()))
+        {
+            return self.generate_independent_animation_calls(labels, delay_value);
+        }
         let mut asm = Block::new();
         let anim_end = labels.local("anim_end");
 
@@ -1182,6 +1244,80 @@ impl SpriteManager {
         asm.into_instrs()
     }
 
+    // Preserve BC while keeping the shared-clock predicate in C across the existing
+    // AF-only animation functions. B holds the selected animation on a timed sprite.
+    fn generate_independent_animation_calls(
+        &self,
+        labels: &LabelAllocator,
+        default: u8,
+    ) -> Vec<Instr> {
+        let mut asm = Block::new();
+        let not_due = labels.local("anim_global_not_due");
+        asm.push(R16Stack::BC)
+            .ld_a_addr_def("wFrameCounter")
+            .inc(R8::A)
+            .ld_addr_def_a("wFrameCounter")
+            .ld(R8::C, 0)
+            .cp(default)
+            .jr_cond(Condition::C, &not_due)
+            .xor(R8::A)
+            .ld_addr_def_a("wFrameCounter")
+            .ld(R8::C, 1)
+            .label(&not_due);
+        for sprite in self
+            .sprites
+            .values()
+            .filter(|sprite| !sprite.animations.is_empty())
+        {
+            let end = labels.local("anim_sprite_end");
+            let timed = sprite.animations.iter().any(|anim| anim.delay.is_some());
+            let timer = format!("wAnim_{}_Timer", sprite.name);
+            if timed {
+                let previous = format!("wAnim_{}_Previous", sprite.name);
+                let same = labels.local("anim_selection_same");
+                asm.ld_a_addr_def(sprite.current_var())
+                    .ld(R8::B, R8::A)
+                    .ld_a_addr_def(&previous)
+                    .cp(R8::B)
+                    .jr_cond(Condition::Z, &same)
+                    .ld(R8::A, R8::B)
+                    .ld_addr_def_a(&previous)
+                    .xor(R8::A)
+                    .ld_addr_def_a(&timer)
+                    .label(&same)
+                    .ld(R8::A, R8::B);
+            } else {
+                asm.ld(R8::A, R8::C)
+                    .and(R8::A)
+                    .jp_cond(Condition::Z, &end)
+                    .ld_a_addr_def(sprite.current_var());
+            }
+            asm.cp(ANIM_DISABLED).jp_cond(Condition::Z, &end);
+            for animation in &sprite.animations {
+                let skip = labels.local("anim_selection_skip");
+                if timed {
+                    asm.ld(R8::A, R8::B);
+                }
+                asm.cp(animation.index).jp_cond(Condition::NZ, &skip);
+                if timed {
+                    asm.ld_a_addr_def(&timer)
+                        .inc(R8::A)
+                        .ld_addr_def_a(&timer)
+                        .cp(animation.delay.unwrap_or(default.max(1)))
+                        .jp_cond(Condition::C, &end)
+                        .xor(R8::A)
+                        .ld_addr_def_a(&timer);
+                }
+                asm.call(&animation_label(&sprite.name, &animation.name))
+                    .jp(&end)
+                    .label(&skip);
+            }
+            asm.label(&end);
+        }
+        asm.pop(R16Stack::BC);
+        asm.into_instrs()
+    }
+
     /// Get list of animation variable names (for auto-creating variables)
     /// Returns (name, initial_value) pairs
     /// Creates one variable per sprite: wAnim_[sprite_name]_Current, and
@@ -1197,6 +1333,10 @@ impl SpriteManager {
             }
             if sprite.animations.iter().any(|anim| anim.needs_direction()) {
                 vars.push((direction_var(&sprite.name), 0));
+            }
+            if sprite.animations.iter().any(|anim| anim.delay.is_some()) {
+                vars.push((format!("wAnim_{}_Timer", sprite.name), 0));
+                vars.push((format!("wAnim_{}_Previous", sprite.name), ANIM_DISABLED));
             }
         }
 
@@ -2046,5 +2186,136 @@ mod tests {
             assert_eq!(jr_range_errors(&body), Vec::<String>::new(), "{}", name);
         }
         assert_labels_ok(&gb.build().unwrap());
+    }
+    #[test]
+    fn independent_animation_periods_include_byte_boundaries_and_preserve_bc() {
+        for delay in [1u8, 2, 3, 8, 127, 128, 254, 255] {
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            let sprite = sm.add_for_test("Timed", 0, 0, 0, 2);
+            sm.add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
+            sm.set_initial_animation(sprite, 0);
+            sm.set_animation_delay(sprite, 0, delay);
+            let mut cpu = animation_cpu(&sm);
+            cpu.b = 0xab;
+            cpu.c = 0xcd;
+            let code = animation_program(&sm, 7);
+            for frame in 1..=u16::from(delay) * 2 + 1 {
+                cpu.run(&code);
+                assert_eq!(
+                    shown_frame(&sm, &cpu, sprite),
+                    ((frame / u16::from(delay)) % 2) as u8,
+                    "delay {delay} frame {frame}"
+                );
+                assert_eq!((cpu.b, cpu.c), (0xab, 0xcd));
+                cpu.trace.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn selection_changes_reset_the_clock_but_repeated_enable_does_not() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let timed = sm.add_for_test("Timed", 0, 0, 0, 2);
+        let shared = sm.add_for_test("Shared", 0, 0, 2, 2);
+        sm.add_animation(timed, "Fast", 0, 1, AnimationType::Loop);
+        sm.add_animation(timed, "Default", 0, 1, AnimationType::Loop);
+        sm.add_animation(shared, "Shared", 0, 1, AnimationType::Loop);
+        sm.set_initial_animation(timed, 0);
+        sm.set_initial_animation(shared, 0);
+        sm.set_animation_delay(timed, 0, 2);
+        let code = animation_program(&sm, 4);
+        let mut cpu = animation_cpu(&sm);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, timed), 0);
+        cpu.run(&sm.enable_animation(timed, 0));
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, timed), 1);
+        cpu.run(&sm.enable_animation(timed, 1));
+        for frame in 1..=4 {
+            cpu.run(&code);
+            assert_eq!(shown_frame(&sm, &cpu, timed), u8::from(frame < 4));
+            if frame == 2 {
+                assert_eq!(shown_frame(&sm, &cpu, shared), 1);
+            }
+        }
+        cpu.run(&sm.disable_animation(timed));
+        for _ in 0..9 {
+            cpu.run(&code);
+            assert_eq!(shown_frame(&sm, &cpu, timed), 0);
+        }
+        cpu.run(&sm.enable_animation(timed, 0));
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, timed), 0);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, timed), 1);
+    }
+
+    #[test]
+    fn removing_overrides_restores_legacy_output_and_rejects_bad_requests() {
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Actor", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
+        let before = gb.build().unwrap();
+        for message in [
+            panic_message(|| gb.sprites.set_animation_delay(sprite, 0, 0)),
+            panic_message(|| gb.sprites.set_animation_delay(sprite, 1, 2)),
+            panic_message(|| gb.sprites.set_animation_delay(SpriteId(999), 0, 2)),
+            panic_message(|| gb.sprites.clear_animation_delay(sprite, 1)),
+        ] {
+            assert!(!message.is_empty());
+        }
+        assert_eq!(before, gb.build().unwrap());
+        gb.sprites.set_animation_delay(sprite, 0, 2);
+        let timed = gb.build().unwrap();
+        assert_eq!(timed, gb.build().unwrap());
+        assert!(timed.contains("wAnim_Actor_Timer"));
+        gb.sprites.clear_animation_delay(sprite, 0);
+        assert_eq!(before, gb.build().unwrap());
+    }
+    #[test]
+    fn independent_clocks_hold_ping_pong_and_once_frames() {
+        for (kind, updates) in [
+            (AnimationType::PingPong, vec![1, 2, 1, 0, 1, 2]),
+            (AnimationType::Once, vec![1, 2, 2, 2, 2, 2]),
+        ] {
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            let sprite = sm.add_for_test("Actor", 0, 0, 0, 3);
+            sm.add_animation(sprite, "Play", 0, 2, kind);
+            sm.set_initial_animation(sprite, 0);
+            sm.set_animation_delay(sprite, 0, 3);
+            let code = animation_program(&sm, 1);
+            let mut cpu = animation_cpu(&sm);
+            let mut previous = 0;
+            for update in updates {
+                for hold in 0..3 {
+                    cpu.run(&code);
+                    assert_eq!(
+                        shown_frame(&sm, &cpu, sprite),
+                        if hold == 2 { update } else { previous }
+                    );
+                }
+                previous = update;
+            }
+        }
+    }
+
+    #[test]
+    fn timed_dispatch_with_many_animation_choices_links() {
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Many", tiles(2), 0, 0, 0);
+        for index in 0..255 {
+            gb.sprites
+                .add_animation(sprite, &format!("Pose{index}"), 0, 1, AnimationType::Loop);
+        }
+        gb.sprites.set_initial_animation(sprite, 254);
+        gb.sprites.set_animation_delay(sprite, 254, 2);
+        crate::asm::label_check::assert_links(&gb.build().unwrap());
+        let code = animation_program(&gb.sprites, 1);
+        let mut cpu = animation_cpu(&gb.sprites);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&gb.sprites, &cpu, sprite), 0);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&gb.sprites, &cpu, sprite), 1);
     }
 }

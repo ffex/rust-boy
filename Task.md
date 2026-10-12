@@ -274,7 +274,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
-- [ ] Per-animation speed (today only a global delay)
+- [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
+      overrides, independent selection clocks, default/global fallback, composite setters)
 - [ ] End-of-animation events / callbacks
 
 ### Audio *(nothing exists today)*

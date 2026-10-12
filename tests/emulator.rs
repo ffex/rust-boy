@@ -1932,3 +1932,63 @@ fn arbitrary_metasprite_animation_advances_every_part_in_both_sizes() {
         assert_eq!(seen.len(), 2);
     }
 }
+
+#[test]
+fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(
+            RustBoyConfig::default()
+                .sprite_size(size)
+                .animation_delay(3),
+        );
+        let stride = size.tiles_per_sprite();
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(stride) * 2]);
+        let shared = game.add_sprite("Shared", tiles.clone(), 8, 8, 0);
+        let fast = game.add_sprite("Fast", tiles.clone(), 24, 8, 0);
+        for sprite in [shared, fast] {
+            game.sprites
+                .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
+            game.sprites.set_initial_animation(sprite, 0);
+        }
+        game.sprites.set_animation_delay(fast, 0, 1);
+        let parts: Vec<_> = (0..3)
+            .map(|i| MetaspritePart::new(tiles.clone(), i * 8, 0, 0u8))
+            .collect();
+        let meta = game.add_metasprite("Group", 48, 48, &parts);
+        game.sprites
+            .add_composite_animation(meta, "Walk", 0, 1, AnimationType::Loop);
+        game.sprites.set_composite_initial_animation(meta, 0);
+        game.sprites.set_composite_animation_delay(meta, 0, 2);
+        // Repeated enable is normal for held-key bindings; it must not stall a clock.
+        game.add_to_main_loop(game.sprites.enable_composite_animation(meta, 0));
+        let rom = engine_rom(&game);
+        let mut gb = rom.boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        // First DMA copies the initial shadow state; following DMA copies previous logic.
+        for visible in 0..16u16 {
+            gb.run_frames(1);
+            assert_eq!(gb.oam_entry(0)[2], stride * ((visible / 3) % 2) as u8);
+            assert_eq!(
+                gb.oam_entry(1)[2],
+                stride * 2 + stride * (visible % 2) as u8
+            );
+            for part in 0..3 {
+                assert_eq!(
+                    gb.oam_entry(part + 2)[2],
+                    stride * (4 + part as u8 * 2) + stride * ((visible / 2) % 2) as u8
+                );
+            }
+        }
+        assert_eq!(gb.blocked_accesses().1, 0);
+        assert!(
+            gb.oam_dmas()
+                .iter()
+                .filter(|dma| dma.lcd_on)
+                .all(|dma| dma.first.1 == Mode::VBlank
+                    && dma.last.is_some_and(|(_, mode)| mode == Mode::VBlank))
+        );
+    }
+}

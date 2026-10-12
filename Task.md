@@ -346,6 +346,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
       functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
       "`Player` already defined" in rgbasm)
+- [ ] Follow-ups of the shadow OAM and the VRAM queue (from the reviews of #39 and #40):
+      document that writes queued with the LCD off wait until it is on; `ldh` for `rLY` in `FlushVramQueue`
+      (1 M-cycle an entry); an `hw` constant for `cp 153` in the late-flush test; whether `build()` should also
+      reject `raw()` producers and calls to `FlushVramQueue` outside the VBlank handler (documented limits today);
+      whether `hOAMDMA` should move away from the stack (31 entries above it) or the DMA get an `rLY` guard
 
 ## Phase 4 — Documentation
 

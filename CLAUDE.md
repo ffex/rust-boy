@@ -5,7 +5,7 @@ rust-boy is a Rust DSL that generates Game Boy assembly in RGBDS syntax (`cargo 
 
 - [`Task.md`](Task.md) — phased checklist.
 - [`CONTEXT.md`](CONTEXT.md) — architecture, levels assessment, bug catalogue B1–B30 and branch analysis.
-- [`AGENTS.md`](AGENTS.md) — Codex's implementation and git/PR workflow.
+- [`AGENTS.md`](AGENTS.md) — the git/PR workflow: Codex's for its first try, and Claude's for the PRs it writes.
 
 Read these before starting a task (reviewing, fixing or writing a PR), and keep them up to date in the same branch
 as the change.
@@ -104,7 +104,7 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 
 ## PR workflow
 
-`refactor` is the integration branch: Codex's PRs target it (stacked PRs too, in their declared
+`refactor` is the integration branch: PRs target it (stacked PRs too, in their declared
 order, with "Depends on #N"). The final release PR targets `main` from `refactor`. Never commit
 directly to `main` or `refactor`; never force-push, rewrite published history or delete branches
 without asking first. Do not mention or link AI sessions in commit messages or PR descriptions.
@@ -115,13 +115,13 @@ A PR Claude writes itself (a follow-up, a docs change) follows the git workflow 
 [`AGENTS.md`](AGENTS.md) (branch names, small commits, ticking `Task.md`, `CHANGELOG.md`) but skips its
 handoff: it starts at step 1 below with its *Independent review* section "pending".
 
-For each Codex PR (or chain of stacked PRs):
+For each PR (or chain of stacked PRs), Codex's or Claude's own:
 
 1. **Independent review.** Start a reviewer agent with **no context** from the work, in its own
    worktree, read-only towards GitHub. Give it only the PR numbers, their branches and the merge
    order, not your own conclusions. It must:
    1. Record the base and PR head commit ids, simulate merging the PRs into `refactor` in order
-      (never push) and report conflicts.
+      (never push), report conflicts, and record the commit id of the simulated merge.
    2. Run the CI checks from `.github/workflows/ci.yml` on the merged result: `cargo fmt --check`,
       `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
       `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` after
@@ -147,6 +147,14 @@ For each Codex PR (or chain of stacked PRs):
    fixed it. Then merge into `refactor` with a merge commit pinned to the reviewed head SHA (the
    merge tool's expected head SHA, or `gh pr merge N --merge --match-head-commit <sha>`), and check
    that CI on `refactor` is green; if it is red, fix it at once with a new PR through the same steps.
+   **Stacked PRs.** A chain reviewed together is merged in its order, one pinned merge per PR,
+   without merging `refactor` into the later branches: this replaces the rule above for the moves of
+   `refactor` that the chain's own earlier merges make. Before each merge, check that `refactor` has
+   moved only by those merges since the review; otherwise merge `refactor` in and go back to step 3.
+   After the last merge, check that the tree of `refactor` is the reviewed one
+   (`git diff <simulated merge commit> refactor` is empty).
+   **Asking Codex.** Claude does not ask Codex for pushes: it fixes findings itself. When Codex
+   should redo a task, Claude says so to the maintainer.
 5. **Release PR.** `refactor` → `main` is never merged by Claude: when it is ready, tell the
    maintainer and wait.
 

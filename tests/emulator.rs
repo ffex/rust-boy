@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
+use rust_boy::stdlib::banking;
 use rust_boy::stdlib::graphics::vram_queue;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
@@ -919,6 +920,39 @@ fn store_ly(var: &str) -> Block {
 /// Build `gb` into a ROM
 fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
+}
+
+#[test]
+fn mbc_bank_selectors_assemble_and_return_to_the_caller() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    for name in ["wBankHigh", "wBankLow"] {
+        game.vars.create_u8(name, 0);
+    }
+    let mbc1 = game.call_routine(&banking::set_mbc1_rom_bank());
+    let mbc5 = game.call_routine(&banking::set_mbc5_rom_bank());
+    let mut init = Block::new();
+    init.ld_hl(0x0041)
+        .emit_all(mbc1)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wBankLow")
+        .ld_hl(0x01FF)
+        .emit_all(mbc5)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wBankLow");
+    game.init(init);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wBankHigh"), 1);
+    assert_eq!(gb.read_symbol("wBankLow"), 0xFF);
 }
 
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a

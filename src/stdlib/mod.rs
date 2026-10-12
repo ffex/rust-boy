@@ -1,3 +1,4 @@
+pub mod banking;
 pub mod flow;
 pub mod graphics;
 mod hw_symbols;

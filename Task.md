@@ -340,6 +340,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 
 ### Platform
 - [ ] MBC1/MBC5 ROM banking (> 32 KB)
+  - [x] Low-level `stdlib::banking` bank selectors for MBC1 (7-bit, skipping forbidden banks)
+        and MBC5 (9-bit); `Section::romx(...).bank(n)` places data explicitly.
+  - [ ] Engine-managed mapper headers and banked asset access.
 - [ ] SRAM save games
 - [ ] *(optional)* Game Boy Color: palettes, VRAM bank 1, double speed
 

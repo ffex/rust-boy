@@ -232,6 +232,16 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Arbitrary metasprites** (since `refactor-p3-metasprites`): `MetaspritePart` and `RustBoy::add_metasprite(name, x, y,
+  parts)`: any nonempty arrangement within the free OAM entries and VRAM, with signed offsets, per-part tiles and
+  attributes, in 8x8 or 8x16 hardware size. Parts take OAM entries in list order; on DMG overlapping objects are drawn
+  by smaller X first (OAM order breaks ties and picks the 10 objects of a line). Generated names are `{name}_partN`;
+  `add_sprite_16x16` reuses the same constructor with its `_left`/`_right` names and unchanged output. Positions
+  (X 0..=247, Y 0..=239), capacity and 8x16 tile alignment are checked before anything is registered. Composite
+  moves stop the leading member at the limit and keep every part's offset; composite animation works in both sizes.
+  Emulator tests: an irregular six-part layout moved towards the four limits in both sizes (tiles and flags kept),
+  animation of every part, typed flags on every part of a 16x16 sprite and of a metasprite.
+
 - **Typed sprite attributes** (since `refactor-p3-sprite-flags`): `SpriteFlags`, `ObjectPalette` and `SpritePriority`
   in `stdlib::graphics::sprites` (prelude exports). `Sprite::new`, `RustBoy::add_sprite` and `add_sprite_16x16` take
   typed flags or raw `u8` values; the raw conversion keeps every bit, the CGB ones too, and the builders set or clear
@@ -1390,7 +1400,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no metasprites beyond 16×16, no text/numbers. Background scrolling exists since
+- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, no text/numbers. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).

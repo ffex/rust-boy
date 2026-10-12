@@ -61,6 +61,37 @@ pub(crate) const SHADOW: OamTarget = OamTarget::Shadow;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpriteId(pub(crate) usize);
 
+/// A hardware-sprite part of an arbitrary metasprite, relative to its screen anchor.
+/// Parts take OAM entries in list order; offsets may be negative. On DMG, where parts overlap,
+/// the smaller X draws on top and OAM order only breaks ties (and picks the 10 objects of a line).
+#[derive(Debug, Clone)]
+pub struct MetaspritePart {
+    /// Tiles for this part; two per frame in 8x16 mode.
+    pub tiles: super::tiles::TileSource,
+    /// Horizontal pixel offset from the anchor.
+    pub x: i16,
+    /// Vertical pixel offset from the anchor.
+    pub y: i16,
+    /// Hardware OAM attributes for this part.
+    pub flags: u8,
+}
+impl MetaspritePart {
+    /// Create a part with relative offsets and OAM attributes (raw or [`SpriteFlags`](crate::stdlib::graphics::sprites::SpriteFlags)).
+    pub fn new(
+        tiles: super::tiles::TileSource,
+        x: i16,
+        y: i16,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Self {
+        Self {
+            tiles,
+            x,
+            y,
+            flags: flags.into().bits(),
+        }
+    }
+}
+
 /// Unique identifier for a composite sprite (group of sprites that move together)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CompositeSpriteId(pub(crate) usize);
@@ -674,6 +705,33 @@ impl SpriteManager {
 
     // ==================== Composite Sprite Methods ====================
 
+    #[track_caller]
+    pub(crate) fn check_composite_parts(&self, name: &str, names: &[String]) {
+        check_name("composite sprite", name);
+        assert!(
+            !names.is_empty(),
+            "metasprite must contain at least one part"
+        );
+        assert!(
+            !self
+                .composite_sprites
+                .values()
+                .any(|sprite| sprite.name == name),
+            "composite sprite name {name:?} is already used"
+        );
+        assert!(
+            self.sprites.len() + names.len() <= usize::from(hw::OAM_COUNT.value),
+            "metasprite {name:?} does not fit in OAM"
+        );
+        for part in names {
+            check_label("sprite", part);
+            assert!(
+                !self.sprites.values().any(|sprite| sprite.name == *part),
+                "sprite name {part:?} is already used"
+            );
+        }
+    }
+
     /// Create a composite sprite from multiple sprite IDs
     /// This groups sprites together so they can be moved/animated as one unit
     pub(crate) fn create_composite(
@@ -704,7 +762,7 @@ impl SpriteManager {
     /// Add an animation to all sprites in a composite
     /// Each sprite gets an animation called `name`, played by `Anim_{sprite name}_{name}`
     /// (e.g. `Anim_player_left_Walk` and `Anim_player_right_Walk`)
-    /// Composites are made of 8x16 sprites, so a frame is two tiles
+    /// Frames use the configured hardware sprite size (one tile in 8x8, two in 8x16).
     /// Returns the animation index (same for all sprites in the composite)
     ///
     /// # Panics

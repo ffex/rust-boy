@@ -523,3 +523,37 @@ init on cold startup and soft reset. Runtime `power_off`, `power_on` and `set_mi
 snippets preserve IME and change AF only. Wave RAM is retained. Volume zero is quiet,
 not mute; use zero routing or power off to mute. `hw::NR10` through `NR52`,
 `AUD3WAVERAM`, and `AUD*` flags name the hardware.inc symbols.
+
+### One-shot sound effects
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+let beep = Sfx::Pulse2(PulseEffect::new(
+    1750, 32, Duty::Half, Envelope::new(12, EnvelopeDirection::Decrease, 2),
+));
+gb.init(gb.play_sfx(&beep));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`Sfx::Pulse1` adds a `Sweep`; `Pulse2` has none. `Sfx::Wave` takes a `WaveEffect`
+with a `WavePattern` (32 samples 0..=15, or 16 packed bytes) and `WaveLevel`.
+`Sfx::Noise` takes a `NoiseEffect` with a seven- or fifteen-bit LFSR, shift 0..=13
+and divider 0..=7 (zero means 0.5). Pulse/wave period is the hardware 11-bit value,
+not Hz: pulse frequency is `131072 / (2048 - period)`, wave frequency is half that.
+Constructors panic for out-of-range fields. Sweep addition overflow can silence CH1;
+zero-volume decreasing envelopes disable the DAC. Wave hardware first plays sample 1.
+
+Every effect replaces its channel and enables a hardware length timer: pulse/noise
+length 1..=64, wave length 1..=256 ticks at 256 Hz, with tick phase affecting duration.
+Envelopes use 64 Hz ticks (pace zero disables them); sweep uses 128 Hz ticks.
+`play_sfx` changes AF only and returns carry clear when programmed, carry set with no
+writes if the APU is off. It preserves power, mixer, other channels and IME.
+`stdlib::audio::stop_channel(Channel::Pulse2)` disables just that channel's DAC.
+The standalone `stdlib::audio::play_sfx(labels, &effect)` uses the supplied label allocator.
+Serialize audio writes with music/interrupt code; reserve a channel before replacing it.
+CH3 stops before uploading wave RAM. DAC toggles may pop, and this API does not
+reset pulse phase or provide a software effect sequence. See
+[Pan Docs registers](https://gbdev.io/pandocs/Audio_Registers.html) and
+[APU details](https://gbdev.io/pandocs/Audio_details.html) for hardware behavior.

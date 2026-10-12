@@ -275,10 +275,12 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Per-animation speed (today only a global delay)
 - [ ] End-of-animation events / callbacks
 
-### Audio *(nothing exists today)*
+### Audio
 - [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in
       inherited/off/on startup policy, validated mixer, shared stateless power snippets)
-- [ ] Sound-effect API for channels 1–4 (`play_sfx`)
+- [x] Sound-effect API for channels 1–4 (`play_sfx`; `refactor-p3-sfx`): typed pulse/sweep,
+      wave patterns/levels and noise effects, hardware one-shot length/envelope, channel stop,
+      powered-off rejection; mixer and other channels preserved
 - [ ] Music: integrate a driver (e.g. hUGEDriver)
 
 ### Input

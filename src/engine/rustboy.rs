@@ -145,6 +145,11 @@ impl RustBoy {
         self
     }
 
+    /// Replace a channel's sound; AF only, carry set if APU is off. Serialize audio writers.
+    pub fn play_sfx(&self, effect: &crate::stdlib::audio::Sfx) -> Vec<Instr> {
+        crate::stdlib::audio::play_sfx(self.labels(), effect)
+    }
+
     /// Set the animation delay value in frames (higher = slower animations)
     /// Default is 8 (animation updates every 8 frames, ~7.5 fps at 60fps)
     /// ([`RustBoyConfig::animation_delay`])

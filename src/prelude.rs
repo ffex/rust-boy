@@ -48,4 +48,7 @@ pub use crate::stdlib::inputs::PadButton;
 pub use crate::stdlib::interrupts::{Interrupt, Stat, Timer, TimerClock};
 pub use crate::stdlib::routine::{Regs, Routine};
 
-pub use crate::stdlib::audio::{AudioConfig, Mixer};
+pub use crate::stdlib::audio::{
+    AudioConfig, Channel, Duty, Envelope, EnvelopeDirection, Mixer, NoiseEffect, NoiseWidth,
+    PulseEffect, Sfx, Sweep, SweepDirection, WaveEffect, WaveLevel, WavePattern,
+};

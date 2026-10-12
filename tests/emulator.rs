@@ -1931,3 +1931,77 @@ fn engine_audio_power_and_mixer_are_configured_before_user_init() {
     assert_eq!(gb.read(hw::NR50.value), 0x12);
     assert_eq!(gb.read(hw::NR51.value), 0);
 }
+
+#[test]
+fn sound_effects_program_all_channels_without_changing_power_or_mixer() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let pattern = WavePattern::from_samples(std::array::from_fn(|i| (i % 16) as u8));
+    let envelope = Envelope::new(10, EnvelopeDirection::Decrease, 2);
+    let pulse = PulseEffect::new(0x345, 32, Duty::Quarter, envelope);
+    let effects = [
+        Sfx::Pulse1(pulse, Sweep::new(3, SweepDirection::Subtract, 2)),
+        Sfx::Pulse2(pulse),
+        Sfx::Wave(WaveEffect::new(0x456, 256, WaveLevel::Full, pattern)),
+        Sfx::Noise(NoiseEffect::new(64, envelope, 5, NoiseWidth::Seven, 3)),
+    ];
+    let mut game = RustBoy::with_config(
+        RustBoyConfig::default().audio(AudioConfig::On(Mixer::new(2, 3, 0xff))),
+    );
+    let mut init = Block::new();
+    // Replacements use fresh local labels and upload wave RAM twice safely.
+    for effect in effects.iter().cycle().take(8) {
+        init.emit_all(game.play_sfx(effect));
+    }
+    game.init(init.into_instrs());
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    // The emulator stores IO bytes, not APU playback. This verifies linked snippets
+    // executing on SM83, addressing and channel isolation; unit traces check ordering.
+    for (register, value) in [
+        (hw::NR52, 0x80),
+        (hw::NR50, 0x23),
+        (hw::NR51, 0xff),
+        (hw::NR10, 0x3a),
+        (hw::NR11, 0x60),
+        (hw::NR12, 0xa2),
+        (hw::NR13, 0x45),
+        (hw::NR14, 0xc3),
+        (hw::NR21, 0x60),
+        (hw::NR22, 0xa2),
+        (hw::NR23, 0x45),
+        (hw::NR24, 0xc3),
+        (hw::NR30, 0x80),
+        (hw::NR31, 0),
+        (hw::NR32, 0x20),
+        (hw::NR33, 0x56),
+        (hw::NR34, 0xc4),
+        (hw::NR41, 0),
+        (hw::NR42, 0xa2),
+        (hw::NR43, 0x5b),
+        (hw::NR44, 0xc0),
+    ] {
+        assert_eq!(gb.read(register.value), value, "{}", register.name);
+    }
+    for (i, &value) in pattern.bytes().iter().enumerate() {
+        assert_eq!(gb.read(hw::AUD3WAVERAM.value + i as u16), value);
+    }
+    // A runtime attempt while off returns carry without touching even writable wave RAM.
+    let mut game = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::Off));
+    let mut init = Block::new();
+    for i in 0..16 {
+        init.ld_a(0xab)
+            .ldh(Mem::addr(Expr::from(hw::AUD3WAVERAM) + i), R8::A);
+    }
+    init.emit_all(game.play_sfx(&effects[2]));
+    // Stop before any flag-changing instruction, then inspect carry.
+    init.label("SfxRejected").jr("SfxRejected");
+    game.init(init.into_instrs());
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("SfxRejected"), 3));
+    assert_ne!(gb.registers().f & 0x10, 0);
+    for i in 0..16 {
+        assert_eq!(gb.read(hw::AUD3WAVERAM.value + i), 0xab);
+    }
+}

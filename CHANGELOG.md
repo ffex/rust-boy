@@ -6,6 +6,14 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
+### Sound effects (Phase 3)
+
+- `RustBoy::play_sfx` / `stdlib::audio::play_sfx` trigger typed one-shot effects on
+  channels 1–4. Length, period, envelope, sweep and noise settings are validated;
+  wave samples are packed and uploaded with CH3 stopped. The APU and mixer stay unchanged.
+- Carry reports an off APU; `stop_channel` stops the selected DAC. Snippets use AF only
+  and preserve IME. Configure `AudioConfig::On` and serialize audio writers before use.
+
 ### Audio initialization (Phase 3)
 
 - `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or powered-on

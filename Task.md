@@ -255,7 +255,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `stdlib::graphics::scroll` snippets reused by `RustBoy`, wrapping at 256; emit in init or VBlank)
 - [ ] Follow-ups of the background camera (from the review of #43): collisions while scrolled (a screen-to-map
       helper that adds SCX/SCY before `GetTileByPixel`, or a scroll-aware variant); whether sprites should get world
-      coordinates or a "follow sprite" helper (today `follow_background_point` needs world positions kept by the program)
+      coordinates or a "follow sprite" helper (today `follow_background_point` needs world positions kept by the program);
+      whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today)
 - [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
       (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))

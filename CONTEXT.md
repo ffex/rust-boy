@@ -85,7 +85,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 | Layer | Path | LOC | Role |
 |---|---|---|---|
 | **L1 `asm`** (was `gb_asm`) | `src/asm/` (`instr.rs`, `expr.rs`, `builders.rs`, `program.rs`, `block.rs`, `codegen.rs`, `labels.rs`, `relax.rs`, `section.rs`) | ~3200 | The whole SM83 instruction set as `Instr` (one shape per family, `Instr::check`; since Phase 2 `refactor-p2-isa`; `Instr::size` since `refactor-p2-labels`) with typed operands (`R8`, `R16`, `R16Stack`, `Mem`, `Dst`, `Operand`, `AluOperand`, `IncDec`) and `Expr` values (since `refactor-p2-typed-operands`), typed `Section`s and the checks of what goes in them (`section.rs`, since `refactor-p2-sections`), fluent `Asm` builder for whole programs (one ordered list of instructions since `refactor-p2-sections-layout`; it had `Chunk` buckets) and `Block` for pieces of code, with the same builder methods (`instruction_builders!`), `Emittable` (since `refactor-p2-typed-operands-2b`), `Display` → RGBDS text, `LabelAllocator` (since [B7](#b7); owned by the program's `Asm` since `refactor-p2-labels`), `jr` → `jp` relaxation of the whole program (`relax.rs`, since `refactor-p2-labels`) |
-| **L2 `stdlib`** (was `gb_std`) | `src/stdlib/` (`flow/`, `graphics/` (with `oam.rs`, the shadow OAM and OAM DMA, since `refactor-codex-p3-sprites`), `inputs.rs`, `interrupts.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3900 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, and since `refactor-p3-interrupts` WaitFrame and CheckSoftReset, the interrupt pieces (`stdlib::interrupts`: vectors, handlers, `rIE`/`rIF`, `rSTAT`, the timer), each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), `Sprite` and the sprite snippets the engine uses too (`draw_sprites`, moves, `get_pivot`; its own `SpriteManager` is gone since `refactor-p2-routines-sprites`), `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
+| **L2 `stdlib`** (was `gb_std`) | `src/stdlib/` (`flow/`, `graphics/` (with `oam.rs`, the shadow OAM and OAM DMA, since `refactor-codex-p3-sprites`, and `palette.rs`, palettes and fades, since `refactor-p3-palettes`), `inputs.rs`, `interrupts.rs`, `variables.rs`, `utility.rs`, `hw_symbols.rs`, `routine.rs`) | ~3900 | Stateless routines as `Routine` values (since `refactor-p2-routines`; they returned `Vec<Instr>`): Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys, GetTileByPixel, Delay, `is_specific_tile`, and since `refactor-p3-interrupts` WaitFrame and CheckSoftReset, the interrupt pieces (`stdlib::interrupts`: vectors, handlers, `rIE`/`rIF`, `rSTAT`, the timer), each with its dependencies and calling convention (`Regs`), control flow (`If`, `IfConst`, `IfA`, `IfCall`, `Call`; `Emittable` re-exported from `gb_asm`), `Sprite` and the sprite snippets the engine uses too (`draw_sprites`, moves, `get_pivot`; its own `SpriteManager` is gone since `refactor-p2-routines-sprites`), `TileRef`, and (since `refactor-p2-hw`) the conversions of an `hw::Symbol` into an `Expr` / operand (`hw_symbols.rs`) |
 | **L3 `engine`** (was `rust_boy`) | `src/engine/` (`rustboy.rs`, `layout.rs`, `sprites.rs`, `tiles.rs`, `variables.rs`, `functions.rs`, `animations.rs`, `inputs.rs`, `memory.rs`, `error.rs`) | ~2900 | `RustBoy` engine: tile/VRAM, variable/WRAM, sprite/OAM managers, builtin-function registry, input bindings, animations, the program layout (`Chunk`, `Layout`, since `refactor-p2-sections-layout`), `build()` and its `Error` (since `refactor-p2-engine-api-errors`) |
 | **`prelude`** | `src/prelude.rs` | ~40 | Re-exports of the common types of every layer and `hw` (`use rust_boy::prelude::*`), since `refactor-p2-engine-api-prelude` |
 | **`hw`** (data) | `src/hw.rs` | ~390 | Hardware facts as pure data (since [B22](#b22); complete since Phase 2 `refactor-p2-hw`): `hw::Symbol`s, each a `hardware.inc` name and its value, for the I/O registers, their flags, the memory map, the OAM layout and the screen sizes (`hw::SYMBOLS` lists them), the facts with no `hardware.inc` name as plain numbers, and `oam_offset`; depends on nothing, used by `gb_std` (which turns a `Symbol` into an `Expr`, `src/stdlib/hw_symbols.rs`), `rust_boy` and the examples, not by `gb_asm` |
@@ -231,6 +231,15 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   The same model describes control flow (since `refactor-p2-routines-if`): `If`, `IfConst`, `IfA` and `IfCall` have a
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
+
+- **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,
+  `Shade` and `PaletteRegister` and stateless snippets, reused by `RustBoy::set_palette` and `fade_palette`. The
+  start-up `Palettes` keep taking hardware bytes. `PaletteFade` has four shade-saturating stages, fade-in from a
+  solid shade or fade-out to one; A selects the stage at runtime and values >= 3 stay complete. The game owns
+  progress and timing: no hidden variables, waits or loops; emit in init or VBlank. Writes change A, fades A and
+  flags (local labels from the allocator). BGP is shared by the background and the window; object colour 0 stays
+  transparent. Unit tests run all 256 palette bytes against the four solid shades; emulator tests check concurrent
+  fades of the three registers, clamping and init overrides.
 
 - **Window layer** (since `refactor-p3-window`): `stdlib::graphics::window` has stateless snippets (position with the
   WX + 7 conversion and its bounds in `screen_to_raw`, raw WX/WY, show/hide, window map), reused by
@@ -1373,8 +1382,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** no metasprites beyond 16×16, no text/numbers. Background scrolling exists since
-  `refactor-p3-scrolling` and the window layer since `refactor-p3-window` (see §2); `GetTileByPixel` still takes map
-  pixels, so collisions need SCX/SCY added while scrolled.
+  `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
+  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
@@ -1408,14 +1417,3 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
-
-### Phase 3 palettes and fades
-
-`refactor-p3-palettes` adds typed DMG `Palette`, `Shade` and `PaletteRegister` in stateless
-`stdlib::graphics::palette`, reused by `RustBoy::set_palette` and `fade_palette`. Existing startup
-`Palettes` bytes remain compatible. `PaletteFade` supplies four shade-saturating stages, fade-in from
-a solid shade or fade-out to one; runtime A selects the stage, values >=3 stay complete. The game
-owns progress/timing; these snippets have no hidden variables, waits or blocking loops and work in
-VBlank. Writes change A; fades change A/flags only. BGP is shared by the background/window and
-object colour index 0 stays transparent. Unit tests exhaust all 256 palette bytes against all four
-solid shades; emulator tests check concurrent register fades, clamping and init overrides.

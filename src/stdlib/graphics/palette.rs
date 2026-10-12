@@ -46,6 +46,10 @@ impl Palette {
     }
 
     /// Shade for a colour index, which must be 0..=3.
+    ///
+    /// # Panics
+    /// If `index` is 4 or more.
+    #[track_caller]
     pub fn shade(self, index: u8) -> Shade {
         assert!(index < 4, "palette colour index must be 0..=3");
         match (self.0 >> (index * 2)) & 3 {

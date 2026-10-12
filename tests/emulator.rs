@@ -921,6 +921,27 @@ fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
 }
 
+#[test]
+fn user_functions_receive_register_arguments() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wArgument", 0);
+    let mut body = Block::new();
+    body.ld_addr_def_a("wArgument");
+    game.define_function_from("StoreArgument", body.into_instrs());
+
+    let mut args = Block::new();
+    args.ld_a(0x5A);
+    game.call_args("StoreArgument", args.into_instrs());
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wArgument"), 0x5A);
+}
+
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a
 /// `halt`
 fn halted_share(gb: &mut GameBoy, frames: u64, samples: u64) -> f64 {

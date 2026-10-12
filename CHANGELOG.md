@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Register-based function arguments**: pass setup instructions to user functions with
+  `RustBoy::call_args` or `Call::with_args`; the function receives values in its declared register convention.
+
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.

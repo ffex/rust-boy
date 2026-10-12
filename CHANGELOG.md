@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Unsigned arithmetic routines** (`stdlib::math`): add/subtract/compare 16-bit values,
+  multiply two bytes, and divide a 16-bit value by a byte with explicit register and flag contracts.
+
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.

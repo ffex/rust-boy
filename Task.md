@@ -331,7 +331,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
-- [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
+- [x] 16-bit math helpers (add/sub/compare, multiply/divide) (branch `refactor-p3-math`): stateless
+      `stdlib::math` routines for unsigned 16-bit add, subtract and compare, 8×8 multiply and
+      16÷8 divide; register contracts and carry/borrow/zero-divisor behavior are documented and tested.
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
       `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads

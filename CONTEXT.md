@@ -584,12 +584,12 @@ The problems are where each layer reaches across the line:
    even if unused, none) and `animation_delay` (8). The defaults are the settings `RustBoy::new` had, so the default
    output is byte-identical (`test_config_defaults_reproduce_the_output`: the defaults, the same program from `new()`,
    the default config and every default written out, and the exact palette and LCDC lines). `RustBoyConfig` and `Lcdc`
-   are `#[non_exhaustive]` (a setting can be added later, e.g. the window in Phase 3, added since `refactor-p3-window`): build one from `default()` with
-   the builder methods, one per field. The setters stay and change the same settings (`set_sprite_size`,
+   are `#[non_exhaustive]` (a setting can be added later, as the window was in `refactor-p3-window`): build one from
+   `default()` with the builder methods, one per field. The setters stay and change the same settings (`set_sprite_size`,
    `set_background_tilemap`, `set_animation_delay`, `use_function`, and `set_palettes`, new); the sprite size is also the
    sprite manager's, which needs it when a sprite is added, so both are set together. The background tile data
-   (`LCDCF_BG8800`, the engine's VRAM layout) and the window (off; Phase 3) are not settings (the window is one since
-`refactor-p3-window`: `RustBoyConfig::window`). Tests:
+   (`LCDCF_BG8800`, the engine's VRAM layout) is not a setting; the window is one since `refactor-p3-window`
+   (`RustBoyConfig::window`, off by default). Tests:
    `test_config_and_setters_give_the_same_program`, `test_a_forced_builtin_comes_from_the_config`,
    `test_palettes_from_the_config` and `test_lcdc_flags_from_the_config` (the start-up code on `gb_asm::test_cpu`: each
    palette register and the `rLCDC` value). `fosdem` uses `with_config` (the same asm). Not breaking, except for one row:

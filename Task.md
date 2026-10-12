@@ -2,10 +2,14 @@
 
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
-[`CLAUDE.md`](CLAUDE.md).
+[`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review,
+fixes and merges.
 
 ## How we work
 
+- Codex makes the first try of a task and opens its PR into `refactor`. Claude then has it reviewed by a
+  context-free agent, fixes the findings, has it reviewed again and merges it. Only the final
+  `refactor` → `main` PR waits for the maintainer.
 - `refactor` is the integration branch (created from `main` at `4601a5c`).
 - Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
   named `refactor-<phase>-<topic>` (e.g. `refactor-p1-if-semantics`), and merged through a **PR into
@@ -22,6 +26,8 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 
 - [x] Create `Task.md` and `CONTEXT.md` (branch `refactor-p0-plan-docs`)
 - [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
+- [x] Introduce Codex (`AGENTS.md`): Codex makes the first try of a task, and Claude reviews, fixes and
+      merges into `refactor` (`CLAUDE.md`) (branches `refactor-codex-entry`, then `refactor-codex-workflow`)
 - [x] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1) (branch `refactor-p0-fix-build`)
 - [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)
 - [x] Deterministic output: replace `HashMap`/`HashSet` iteration with `BTreeMap`/ordered `Vec` — [B13](CONTEXT.md#b13).
@@ -336,7 +342,7 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Tutorial: "your first game" step by step with `RustBoy`
 - [ ] Hardware notes: VBlank & OAM timing, 8×16 rules, coordinate offsets (+8 / +16)
 - [x] `CHANGELOG.md` (the release notes of the refactoring, branch `refactor-p2-engine-api-prelude`; keep it up to date)
-- [ ] Keep `CLAUDE.md` and `CONTEXT.md` up to date as phases land
+- [ ] Keep `AGENTS.md`, `CLAUDE.md` and `CONTEXT.md` up to date as phases land
 
 ## Future
 

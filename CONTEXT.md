@@ -2,7 +2,8 @@
 
 Background for humans and AI assistants working on rust-boy: what the project is, how it is
 built, how the code is layered, what is broken and why. The actionable checklist lives in
-[`Task.md`](Task.md); working rules live in [`CLAUDE.md`](CLAUDE.md).
+[`Task.md`](Task.md); Codex's first-implementation rules live in
+[`AGENTS.md`](AGENTS.md), and Claude's review, fix and merge rules in [`CLAUDE.md`](CLAUDE.md).
 
 > Snapshot taken on branch `refactor` at commit `4601a5c` (October 2026). Line numbers refer to
 > that commit. Since `refactor-p2-engine-api-prelude` the layers are `asm`, `stdlib` and `engine`, in `src/asm/`,

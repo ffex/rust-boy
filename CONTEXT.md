@@ -1425,7 +1425,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   `refactor-p3-interrupts`.
 - **Platform:** generated engine programs still use ROM0 and do not select a cartridge mapper;
   `stdlib::banking` has low-level MBC1/MBC5 ROM bank selectors (`refactor-p3-mbc-banking`), but
-  mapper headers and engine-managed banked asset access remain; no SRAM saves or GBC.
+  mapper headers and engine-managed banked asset access remain. `stdlib::sram` provides low-level
+  MBC1/MBC5 RAM gating and MBC5 bank selection; persistent saves and GBC support remain.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
   one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`).

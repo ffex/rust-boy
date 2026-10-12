@@ -371,6 +371,10 @@ pub const MBC1_ROM_BANK_HIGH: u16 = 0x4000;
 pub const MBC5_ROM_BANK_LOW: u16 = 0x2000;
 /// MBC5 ROM bank high bit, selected by a write in `$3000..=$3FFF`.
 pub const MBC5_ROM_BANK_HIGH: u16 = 0x3000;
+/// Cartridge RAM gate for MBC1/MBC5: write `$0A` to enable and `$00` to disable.
+pub const CARTRIDGE_RAM_GATE: u16 = 0x0000;
+/// MBC5 cartridge RAM bank selector (bits 0–3), selected by writes at `$4000..=$5FFF`.
+pub const MBC5_RAM_BANK: u16 = 0x4000;
 
 /// Bytes in one 8x8 tile (2 bits per pixel)
 pub const TILE_SIZE: u16 = 16;

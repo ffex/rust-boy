@@ -14,6 +14,7 @@ use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
 use rust_boy::stdlib::banking;
 use rust_boy::stdlib::graphics::vram_queue;
+use rust_boy::stdlib::sram;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
 
@@ -920,6 +921,35 @@ fn store_ly(var: &str) -> Block {
 /// Build `gb` into a ROM
 fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
+}
+
+#[test]
+fn sram_control_routines_assemble_and_return() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wSramBankHigh", 0);
+    game.vars.create_u8("wSramBankLow", 0);
+    let enable = game.call_routine(&sram::enable());
+    let select = game.call_routine(&sram::select_mbc5_bank());
+    let disable = game.call_routine(&sram::disable());
+    let mut init = Block::new();
+    init.emit_all(enable)
+        .ld_hl(0xABCD)
+        .emit_all(select)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wSramBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wSramBankLow")
+        .emit_all(disable);
+    game.init(init);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wSramBankHigh"), 0xAB);
+    assert_eq!(gb.read_symbol("wSramBankLow"), 0xCD);
 }
 
 #[test]

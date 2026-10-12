@@ -235,7 +235,9 @@ impl RustBoy {
         crate::stdlib::graphics::window::set_position(x, y)
     }
 
-    /// Show or hide the window, preserving the other LCDC bits. Emit in VBlank.
+    /// Show or hide the window, preserving the other LCDC bits. Emit in VBlank: in
+    /// [`RustBoy::init`] it has no effect, since `build()` writes the LCD-on LCDC value
+    /// (from [`RustBoyConfig::window`]) after init code.
     /// The background/window enable bit must also be set on DMG. Showing it writes neither
     /// its position nor its map: without a [`Window`] configured, set them first
     /// ([`RustBoy::set_window_position`], [`RustBoy::select_window_tilemap`]), or it shows at
@@ -244,7 +246,9 @@ impl RustBoy {
         crate::stdlib::graphics::window::set_enabled(shown)
     }
 
-    /// Change the window map at runtime, preserving the background map. Emit in VBlank.
+    /// Change the window map at runtime, preserving the background map. Emit in VBlank: in
+    /// [`RustBoy::init`] it has no effect (see [`RustBoy::show_window`]); choose the start-up
+    /// map with [`Window::new`].
     pub fn select_window_tilemap(&self, area: TilemapArea) -> Vec<Instr> {
         crate::stdlib::graphics::window::select_tilemap(area == TilemapArea::Map9C00)
     }
@@ -3895,6 +3899,37 @@ mod tests {
                 .build()
                 .unwrap();
         assert_eq!(lcdc_on(&out), "ld a, LCDCF_ON | LCDCF_OBJON | LCDCF_OBJ8");
+    }
+
+    #[test]
+    fn test_window_from_the_config_at_start_up() {
+        // The start-up code on the test CPU: WX/WY before user init, the window bits in the
+        // LCD-on value. LCDC writes of init code are replaced by that value (documented on
+        // `show_window`): a configured window hidden in init shows anyway.
+        for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
+            let mut gb =
+                RustBoy::with_config(RustBoyConfig::default().window(Window::new(map, 40, 112)));
+            gb.init(gb.show_window(false));
+            let (code, mut cpu) = startup(&mut gb);
+            cpu.stubs.insert("Memcopy".to_string());
+            cpu.consts.retain(|text, _| !text.contains('|'));
+            for flag in [
+                hw::LCDCF_ON,
+                hw::LCDCF_BGON,
+                hw::LCDCF_OBJON,
+                hw::LCDCF_OBJ8,
+                hw::LCDCF_WINON,
+                hw::LCDCF_WIN9C00,
+            ] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.consts
+                .insert("LOW(~LCDCF_WINON)".to_string(), !hw::LCDCF_WINON.value);
+            cpu.run(&code);
+            assert_mem(&cpu, "rWX", 47);
+            assert_mem(&cpu, "rWY", 112);
+            assert_mem(&cpu, "rLCDC", 0x83 | 0x20 | map_bit);
+        }
     }
 
     // ==================== Variable addresses and HRAM ====================

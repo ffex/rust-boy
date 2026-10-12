@@ -1,6 +1,8 @@
 //! Window snippets. Emit during LCD-off initialization or VBlank for stable frames.
 //! The window shares background tiles and BGP, ignores SCX/SCY, and needs LCDC bit 0
 //! on DMG. These snippets change A and flags only; LCDC operations preserve other bits.
+//! In a `RustBoy` program, `build()` writes the whole LCD-on LCDC value after init code,
+//! so [`set_enabled`] and [`select_tilemap`] take effect from VBlank code, not from init.
 
 use crate::asm::{Block, Expr, Instr, Mem, R8};
 use crate::hw;

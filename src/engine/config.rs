@@ -271,7 +271,10 @@ impl Window {
     /// let mut gb = RustBoy::with_config(RustBoyConfig::default()
     ///     .window(Window::new(TilemapArea::Map9C00, 0, 112)));
     /// gb.tiles.add_tilemap_at("Status", TilemapArea::Map9C00, &[[0; 32]]);
-    /// gb.on_vblank(gb.show_window(false));
+    /// // It starts at Y 112; VBlank code moves it to Y 120 and switches its map
+    /// let mut frame = gb.set_window_position(0, 120);
+    /// frame.extend(gb.select_window_tilemap(TilemapArea::Map9800));
+    /// gb.on_vblank(frame);
     /// # gb.build().unwrap();
     /// ```
     pub fn new(tilemap: TilemapArea, x: u8, y: u8) -> Self {

@@ -261,7 +261,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
 - [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
       `#[non_exhaustive]` like `Lcdc` (its public `wx`/`wy` fields allow raw start-up values today); whether `build()`
-      should reject or warn about a configured window with `Lcdc.background` off (invisible on DMG, documented today)
+      should reject or warn about a configured window with `Lcdc.background` off (invisible on DMG, documented today);
+      whether a configured window can start hidden (a `Window` flag), or LCDC writes in init survive the LCD-on write
+      (today `build()` replaces them; documented on `show_window`)
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
       (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))
 - [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its

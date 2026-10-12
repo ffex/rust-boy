@@ -276,7 +276,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
 - [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
       overrides, independent selection clocks, default/global fallback, composite setters)
-- [ ] End-of-animation events / callbacks
+- [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
+      coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
 
 ### Audio *(nothing exists today)*
 - [ ] APU init (sound on/off at boot), register constants in `hw`

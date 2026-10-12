@@ -6,6 +6,18 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
+### Animation completion (Phase 3)
+
+- `enable_animation_events` / `take_animation_event` expose coalescing completion flags:
+  Once reaches its last frame; Loop wraps; PingPong returns to its first frame.
+- `set_animation_callback` binds a named function invoked after all sprite parts step,
+  preserving BC/DE/HL. Composite APIs emit one logical notification per group.
+- Explicit restart methods show the first frame and reset completion/direction/timing
+  state. Configure timing/events first, then generate restart snippets. Flags reflect
+  shadow OAM; the next DMA makes it visible. Polling events survive callback delivery.
+- Unknown callback names fail build; tracked animation calls from interrupt handlers
+  are rejected. Existing programs and snapshots without subscriptions remain unchanged.
+
 ### Per-animation timing (Phase 3)
 
 - `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's period

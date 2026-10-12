@@ -576,10 +576,129 @@ impl SpriteManager {
             anim_type,
             index,
             delay: None,
+            events: false,
+            callback: None,
             frame_step,
         };
         sprite.animations.push(animation);
         index
+    }
+
+    /// Enable coalescing completion events for this animation. Once reports reaching
+    /// its last frame once per activation/restart; Loop reports last→first wrap;
+    /// PingPong reports returning to its first frame. Single-frame loops report every
+    /// update. Events describe shadow state; visibility follows at the next DMA.
+    pub fn enable_animation_events(&mut self, id: SpriteId, index: u8) {
+        let sprite = self.sprite_mut(id);
+        sprite.check_animation_index(index);
+        sprite.animations[usize::from(index)].events = true;
+    }
+
+    /// Bind a function to completion and enable polling events too. The function is
+    /// called after all sprites step, once per completion. It may change selections
+    /// or restart a whole composite; BC/DE/HL are preserved around it. Main-loop only.
+    /// The function must be defined (or declared external) by build time.
+    pub fn set_animation_callback(&mut self, id: SpriteId, index: u8, callback: &str) {
+        check_label("animation callback", callback);
+        let sprite = self.sprite_mut(id);
+        sprite.check_animation_index(index);
+        let animation = &mut sprite.animations[usize::from(index)];
+        animation.events = true;
+        animation.callback = Some(callback.to_string());
+    }
+
+    /// Load A with the pending event (0/1) and clear it. Z means none; changes AF only.
+    /// Multiple unconsumed completions coalesce into one flag. Main-loop consumer only.
+    /// Panics unless events were enabled for this animation.
+    pub fn take_animation_event(&self, id: SpriteId, index: u8) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        sprite.check_animation_index(index);
+        let animation = &sprite.animations[usize::from(index)];
+        assert!(animation.events, "animation events are not enabled");
+        let mut code = Block::new();
+        code.ld_a_addr_def(animation.event_var(&sprite.name))
+            .push(R16Stack::AF)
+            .xor(R8::A)
+            .ld_addr_def_a(animation.event_var(&sprite.name))
+            .pop(R16Stack::AF)
+            .and(R8::A);
+        code.into_instrs()
+    }
+
+    /// Display the first frame immediately and select this animation. Reset its event,
+    /// completion latch and pending callback, plus direction/timer where present.
+    /// Changes AF only. Timed sprites wait a full period before their next step;
+    /// shared-clock sprites use the next global tick. Main-loop/init only.
+    pub fn restart_animation(&self, id: SpriteId, index: u8) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        sprite.check_animation_index(index);
+        let animation = &sprite.animations[usize::from(index)];
+        let mut code = Block::new();
+        code.ld_a(index).ld_addr_def_a(sprite.current_var());
+        if sprite
+            .animations
+            .iter()
+            .any(|anim| anim.delay.is_some() || anim.events)
+        {
+            code.ld_addr_def_a(format!("wAnim_{}_Previous", sprite.name));
+        }
+        code.xor(R8::A);
+        if sprite.animations.iter().any(|anim| anim.delay.is_some()) {
+            code.ld_addr_def_a(format!("wAnim_{}_Timer", sprite.name));
+        }
+        if sprite.animations.iter().any(|anim| anim.needs_direction()) {
+            code.ld_addr_def_a(direction_var(&sprite.name));
+        }
+        if animation.events {
+            code.ld_addr_def_a(animation.event_var(&sprite.name));
+            if matches!(animation.anim_type, super::AnimationType::Once) {
+                code.ld_addr_def_a(animation.done_var(&sprite.name));
+            }
+            if animation.callback.is_some() {
+                code.ld_addr_def_a(animation.pending_var(&sprite.name));
+            }
+        }
+        code.ld_a(animation.base_tile + animation.start_frame * animation.frame_step)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_TILEID));
+        code.into_instrs()
+    }
+
+    // A logical group reports one event, from its last-created hardware part. All
+    // members have stepped before deferred callbacks run, regardless of this choice.
+    fn composite_event_member(&self, id: CompositeSpriteId, index: u8) -> SpriteId {
+        let parts = &self.composite(id).sprites;
+        for part in parts {
+            self.sprite(*part).check_animation_index(index);
+        }
+        *parts.last().expect("composites have parts")
+    }
+    /// Enable one coalescing event per logical composite, reported by its last part.
+    pub fn enable_composite_animation_events(&mut self, id: CompositeSpriteId, index: u8) {
+        let member = self.composite_event_member(id, index);
+        self.enable_animation_events(member, index);
+    }
+    /// Bind one deferred callback per logical composite completion.
+    pub fn set_composite_animation_callback(
+        &mut self,
+        id: CompositeSpriteId,
+        index: u8,
+        callback: &str,
+    ) {
+        let member = self.composite_event_member(id, index);
+        self.set_animation_callback(member, index, callback);
+    }
+    /// Consume the logical composite event; changes AF only.
+    pub fn take_composite_animation_event(&self, id: CompositeSpriteId, index: u8) -> Vec<Instr> {
+        self.take_animation_event(self.composite_event_member(id, index), index)
+    }
+    /// Restart all members together, validating every member before generating code.
+    pub fn restart_composite_animation(&self, id: CompositeSpriteId, index: u8) -> Vec<Instr> {
+        self.composite_event_member(id, index);
+        self.composite(id)
+            .sprites
+            .iter()
+            .flat_map(|part| self.restart_animation(*part, index))
+            .collect()
     }
 
     /// Override this animation's period in game frames (1..=255).
@@ -1141,6 +1260,27 @@ impl SpriteManager {
             .collect()
     }
 
+    pub(crate) fn animation_event_function_names(&self) -> Vec<String> {
+        self.sprites
+            .values()
+            .flat_map(|sprite| {
+                sprite
+                    .animations
+                    .iter()
+                    .filter(|anim| anim.events)
+                    .map(|anim| animation_label(&sprite.name, &anim.name))
+            })
+            .collect()
+    }
+
+    pub(crate) fn animation_callback_names(&self) -> Vec<&str> {
+        self.sprites
+            .values()
+            .flat_map(|sprite| sprite.animations.iter())
+            .filter_map(|animation| animation.callback.as_deref())
+            .collect()
+    }
+
     /// Generate animation functions for all sprites with animations
     /// Returns a list of (function_name, function_body) pairs
     pub(crate) fn generate_animation_functions(&self) -> Vec<(String, Vec<Instr>)> {
@@ -1152,8 +1292,14 @@ impl SpriteManager {
                 let func_name = animation_label(&sprite.name, &animation.name);
 
                 asm.label(&func_name);
-                asm.emit_all(animation.generate_func(&direction_var(&sprite.name)));
-                asm.ret();
+                if animation.events {
+                    asm.emit_all(
+                        animation.generate_event_func(&sprite.name, &direction_var(&sprite.name)),
+                    );
+                } else {
+                    asm.emit_all(animation.generate_func(&direction_var(&sprite.name)));
+                    asm.ret();
+                }
 
                 functions.push((func_name, asm.into_instrs()));
             }
@@ -1181,11 +1327,12 @@ impl SpriteManager {
         labels: &LabelAllocator,
         delay_value: u8,
     ) -> Vec<Instr> {
-        if self
-            .sprites
-            .values()
-            .any(|sprite| sprite.animations.iter().any(|anim| anim.delay.is_some()))
-        {
+        if self.sprites.values().any(|sprite| {
+            sprite
+                .animations
+                .iter()
+                .any(|anim| anim.delay.is_some() || anim.events)
+        }) {
             return self.generate_independent_animation_calls(labels, delay_value);
         }
         let mut asm = Block::new();
@@ -1272,7 +1419,8 @@ impl SpriteManager {
             let end = labels.local("anim_sprite_end");
             let timed = sprite.animations.iter().any(|anim| anim.delay.is_some());
             let timer = format!("wAnim_{}_Timer", sprite.name);
-            if timed {
+            let tracked = timed || sprite.animations.iter().any(|anim| anim.events);
+            if tracked {
                 let previous = format!("wAnim_{}_Previous", sprite.name);
                 let same = labels.local("anim_selection_same");
                 asm.ld_a_addr_def(sprite.current_var())
@@ -1282,10 +1430,20 @@ impl SpriteManager {
                     .jr_cond(Condition::Z, &same)
                     .ld(R8::A, R8::B)
                     .ld_addr_def_a(&previous)
-                    .xor(R8::A)
-                    .ld_addr_def_a(&timer)
-                    .label(&same)
-                    .ld(R8::A, R8::B);
+                    .xor(R8::A);
+                if timed {
+                    asm.ld_addr_def_a(&timer);
+                }
+                for anim in &sprite.animations {
+                    if anim.events && matches!(anim.anim_type, super::AnimationType::Once) {
+                        asm.ld_addr_def_a(anim.done_var(&sprite.name));
+                    }
+                }
+                asm.label(&same);
+                if !timed {
+                    asm.ld(R8::A, R8::C).and(R8::A).jp_cond(Condition::Z, &end);
+                }
+                asm.ld(R8::A, R8::B);
             } else {
                 asm.ld(R8::A, R8::C)
                     .and(R8::A)
@@ -1295,7 +1453,7 @@ impl SpriteManager {
             asm.cp(ANIM_DISABLED).jp_cond(Condition::Z, &end);
             for animation in &sprite.animations {
                 let skip = labels.local("anim_selection_skip");
-                if timed {
+                if tracked {
                     asm.ld(R8::A, R8::B);
                 }
                 asm.cp(animation.index).jp_cond(Condition::NZ, &skip);
@@ -1315,6 +1473,26 @@ impl SpriteManager {
             asm.label(&end);
         }
         asm.pop(R16Stack::BC);
+        for sprite in self.sprites.values() {
+            for animation in &sprite.animations {
+                if let Some(callback) = &animation.callback {
+                    let end = labels.local("anim_callback_end");
+                    asm.ld_a_addr_def(animation.pending_var(&sprite.name))
+                        .and(R8::A)
+                        .jr_cond(Condition::Z, &end)
+                        .xor(R8::A)
+                        .ld_addr_def_a(animation.pending_var(&sprite.name))
+                        .push(R16Stack::BC)
+                        .push(R16Stack::DE)
+                        .push(R16Stack::HL)
+                        .call(callback)
+                        .pop(R16Stack::HL)
+                        .pop(R16Stack::DE)
+                        .pop(R16Stack::BC)
+                        .label(&end);
+                }
+            }
+        }
         asm.into_instrs()
     }
 
@@ -1336,7 +1514,29 @@ impl SpriteManager {
             }
             if sprite.animations.iter().any(|anim| anim.delay.is_some()) {
                 vars.push((format!("wAnim_{}_Timer", sprite.name), 0));
-                vars.push((format!("wAnim_{}_Previous", sprite.name), ANIM_DISABLED));
+            }
+            if sprite
+                .animations
+                .iter()
+                .any(|anim| anim.delay.is_some() || anim.events)
+            {
+                let previous = if sprite.animations.iter().any(|anim| anim.events) {
+                    sprite.initial_animation
+                } else {
+                    ANIM_DISABLED
+                };
+                vars.push((format!("wAnim_{}_Previous", sprite.name), previous));
+            }
+            for animation in &sprite.animations {
+                if animation.events {
+                    vars.push((animation.event_var(&sprite.name), 0));
+                    if matches!(animation.anim_type, super::AnimationType::Once) {
+                        vars.push((animation.done_var(&sprite.name), 0));
+                    }
+                    if animation.callback.is_some() {
+                        vars.push((animation.pending_var(&sprite.name), 0));
+                    }
+                }
             }
         }
 
@@ -2317,5 +2517,157 @@ mod tests {
         assert_eq!(shown_frame(&gb.sprites, &cpu, sprite), 0);
         cpu.run(&code);
         assert_eq!(shown_frame(&gb.sprites, &cpu, sprite), 1);
+    }
+    #[test]
+    fn completion_flags_cover_cycles_once_and_explicit_restart() {
+        for (kind, expected) in [
+            (AnimationType::Loop, vec![0, 0, 1, 0, 0, 1, 0, 0]),
+            (AnimationType::PingPong, vec![0, 0, 0, 1, 0, 0, 0, 1]),
+            (AnimationType::Once, vec![0, 1, 0, 0, 0, 0, 0, 0]),
+        ] {
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            let sprite = sm.add_for_test("Event", 0, 0, 0, 3);
+            sm.add_animation(sprite, "Play", 0, 2, kind);
+            sm.set_initial_animation(sprite, 0);
+            sm.enable_animation_events(sprite, 0);
+            let mut cpu = animation_cpu(&sm);
+            let code = animation_program(&sm, 1);
+            for event in expected {
+                cpu.run(&code);
+                cpu.run(&sm.take_animation_event(sprite, 0));
+                assert_eq!(cpu.a, event);
+                assert_eq!(cpu.zero, event == 0);
+            }
+            cpu.run(&sm.restart_animation(sprite, 0));
+            assert_eq!(shown_frame(&sm, &cpu, sprite), 0);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, 0);
+            for _ in 0..4 {
+                cpu.run(&code);
+            }
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, 1);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, 0);
+        }
+    }
+
+    #[test]
+    fn single_frame_events_and_terminal_tile_255_are_not_lost() {
+        for kind in [
+            AnimationType::Loop,
+            AnimationType::PingPong,
+            AnimationType::Once,
+        ] {
+            let once = matches!(kind, AnimationType::Once);
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            let sprite = sm.add_for_test("Last", 0, 0, 255, 1);
+            sm.add_animation(sprite, "Single", 0, 0, kind);
+            sm.set_initial_animation(sprite, 0);
+            sm.enable_animation_events(sprite, 0);
+            let code = animation_program(&sm, 1);
+            let mut cpu = animation_cpu(&sm);
+            for tick in 0..5 {
+                cpu.run(&code);
+                cpu.run(&sm.take_animation_event(sprite, 0));
+                assert_eq!(cpu.a, u8::from(!once || tick == 0));
+            }
+        }
+    }
+
+    #[test]
+    fn switching_and_disabled_frames_rearm_once_without_clearing_pending_events() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Actor", 0, 0, 0, 2);
+        sm.add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        sm.add_animation(sprite, "Idle", 0, 1, AnimationType::Loop);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        sm.set_animation_delay(sprite, 0, 2);
+        let code = animation_program(&sm, 3);
+        let mut cpu = animation_cpu(&sm);
+        cpu.run(&code);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, sprite), 1);
+        cpu.run(&sm.disable_animation(sprite));
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+        cpu.run(&sm.enable_animation(sprite, 0));
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 0);
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+        cpu.run(&sm.enable_animation(sprite, 1));
+        cpu.run(&code);
+        cpu.run(&sm.enable_animation(sprite, 0));
+        cpu.run(&code);
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+    }
+
+    #[test]
+    fn callback_errors_are_checked_without_corrupting_configuration() {
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Actor", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        let before = gb.build().unwrap();
+        for message in [
+            panic_message(|| gb.sprites.set_animation_callback(sprite, 0, "ret")),
+            panic_message(|| gb.sprites.set_animation_callback(sprite, 1, "Finished")),
+            panic_message(|| gb.sprites.enable_animation_events(SpriteId(99), 0)),
+            panic_message(|| gb.sprites.take_animation_event(sprite, 0)),
+        ] {
+            assert!(!message.is_empty());
+        }
+        assert_eq!(before, gb.build().unwrap());
+        gb.sprites
+            .set_animation_callback(sprite, 0, "MissingCallback");
+        assert!(matches!(
+            gb.build(),
+            Err(super::super::Error::UnknownFunction { .. })
+        ));
+    }
+    #[test]
+    fn tracked_steps_in_handlers_are_rejected_transitively() {
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Actor", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        gb.sprites.enable_animation_events(sprite, 0);
+        let mut body = Block::new();
+        body.call("Anim_Actor_Once");
+        gb.define_function_from("Tick", body);
+        let mut handler = Block::new();
+        handler.call("Tick");
+        gb.on_vblank(handler);
+        assert!(
+            matches!(gb.build(),Err(super::super::Error::MainLoopOnly{routine,..}) if routine=="Anim_Actor_Once")
+        );
+    }
+    #[test]
+    fn an_initialization_completion_is_not_rearmed_by_the_first_dispatch() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Actor", 0, 0, 0, 2);
+        sm.add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        let mut cpu = animation_cpu(&sm);
+        let code = animation_program(&sm, 1);
+        let mut init = Block::new();
+        init.call("Anim_Actor_Once").ret();
+        for (_, body) in sm.generate_animation_functions() {
+            init.emit_all(body);
+        }
+        cpu.run(&init.into_instrs());
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 0);
     }
 }

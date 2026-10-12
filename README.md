@@ -559,3 +559,46 @@ Use `set_composite_animation_delay(composite, index, frames)` to synchronize all
 metasprite parts. Clear overrides with `clear_animation_delay` or
 `clear_composite_animation_delay`. These are generation-time settings, with two WRAM
 bytes per independently timed sprite. Programs without overrides retain global timing.
+
+### Animation completion and replay
+
+Subscribe to a polling flag, a named callback, or both. Callbacks run in the main loop
+after all sprites have stepped, before other game logic; BC/DE/HL are preserved.
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+let actor = gb.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 4]), 40, 40, 0);
+let attack = gb.sprites.add_animation(actor, "Attack", 0, 2, AnimationType::Once);
+let idle = gb.sprites.add_animation(actor, "Idle", 3, 3, AnimationType::Loop);
+gb.sprites.set_animation_delay(actor, attack, 2);
+gb.sprites.set_animation_callback(actor, attack, "AttackDone");
+gb.sprites.set_initial_animation(actor, attack);
+// Configure subscriptions/timing before generating restart snippets.
+gb.define_function_from("AttackDone", gb.sprites.restart_animation(actor, idle));
+let observed = gb.vars.create_u8("wAttackObserved", 0);
+gb.add_to_main_loop(gb.sprites.take_animation_event(actor, attack));
+gb.add_to_main_loop(IfA::eq(1, observed.set(1)));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`Once` emits once when it reaches its last frame, including a first update that is
+already on that frame. Changing selection away and back rearms it, but preserves the
+existing tile/replay rules. `Loop` emits on last→first wrap; `PingPong` on returning to
+the first frame. Single-frame loops/ping-pong emit every update; single-frame Once
+emits once. Events describe shadow OAM, which becomes visible at the following DMA.
+
+`enable_animation_events` enables polling without a callback. `take_animation_event`
+returns A = 0/1 and Z for no event, then clears the flag; multiple pending completions
+coalesce. Callbacks do not clear that polling flag. Callback functions can be defined
+after binding, or declared external. Use the composite versions of these methods for
+one event/callback per logical metasprite.
+
+`restart_animation` and `restart_composite_animation` immediately show the first frame
+and clear that animation's pending event/callback and Once latch. Direction and any
+independent timer reset; shared-clock sprites advance on the next global tick. Repeated
+enable calls keep their existing behavior and do not replay a finished Once. Event
+producers, polling and restart code belong in init/main, with one main-loop consumer.
+Handler calls to event-producing animation functions are rejected; raw RAM access and
+poll/restart snippets are caller contracts.

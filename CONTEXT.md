@@ -1411,3 +1411,36 @@ changing individual members separately can desynchronize them. Clear methods rem
 compile-time overrides and return a sprite to the shared clock once none remain.
 Timing governs the main-loop dispatcher; direct calls to animation functions still
 step immediately. Completion events/callbacks remain the next animation task.
+
+### Phase 3 animation completion (`refactor-p3-animation-callbacks`)
+
+`enable_animation_events` enables a coalescing flag; `take_animation_event` loads A
+with 0/1 and clears it. Once emits when its final frame is reached, once per observed
+activation/restart. Loop emits on last→first wrap; PingPong emits on returning to its
+first frame. Single-frame loops/ping-pong emit each update; a single-frame Once emits
+once. Out-of-range resets do not falsely report loop cycles. The original frame step
+is still emitted once as a local subroutine of an event wrapper; its early returns
+remain valid, and the wrapper preserves BC, leaving AF as the only changed registers.
+
+Callbacks are named functions bound with `set_animation_callback`. Their pending flags
+are consumed after **all** sprite parts step, in sprite/animation creation order, with
+BC/DE/HL saved around each callback. A callback may select/restart a whole metasprite
+without changing a later part halfway through its current step. Composite APIs attach
+one logical notification to the last member, avoiding callbacks per hardware part.
+Callbacks do not consume polling flags. Unknown callback functions fail build; external
+ones must be declared with `external_symbol`. Functions reached only through callbacks
+and their dependencies are included through the existing function scan.
+
+`restart_animation`/`restart_composite_animation` immediately show the first frame and
+clear that animation's old event, Once latch and pending callback, reset direction, and
+reset an independent timer if present. Configure timing/events/callbacks before creating
+restart snippets, since the required state writes are chosen at generation time. A
+shared-clock sprite still advances on the next global tick; timed sprites wait a full
+period. Flags reflect shadow state, before next-frame DMA, and multiple unconsumed
+events coalesce. Direct event-producing animation calls from handlers are rejected,
+including calls through user functions. Poll/restart snippets and raw state access remain
+main/init-only contracts; their direct RAM accesses are not classified as routine calls.
+
+Events add a previous-selection byte per tracked sprite, one event byte per subscribed
+animation, one latch for each subscribed Once, and one pending byte per callback. No
+state/code is added without opting in; existing example assembly is unchanged.

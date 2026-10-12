@@ -1148,11 +1148,6 @@ fn engine_handlers_preserve_the_registers() {
         .ld_addr_def_a("wF");
     gb.add_to_main_loop(code);
     let out = gb.build().expect("the program builds");
-    assert!(
-        out.contains("StatHandler:\n    push de\n    call ScrambleDe"),
-        "{}",
-        out
-    );
     let mut gb = Rom::build(&out, &[]).boot();
     gb.run_frames(10);
     // Every 256 M-cycles
@@ -1165,6 +1160,12 @@ fn engine_handlers_preserve_the_registers() {
         .map(|var| gb.read_symbol(var))
         .collect();
     assert_eq!(regs, [0x5A, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0x10]);
+    // For the routine, its convention: de
+    assert!(
+        out.contains("StatHandler:\n    push de\n    call ScrambleDe"),
+        "{}",
+        out
+    );
 }
 
 /// `disable_interrupt` stops a handler while the program runs, `enable_interrupt` starts it
@@ -1210,6 +1211,28 @@ fn engine_joypad_handler_runs_on_a_press() {
     assert_eq!(gb.read_symbol("wPresses"), 0);
     gb.run_script(&[(5, &[Button::A]), (2, &[]), (3, &[Button::Left])]);
     assert_eq!(gb.read_symbol("wPresses"), 2, "A, then Left");
+
+    // With UpdateKeys, which leaves no group selected: the main loop selects them again,
+    // so a press in the middle of the frame runs the handler at once, not at the next
+    // UpdateKeys (in VBlank)
+    let mut gb = RustBoy::new();
+    gb.vars.create_u8("wPresses", 0);
+    gb.vars.create_u8("wPressLY", 0);
+    let mut handler = count("wPresses");
+    handler.emit_all(store_ly("wPressLY").into_instrs());
+    gb.on_joypad(handler);
+    let mut inputs = InputManager::new();
+    inputs.on_press(PadButton::A, Vec::new());
+    gb.add_inputs(inputs);
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(5);
+    while gb.ly_mode().0 != 50 {
+        gb.run_until_cycle(gb.cycles() + 1);
+    }
+    gb.press(Button::A);
+    gb.run_until_cycle(gb.cycles() + 100);
+    assert_eq!(gb.read_symbol("wPresses"), 1, "at the press");
+    assert_eq!(gb.read_symbol("wPressLY"), 50);
 }
 
 /// The soft reset: A + B + Select + Start held together run the start-up code again, once

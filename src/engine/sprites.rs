@@ -1206,20 +1206,19 @@ impl SpriteManager {
     }
 
     /// Generate the main loop animation code with frame-based timing
-    /// - The global `wFrameCounter` counts to `delay_value`; sprites without a period of
-    ///   their own step on that tick (C holds it through the dispatcher)
-    /// - A sprite with a per-animation period has its own `wAnim_{name}_Timer`, reset when
-    ///   the selection (`wAnim_{name}_Current`, seen against `wAnim_{name}_Previous`) changes
-    /// - Only the selected animation's function is called; BC is saved around the dispatcher
+    /// Uses wFrameCounter for non-blocking animation updates
+    /// - Increments frame counter each frame
+    /// - Only updates animations when counter >= delay
+    /// - Resets counter after animation update
+    /// - Checks wAnim_[sprite_name]_Current to call only the active animation
     ///
     /// The code grows with every animation, so each jump over a part whose size depends
     /// on the number of sprites or animations is a `jp`: a `jr` reaches only 127 bytes
-    /// ahead (B9).
+    /// ahead (B9). The only `jr` left skips one `call` and one `jp`, 6 bytes.
     ///
-    /// Its labels are local and come from `labels`: `.anim_global_not_due_N`, `.anim_end_N`
-    /// after the whole dispatcher (it was the global label `AnimEnd`), `.anim_sprite_end_N`
-    /// after a sprite's part, `.anim_selection_same_N` (timed sprites) and
-    /// `.anim_selection_skip_N` after an animation's call.
+    /// Its labels are local and come from `labels`: `.anim_end_N` after the whole
+    /// dispatcher (it was the global label `AnimEnd`), `.anim_{sprite}_end_N` after a
+    /// sprite's part and `.skip_{sprite}_{animation}_N` after an animation's call.
     pub(crate) fn generate_animation_calls(
         &self,
         labels: &LabelAllocator,

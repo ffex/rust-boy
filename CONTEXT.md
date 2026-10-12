@@ -106,9 +106,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   the whole program by construction: `If*` → `.end_if_N`, `.else_N`, `.then_N`; `check_key` →
   `.check_left_N`, `.check_left_end_N`; a limited move → `.sprite0_left_limit_store_N`, `…_end_N`;
   `clear_objects_screen` → `.clear_oam_N` (was the global `ClearOam`); the animation dispatcher →
-  `.anim_end_N` (was the global `AnimEnd`), `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`,
-  `.anim_selection_skip_N` (since `refactor-p3-animation-speed`; they were `.anim_{sprite}_end_N` and
-  `.skip_{sprite}_{animation}_N`). The code
+  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`, and with per-animation
+  periods `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`. The code
   `build()` generates (start-up, dispatcher) uses a fork of the allocator (`LabelAllocator::fork`: the same
   sequence from where it is, not shared), so two builds print the same labels ([B14](#b14)). Local labels never
   change the RGBDS scope, so they can go inside an `If` body. Global labels are left to routines and functions,
@@ -587,7 +586,7 @@ The problems are where each layer reaches across the line:
    | `gb.next_if_counter()` | `gb.next_label_counter()` or `gb.labels().local(stem)` |
    | `clear_objects_screen()` | `clear_objects_screen(asm.labels())` (after a global label: its loop label is local) |
    | `LabelAllocator::new()` beside an `Asm` program | `asm.labels()`: the program's allocator |
-   | labels `ClearOam`, `AnimEnd`, `.check_left_N_end`, `.spriteK_left_limit_N_store` / `_end` | `.clear_oam_N`, `.anim_end_N`, `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the dispatcher's: `.anim_sprite_end_N`, `.anim_selection_skip_N`, … since `refactor-p3-animation-speed`) |
+   | labels `ClearOam`, `AnimEnd`, `.check_left_N_end`, `.spriteK_left_limit_N_store` / `_end` | `.clear_oam_N`, `.anim_end_N`, `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the dispatcher's: `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`) |
    | a `jr` that rgbasm rejected as out of range, or to an external symbol | assembles: printed as `jp`, one byte longer and one cycle slower when taken (4 M-cycles, `jr` 3): code of fixed size or timing (an `rst` vector, a raw fixed-size section, a cycle-counted loop) must write jumps that reach |
    | `LabelAllocator::local("check left")` (any text) | panics: a stem is made of identifier characters (letters, digits, `_`, `#`, `$`, `@`); `locals` also panics on a stem given twice |
    | a jump target `@+n` with a jump that grows in between | its offset is written again (`jp nz, @+5`); a target `Label + 2` (any other expression), or `@` anywhere else (a raw line, data, an operand; not `ds N - @`), leaves the whole program unrelaxed, so a far `jr` fails in rgbasm as before |

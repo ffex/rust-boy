@@ -250,7 +250,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       flush after OAM DMA, before user VBlank code, late entries deferred. Emulator tests inject VBlank at every
       enqueue instruction boundary and check delayed main-loop writes, late flush and the full queue plus DMA
       handler (967 M-cycles, within 1140); standalone routines in `stdlib::graphics::vram_queue`)
-- [ ] Background scrolling (`SCX`/`SCY`), camera helpers
+- [x] Background scrolling (`SCX`/`SCY`), camera helpers (branch `refactor-p3-scrolling`: immediate
+      set, signed relative movement and world-point following with a screen anchor; stateless
+      `stdlib::graphics::scroll` snippets reused by `RustBoy`, wrapping at 256; emit in init or VBlank)
 - [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
       (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))

@@ -8,6 +8,10 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
+  and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
+  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates.
+
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.

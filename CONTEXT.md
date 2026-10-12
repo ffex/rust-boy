@@ -1336,7 +1336,11 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no scrolling (the shadow OAM and its DMA exist since `refactor-codex-p3-sprites`), no window layer, no palette API/fades, no
+- **Graphics:** background scrolling and camera helpers exist since `refactor-p3-scrolling`
+  (`stdlib::graphics::scroll`, reused by `RustBoy::set_background_scroll`, `scroll_background_by`,
+  `follow_background_point`). They write SCX/SCY immediately, wrap at 256, change A/flags and
+  leave sprites in screen coordinates; use init or VBlank for a stable whole-frame camera.
+  Emulator tests check initialization, wrapping, signed movement and world-point anchors. No window layer (the shadow OAM and its DMA exist since `refactor-codex-p3-sprites`), no palette API/fades, no
   metasprites beyond 16×16, no text/numbers (a `$9C00` map exists since [B19](#b19), without a window layer).
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the

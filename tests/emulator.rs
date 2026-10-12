@@ -1762,3 +1762,51 @@ fn engine_vram_queue_late_flush_leaves_entries_for_the_next_vblank() {
     );
     assert_eq!(gb.blocked_accesses().0, 0);
 }
+
+// Background camera writes are visible in the registers (the emulator has no pixels).
+#[test]
+fn engine_background_camera_wraps_and_follows_world_pixels() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.init(game.set_background_scroll(250, 3));
+    game.on_vblank(game.scroll_background_by(10, -5));
+    let mut gb = engine_rom(&game).boot();
+    // Compare successive frames: this avoids relying on boot's frame phase.
+    gb.run_frames(2);
+    let before = (gb.read(hw::SCX.value), gb.read(hw::SCY.value));
+    gb.run_frames(1);
+    assert_eq!(gb.read(hw::SCX.value), before.0.wrapping_add(10));
+    assert_eq!(gb.read(hw::SCY.value), before.1.wrapping_sub(5));
+
+    for (x, y) in [(0u8, 0u8), (255, 255), (80, 72), (12, 200)] {
+        let mut game = RustBoy::new();
+        let mut code = Block::new();
+        code.ld(R8::B, x)
+            .ld(R8::C, y)
+            .emit_all(game.follow_background_point(80, 72))
+            .ld_addr_def_a("wAfterFollow");
+        game.vars.create_u8("wAfterFollow", 0);
+        game.on_vblank(code);
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(2);
+        assert_eq!(gb.read(hw::SCX.value), x.wrapping_sub(80));
+        assert_eq!(gb.read(hw::SCY.value), y.wrapping_sub(72));
+        assert_eq!(gb.read_symbol("wAfterFollow"), y.wrapping_sub(72));
+    }
+}
+
+#[test]
+fn engine_background_scroll_init_survives_and_zero_delta_is_idle() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.init(game.set_background_scroll(255, 128));
+    assert!(game.scroll_background_by(0, 0).is_empty());
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_eq!(gb.read(hw::SCX.value), 255);
+    assert_eq!(gb.read(hw::SCY.value), 128);
+}

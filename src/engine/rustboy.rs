@@ -187,6 +187,35 @@ impl RustBoy {
         self
     }
 
+    /// Set the background viewport's top-left world pixel, wrapping at 256.
+    /// Returns code to put in `init` or `on_vblank`; main-loop writes can tear.
+    /// Changes A and flags. Sprites stay in screen coordinates.
+    ///
+    /// ```
+    /// use rust_boy::prelude::*;
+    /// let mut gb = RustBoy::new();
+    /// gb.init(gb.set_background_scroll(240, 8));
+    /// gb.on_vblank(gb.scroll_background_by(1, -1));
+    /// assert!(gb.build().unwrap().contains("ldh [rSCX], a"));
+    /// ```
+    pub fn set_background_scroll(&self, x: u8, y: u8) -> Vec<Instr> {
+        crate::stdlib::graphics::scroll::set_scroll(x, y)
+    }
+
+    /// Move the background camera by signed pixel deltas, wrapping at 256.
+    /// Positive X/Y moves the viewport right/down. Changes A and flags.
+    /// Emit during LCD-off initialization or VBlank to avoid tearing.
+    pub fn scroll_background_by(&self, dx: i8, dy: i8) -> Vec<Instr> {
+        crate::stdlib::graphics::scroll::scroll_by(dx, dy)
+    }
+
+    /// Keep world pixel (B = X, C = Y) at the given screen pixel anchor.
+    /// Coordinates wrap at 256 and exclude OAM offsets. Changes A and flags.
+    /// Emit during LCD-off initialization or VBlank to avoid tearing.
+    pub fn follow_background_point(&self, anchor_x: u8, anchor_y: u8) -> Vec<Instr> {
+        crate::stdlib::graphics::scroll::follow_point(anchor_x, anchor_y)
+    }
+
     /// The tilemap the background shows (see [`RustBoy::set_background_tilemap`])
     pub fn background_tilemap(&self) -> TilemapArea {
         self.config.background_tilemap

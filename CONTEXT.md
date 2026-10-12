@@ -245,7 +245,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   a runtime destination outside VRAM (constant errors panic at the API call). Rejection retains
   queued entries; callers retry if necessary. There is one producer, in init/main, never in an
   interrupt handler: `build()` returns `Error::MainLoopOnly` when a handler's code reaches
-  `QueueVramWrite`, directly or through user functions (`FunctionRegistry::reaches`). The write cursor is published after all bytes, so the consumer sees only
+  `QueueVramWrite`, directly or through user functions (`FunctionRegistry::reaches`; labels of `raw()`
+  code are not followed, and a main-loop call to `FlushVramQueue`, a second consumer, is not rejected:
+  both are documented limits). The write cursor is published after all bytes, so the consumer sees only
   complete entries even when enqueue is interrupted. Flush consumes FIFO entries with interrupts
   off, beginning writes only on lines 144–152 and retaining entries if late. Unit tests cover
   wrapping, overflow, invalid destinations, FIFO order and routine conventions; emulator tests

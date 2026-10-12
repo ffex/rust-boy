@@ -197,7 +197,8 @@ Both helpers generate code that changes all registers and flags and preserves IM
 carry is set when the queue is full or a runtime address is outside VRAM. A rejected write is not queued: retry it
 later if it must arrive. Constant addresses outside VRAM and values outside a byte panic at the API call. Producer
 code must run only in initialization or the main loop, **never in an interrupt handler**: `build()` returns
-`Error::MainLoopOnly` when handler code reaches `QueueVramWrite`, directly or through a function. VBlank can safely
+`Error::MainLoopOnly` when handler code reaches `QueueVramWrite`, directly or through a function (labels of `raw()`
+code are not followed). `FlushVramQueue` has one caller, the VBlank handler: do not call it. VBlank can safely
 interrupt it: the write cursor is published only when all entry bytes are ready.
 
 The consumer begins writes only on lines 144–152, leaving the last VBlank line as headroom. A late handler defers
@@ -206,7 +207,8 @@ entries rather than writing during display rendering. On the test emulator, a fu
 That time comes out of the main loop's VBlank. Measured on the test emulator, the main loop starts with about 920 M-cycles of VBlank left with a sprite
 and an empty queue, but only about 150 with 12 queued writes: main-loop code that touches VRAM directly (`GetTileByPixel`,
 `TileRef::set_tile`) then runs while the screen is drawn, where VRAM reads return `$FF` and writes are lost. A program
-that fills the queue should send all its VRAM writes through it, or do its direct VRAM work in `on_vblank`.
+that fills the queue should send all its VRAM writes through it: the `on_vblank` code runs after the flush, so it has
+no more VBlank left than the main loop.
 `stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
 Programs that never request the queue emit no queue code or storage.
 

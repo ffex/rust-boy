@@ -1407,11 +1407,16 @@ impl RustBoy {
     /// by the caller if required. Changes all registers and flags, preserving IME.
     ///
     /// Do not call the generated code from interrupt handlers: the queue has one
-    /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it.
-    /// Its flush takes VBlank time from the main loop (with 12 queued writes, about 150
-    /// M-cycles of VBlank are left of 920): with the queue, direct VRAM access from the
-    /// main loop can miss VBlank, so send VRAM writes through the queue or `on_vblank`. A late VBlank handler defers entries; arbitrary user handler work is
-    /// outside the queue's timing budget.
+    /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it
+    /// directly or through user functions (not through labels of `raw()` code, which it
+    /// does not follow). Do not call `FlushVramQueue` yourself: the VBlank handler is its
+    /// one consumer.
+    ///
+    /// The flush takes VBlank time from the code after it (with 12 queued writes, about
+    /// 150 M-cycles of VBlank are left of 920, for the `on_vblank` code and the main loop
+    /// alike): with a full queue, direct VRAM access can miss VBlank, so send VRAM writes
+    /// through the queue. A late VBlank handler defers entries; arbitrary user handler
+    /// work is outside the queue's timing budget.
     ///
     /// # Panics
     /// If a constant address is outside VRAM, a constant value does not fit a byte, or

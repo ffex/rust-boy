@@ -101,9 +101,9 @@ pub(crate) struct TileData {
     pub name: String,
     pub source: TileSource,
     pub vram_address: u16,
-    pub is_sprite: bool, // Sprites go to $8000, background to $9000
-    pub copy_at_startup: bool,
-    pub is_tilemap: bool, // Tilemaps go to $9800 or $9C00
+    pub is_sprite: bool,       // Sprites go to $8000, background to $9000
+    pub is_tilemap: bool,      // Tilemaps go to $9800 or $9C00
+    pub copy_at_startup: bool, // False for ROM-only tilemaps (add_tilemap_rom)
 }
 
 /// One of the two background tilemaps in VRAM, 32 x 32 tiles each (B19)
@@ -177,7 +177,7 @@ impl TileManager {
         let addr = self
             .sprite_tiles
             .allocate_or_panic(source.byte_len(), &what);
-        self.insert(name, source, addr, true, false)
+        self.insert(name, source, addr, true, false, true)
     }
 
     /// Add background tiles (allocated from $9000)
@@ -196,7 +196,7 @@ impl TileManager {
         let addr = self
             .background_tiles
             .allocate_or_panic(source.byte_len(), &what);
-        self.insert(name, source, addr, false, false)
+        self.insert(name, source, addr, false, false, true)
     }
 
     /// Store a blob under a new id
@@ -207,6 +207,7 @@ impl TileManager {
         vram_address: u16,
         is_sprite: bool,
         is_tilemap: bool,
+        copy_at_startup: bool,
     ) -> TileId {
         let id = TileId(self.next_id);
         self.next_id += 1;
@@ -218,7 +219,7 @@ impl TileManager {
                 vram_address,
                 is_sprite,
                 is_tilemap,
-                copy_at_startup: true,
+                copy_at_startup,
             },
         );
         id
@@ -229,6 +230,7 @@ impl TileManager {
     ///
     /// # Panics
     /// If `$9800` already has a tilemap, or `tilemap` has more than 32 rows.
+    #[track_caller]
     pub fn add_tilemap(&mut self, name: &str, tilemap: &[[u8; 32]]) -> TileId {
         self.add_tilemap_at(name, TilemapArea::Map9800, tilemap)
     }
@@ -246,51 +248,61 @@ impl TileManager {
     ///   last one created won).
     /// - If `tilemap` has more than 32 rows: a map is 32 x 32 tiles, so a 33rd row would
     ///   run into the next map, or out of VRAM.
+    #[track_caller]
     pub fn add_tilemap_at(
         &mut self,
         name: &str,
         area: TilemapArea,
         tilemap: &[[u8; 32]],
     ) -> TileId {
-        self.add_tilemap_data(name, area, tilemap, true)
+        self.add_tilemap_data(name, Some(area), tilemap)
     }
 
     /// Keep a tilemap in ROM without reserving a VRAM map or copying at startup.
     /// Multiple levels may coexist. Use [`Self::copy_tilemap`] while the LCD is off.
-    /// Empty maps are allowed; more than 32 rows panics.
+    /// Empty maps are allowed. Every map takes up to 1 KiB of the single ROM0 bank: too many
+    /// make `rgblink` fail.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, or `tilemap` has more than 32 rows.
+    #[track_caller]
     pub fn add_tilemap_rom(&mut self, name: &str, tilemap: &[[u8; 32]]) -> TileId {
-        self.add_tilemap_data(name, TilemapArea::Map9800, tilemap, false)
+        self.add_tilemap_data(name, None, tilemap)
     }
 
+    /// A tilemap copied to `area` at start-up, or kept in ROM only when `area` is `None`
+    #[track_caller]
     fn add_tilemap_data(
         &mut self,
         name: &str,
-        area: TilemapArea,
+        area: Option<TilemapArea>,
         tilemap: &[[u8; 32]],
-        copy_at_startup: bool,
     ) -> TileId {
         super::sprites::check_label("tile", name);
         if tilemap.len() > usize::from(hw::SCRN_VY_B.value) {
+            let past = match area {
+                Some(area) => format!("past {}", area),
+                None => "past the map it is copied to".to_string(),
+            };
             panic!(
-                "tilemap \"{}\" has {} rows, but a map has {}: the rows past it would run \
-                 past {}",
+                "tilemap \"{}\" has {} rows, but a map has {}: the rows past it would run {}",
                 name,
                 tilemap.len(),
                 hw::SCRN_VY_B.value,
-                area
+                past
             );
         }
-        if let Some(other) = self.tiles.values().find(|tile| {
-            copy_at_startup
-                && tile.copy_at_startup
-                && tile.is_tilemap
-                && tile.vram_address == area.address()
-        }) {
-            panic!(
-                "tilemap \"{}\": the map at {} already has the tilemap \"{}\", and both would be \
-                 copied there; put one of them at the other map with add_tilemap_at",
-                name, area, other.name
-            );
+        // B19: two start-up tilemaps on one map would overwrite each other
+        if let Some(area) = area {
+            if let Some(other) = self.tiles.values().find(|tile| {
+                tile.copy_at_startup && tile.is_tilemap && tile.vram_address == area.address()
+            }) {
+                panic!(
+                    "tilemap \"{}\": the map at {} already has the tilemap \"{}\", and both would \
+                     be copied there; put one of them at the other map with add_tilemap_at",
+                    name, area, other.name
+                );
+            }
         }
 
         // Store tilemap data as raw bytes converted to hex, 8 rows per entry
@@ -307,15 +319,16 @@ impl TileManager {
             })
             .collect();
 
-        let id = self.insert(
+        // A ROM-only map has no VRAM address: it is copied where copy_tilemap says
+        let address = area.unwrap_or_default().address();
+        self.insert(
             name,
             TileSource::Raw(converted),
-            area.address(),
+            address,
             false,
             true,
-        );
-        self.tiles.get_mut(&id).unwrap().copy_at_startup = copy_at_startup;
-        id
+            area.is_some(),
+        )
     }
 
     /// Get the startup VRAM address; ROM-only tilemaps have no address and return None.
@@ -330,9 +343,15 @@ impl TileManager {
     ///
     /// Emits a call to Memcopy (auto-included by RustBoy). Clobbers A, flags, BC,
     /// DE and HL. Call while the LCD is off: a full map exceeds VBlank's budget.
-    /// Disable the LCD during VBlank, copy levels in the main loop, then enable it.
+    /// Turn the LCD off in VBlank with [`lcd_off`](crate::stdlib::graphics::utility::lcd_off),
+    /// copy the levels, then turn it on with
+    /// [`lcd_on`](crate::stdlib::graphics::utility::lcd_on): both keep the other LCDC bits
+    /// (background and window maps, sprite size), which `turn_off_screen`/`turn_on_screen` reset.
     /// Short maps leave the destination's remaining rows unchanged.
-    /// Panics for an unknown id or an id belonging to tile graphics rather than a map.
+    ///
+    /// # Panics
+    /// For an unknown id or an id belonging to tile graphics rather than a map.
+    #[track_caller]
     pub fn copy_tilemap(&self, id: TileId, area: TilemapArea) -> Vec<Instr> {
         let tile = self
             .tiles
@@ -497,20 +516,27 @@ mod tests {
     #[test]
     fn runtime_map_operations_reject_bad_ids_and_oversized_maps() {
         let mut tiles = TileManager::new();
-        assert!(
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                || tiles.add_tilemap_rom("TooLarge", &[[0; 32]; 33])
-            ))
-            .is_err()
+        // A ROM-only map has no destination yet: the message names none
+        let message =
+            crate::engine::panic_message(|| tiles.add_tilemap_rom("TooLarge", &[[0; 32]; 33]));
+        assert_eq!(
+            message,
+            "tilemap \"TooLarge\" has 33 rows, but a map has 32: the rows past it would run \
+             past the map it is copied to"
         );
+        let message = crate::engine::panic_message(|| {
+            tiles.add_tilemap_at("TooLarge", TilemapArea::Map9C00, &[[0; 32]; 33])
+        });
+        assert!(message.ends_with("would run past $9C00"), "{message}");
         let graphic = tiles.add_background("Graphic", TileSource::from_raw(&[["$00"; 8]]));
-        assert!(
-            std::panic::catch_unwind(|| tiles.copy_tilemap(graphic, TilemapArea::Map9800)).is_err()
-        );
-        assert!(
-            std::panic::catch_unwind(|| tiles.copy_tilemap(TileId(999), TilemapArea::Map9800))
-                .is_err()
-        );
+        for id in [graphic, TileId(999)] {
+            let message =
+                crate::engine::panic_message(|| tiles.copy_tilemap(id, TilemapArea::Map9800));
+            assert_eq!(
+                message,
+                format!("tiles {:?} are not a tilemap of this program", id)
+            );
+        }
     }
 
     #[test]

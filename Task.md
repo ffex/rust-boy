@@ -268,7 +268,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       reads LCDC bit 3 at runtime; follows both configured and runtime background-map selection.
 - [x] Tilemaps kept in ROM only, to copy at runtime (branch `refactor-p3-runtime-tilemaps`):
       `TileManager::add_tilemap_rom` and `copy_tilemap`; multiple levels coexist and copy to either map.
-      Full-map copying needs the LCD off; automatic startup tilemaps retain their existing checks.
+      Full-map copying needs the LCD off (`lcd_off`/`lcd_on` keep the other LCDC bits); automatic startup tilemaps
+      retain their existing checks.
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))

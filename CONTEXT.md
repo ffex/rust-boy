@@ -242,6 +242,17 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   whole LCD-on LCDC value after init code, so `show_window` and `select_window_tilemap` act from VBlank code, not from
   init (`test_window_from_the_config_at_start_up`); a configured window cannot start hidden today.
 
+- **Runtime tilemaps** (since `refactor-p3-runtime-tilemaps`): `TileManager::add_tilemap_rom` keeps level or screen
+  maps in ROM, emitted in creation order and left out of the start-up copies: they reserve no VRAM map (`get_address`
+  returns `None`), so any number of them coexist, and the one-tilemap-per-map check of [B19](#b19) covers start-up maps
+  only. `copy_tilemap(id, area)` copies a registered map to either VRAM map with the single `Memcopy`; a full map
+  exceeds VBlank, so it runs with the LCD off. `stdlib::graphics::utility::lcd_off`/`lcd_on` flip only LCDC bit 7 and
+  keep the configured maps, sprite size and window (`turn_off_screen`/`turn_on_screen` write fixed values). Short maps
+  leave the destination's trailing rows unchanged; empty maps copy nothing. The single ROM0 bank limits how many
+  1 KiB maps fit; an overflow is an `rgblink` error. Emulator tests: two full levels into both maps with every byte
+  checked, an empty copy, a configured LCDC (BG `$9C00`, 8x16, window) kept across the copy, a short map over a full
+  one, and no blocked VRAM access.
+
 - **Tile lookup** (since `refactor-p3-tilemap-lookup`): the shared `GetTileByPixel` reads LCDC bit 3 at runtime and
   returns the tile address and index from the current background map, at `$9800` or `$9C00`. Coordinates remain map
   pixels (callers add SCX/SCY when starting from screen pixels); the calling convention is unchanged. Unit tests on the
@@ -1070,8 +1081,9 @@ start of its map, so one would replace the other), and so does a tilemap of more
 or out of VRAM from `$9C00`). **`RustBoy::set_background_tilemap(area)`** chooses the map the background shows: `build()`
 adds `| LCDCF_BG9C00` to the LCD-on value for `Map9C00` (for `Map9800`, the default, the LCDC line is unchanged: the flag
 is 0). Window support exists since `refactor-p3-window`: startup configuration and runtime positioning, map selection
-and show/hide operations. Since `refactor-p3-tilemap-lookup`, `GetTileByPixel` follows LCDC bit 3 at runtime. No
-example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
+and show/hide operations. Since `refactor-p3-tilemap-lookup`, `GetTileByPixel` follows LCDC bit 3 at runtime. Since
+`refactor-p3-runtime-tilemaps`, ROM-only tilemaps (`add_tilemap_rom`) are exempt from the one-per-map panic: they
+are not copied at start-up, and `copy_tilemap` chooses the map at runtime. No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
 and `test_a_tilemap_has_at_most_32_rows` (both failed before: no panic), `test_a_tilemap_at_9c00` (the start-up code with
 the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCDC value; linked with RGBDS).
 
@@ -1396,13 +1408,3 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
-
-### Phase 3 runtime tilemaps
-
-`refactor-p3-runtime-tilemaps` adds `TileManager::add_tilemap_rom` for multiple level/screen maps
-kept in ROM, emitted in creation order and omitted from startup copies. They reserve no VRAM
-destination (`get_address` returns `None`). `copy_tilemap(id, area)` uses the single Memcopy routine
-to copy a registered map into either VRAM map while the LCD is off; full maps exceed VBlank.
-Partial maps leave trailing rows unchanged; empty maps copy nothing. Startup maps keep B19 checks.
-Emulator coverage loads two complete levels into both maps after startup and checks every byte,
-including an empty copy and no blocked VRAM accesses.

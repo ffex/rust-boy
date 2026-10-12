@@ -1833,11 +1833,11 @@ fn rom_tilemaps_copy_multiple_levels_to_either_map_at_runtime() {
     let ready = game.vars.create_u8("wLevelReady", 0);
     let mut load = Block::new();
     load.call("WaitVBlank")
-        .emit_all(rust_boy::stdlib::graphics::utility::turn_off_screen())
+        .emit_all(rust_boy::stdlib::graphics::utility::lcd_off())
         .emit_all(game.tiles.copy_tilemap(first, TilemapArea::Map9800))
         .emit_all(game.tiles.copy_tilemap(second, TilemapArea::Map9C00))
         .emit_all(game.tiles.copy_tilemap(empty, TilemapArea::Map9800))
-        .emit_all(rust_boy::stdlib::graphics::utility::turn_on_screen())
+        .emit_all(rust_boy::stdlib::graphics::utility::lcd_on())
         .emit_all(ready.set(1));
     game.add_to_main_loop(ready.get());
     game.add_to_main_loop(IfA::eq(0, load.into_instrs()));
@@ -1855,6 +1855,52 @@ fn rom_tilemaps_copy_multiple_levels_to_either_map_at_runtime() {
         let offset = usize::from(area.address() - hw::VRAM.value);
         assert!(gb.vram()[offset..offset + 1024].iter().all(|&b| b == value));
     }
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
+
+#[test]
+fn rom_tilemap_copy_keeps_a_configured_lcdc_and_short_maps_keep_trailing_rows() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(
+        RustBoyConfig::default()
+            .background_tilemap(TilemapArea::Map9C00)
+            .sprite_size(SpriteSize::Size8x16)
+            .window(Window::new(TilemapArea::Map9800, 0, 112)),
+    );
+    let full = game.tiles.add_tilemap_rom("FullLevel", &[[11; 32]; 32]);
+    let short = game.tiles.add_tilemap_rom("ShortLevel", &[[29; 32]; 2]);
+    let ready = game.vars.create_u8("wLevelReady", 0);
+    // The LCDC value of this configuration, without any runtime copy
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    let lcdc = gb.read(hw::LCDC.value);
+    for flag in [
+        hw::LCDCF_ON,
+        hw::LCDCF_BG9C00,
+        hw::LCDCF_OBJ16,
+        hw::LCDCF_WINON,
+    ] {
+        assert_ne!(lcdc & flag.value, 0, "{}", flag.name);
+    }
+    let mut load = Block::new();
+    load.call("WaitVBlank")
+        .emit_all(rust_boy::stdlib::graphics::utility::lcd_off())
+        .emit_all(game.tiles.copy_tilemap(full, TilemapArea::Map9C00))
+        .emit_all(game.tiles.copy_tilemap(short, TilemapArea::Map9C00))
+        .emit_all(rust_boy::stdlib::graphics::utility::lcd_on())
+        .emit_all(ready.set(1));
+    game.add_to_main_loop(ready.get());
+    game.add_to_main_loop(IfA::eq(0, load.into_instrs()));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(8);
+    assert_eq!(gb.read_symbol("wLevelReady"), 1);
+    assert_eq!(gb.read(hw::LCDC.value), lcdc);
+    // The short map overwrote its 2 rows; the 30 rows after them keep the full level
+    let map = usize::from(hw::SCRN1.value - hw::VRAM.value);
+    assert!(gb.vram()[map..map + 64].iter().all(|&b| b == 29));
+    assert!(gb.vram()[map + 64..map + 1024].iter().all(|&b| b == 11));
     assert_eq!(gb.blocked_accesses().0, 0);
 }
 

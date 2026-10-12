@@ -1902,3 +1902,72 @@ fn window_init_position_override_and_disabled_default() {
     assert_eq!(gb.read(hw::WX.value), 47);
     assert_eq!(gb.read(hw::WY.value), 80);
 }
+
+#[test]
+fn get_tile_by_pixel_follows_active_background_map() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for map in [TilemapArea::Map9800, TilemapArea::Map9C00] {
+        for (x, y) in [(0u8, 0u8), (7, 7), (8, 8), (159, 143), (255, 255)] {
+            let mut game = RustBoy::with_config(RustBoyConfig::default().background_tilemap(map));
+            game.tiles
+                .add_tilemap_at("FirstMap", TilemapArea::Map9800, &[[17; 32]; 32]);
+            game.tiles
+                .add_tilemap_at("SecondMap", TilemapArea::Map9C00, &[[93; 32]; 32]);
+            let tile = game.vars.create_u8("wTile", 0);
+            let address = game.vars.create_u16("wAddress", 0);
+            let second = game.vars.create_u8("wSecondTile", 0);
+            let second_address = game.vars.create_u16("wSecondAddress", 0);
+            let mut code = Block::new();
+            code.ld(R8::B, x)
+                .ld(R8::C, y)
+                .call("GetTileByPixel")
+                .ld_addr_def_a(tile.name())
+                .ld(R8::A, R8::L)
+                .ld_addr_def_a(address.name())
+                .ld(R8::A, R8::H)
+                .ld(Mem::addr(Expr::sym(address.name()) + 1), R8::A);
+            // Switch map in the same handler: lookup follows the hardware, not config.
+            code.ld_a_addr_def(hw::LCDC)
+                .xor(hw::LCDCF_BG9C00)
+                .ld_addr_def_a(hw::LCDC)
+                .ld(R8::B, x)
+                .ld(R8::C, y)
+                .call("GetTileByPixel")
+                .ld_addr_def_a(second.name())
+                .ld(R8::A, R8::L)
+                .ld_addr_def_a(second_address.name())
+                .ld(R8::A, R8::H)
+                .ld(Mem::addr(Expr::sym(second_address.name()) + 1), R8::A)
+                .ld_a_addr_def(hw::LCDC)
+                .xor(hw::LCDCF_BG9C00)
+                .ld_addr_def_a(hw::LCDC);
+            game.on_vblank(code);
+            let mut gb = engine_rom(&game).boot();
+            assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+            gb.run_frames(2);
+            assert_eq!(
+                gb.read_symbol("wTile"),
+                if map == TilemapArea::Map9800 { 17 } else { 93 }
+            );
+            assert_eq!(
+                gb.read_symbol("wSecondTile"),
+                if map == TilemapArea::Map9800 { 93 } else { 17 }
+            );
+            let stored = gb.symbol("wAddress");
+            let actual = u16::from_le_bytes([gb.read(stored), gb.read(stored + 1)]);
+            let offset = u16::from(y / 8) * 32 + u16::from(x / 8);
+            assert_eq!(actual, map.address() + offset);
+            let other = if map == TilemapArea::Map9800 {
+                TilemapArea::Map9C00
+            } else {
+                TilemapArea::Map9800
+            };
+            let stored = gb.symbol("wSecondAddress");
+            let actual = u16::from_le_bytes([gb.read(stored), gb.read(stored + 1)]);
+            assert_eq!(actual, other.address() + offset);
+            assert_eq!(gb.blocked_accesses().0, 0);
+        }
+    }
+}

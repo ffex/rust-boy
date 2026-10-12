@@ -67,6 +67,9 @@ together: every breaking change of the refactoring is in this release, so a prog
   because WX=166 glitches on DMG. Raw coordinates are available for clipping/off-screen placement.
   Window and background share tiles/BGP and require LCDC bit 0 on DMG. `show_window(true)` writes no position: without
   a configured window, set one first. Existing output is unchanged.
+- **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
+  LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
+  or `$9C00`; map-pixel coordinates and the calling convention are unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

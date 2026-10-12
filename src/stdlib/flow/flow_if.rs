@@ -1451,6 +1451,11 @@ mod tests {
                     .ret()
                     .emit_all(routine.clone());
                 let mut cpu = TestCpu::default();
+                cpu.mem.insert(crate::hw::LCDC.name.to_string(), 0);
+                cpu.consts.insert(
+                    crate::hw::LCDCF_BG9C00.name.to_string(),
+                    crate::hw::LCDCF_BG9C00.value,
+                );
                 for a in crate::hw::SCRN0.value..crate::hw::SCRN1.value {
                     cpu.mem.insert(format!("${:04X}", a), tile_at(a));
                 }

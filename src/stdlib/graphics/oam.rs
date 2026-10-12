@@ -35,6 +35,9 @@ pub const OAM_DMA: &str = "hOAMDMA";
 /// HRAM, never run there); it ends at `OamDmaCodeEnd`
 pub const OAM_DMA_CODE: &str = "OamDmaCode";
 
+/// The label that ends the OAM DMA routine's code in ROM, after [`OAM_DMA_CODE`]
+pub const OAM_DMA_CODE_END: &str = "OamDmaCodeEnd";
+
 /// Which copy of OAM sprite code reads and writes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum OamTarget {
@@ -80,7 +83,7 @@ fn oam_dma_code() -> Vec<Instr> {
     asm.dec(R8::A);
     asm.jr_cond(Condition::NZ, ".wait");
     asm.ret();
-    asm.label(&format!("{}End", OAM_DMA_CODE));
+    asm.label(OAM_DMA_CODE_END);
     asm.into_instrs()
 }
 
@@ -100,7 +103,7 @@ pub fn oam_dma_size() -> u16 {
 /// - Clobbers: `a`, `bc`, `hl` and the flags.
 /// - Needs: the `hOAMDMA` bytes in HRAM ([`oam_dma_section`]).
 pub fn init_oam_dma() -> Routine {
-    let end = Expr::sym(format!("{}End", OAM_DMA_CODE));
+    let end = Expr::sym(OAM_DMA_CODE_END);
     let mut asm = Block::new();
     asm.comment("Copy the OAM DMA routine to HRAM: during a DMA the CPU reaches only HRAM");
     asm.label("InitOamDma");

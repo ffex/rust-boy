@@ -221,6 +221,11 @@ impl FunctionRegistry {
         self.external_symbols.contains(name)
     }
 
+    /// Whether `name` is a user function (one that replaces a builtin included)
+    pub(crate) fn is_user_function(&self, name: &str) -> bool {
+        self.by_name.contains_key(name)
+    }
+
     /// Register a user-defined function, from its body: what it needs is read from the body
     ///
     /// Registering the same name again replaces the function and keeps its position.

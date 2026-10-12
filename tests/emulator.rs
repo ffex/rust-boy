@@ -1453,25 +1453,38 @@ fn b12_sprite_moves_whatever_the_main_loop_delay() {
     if !rgbds_enabled() {
         return;
     }
-    for delay in [0, 1, 300, 1004, 1005, 1500, 2000, 2300] {
-        let mut gb = moving_sprite_rom(delay).boot();
-        gb.run_frames(10);
-        let x = gb.oam_entry(0)[1];
-        let dmas = gb.oam_dmas().len();
-        gb.run_frames(60);
-        assert_eq!(
-            gb.oam_entry(0)[1],
-            x.wrapping_add(60),
-            "delay {}: the sprite moves one pixel a frame",
-            delay
-        );
+    let delays = [0, 1, 300, 1004, 1005, 1500, 2000, 2300];
+    let runs: Vec<(u16, GameBoy, u8, usize)> = delays
+        .into_iter()
+        .map(|delay| {
+            let mut gb = moving_sprite_rom(delay).boot();
+            gb.run_frames(10);
+            let x = gb.oam_entry(0)[1];
+            let dmas = gb.oam_dmas().len();
+            gb.run_frames(60);
+            (delay, gb, x, dmas)
+        })
+        .collect();
+    // First the sprite, for every delay: before the fix it stood still from 1002 to 1007
+    let stuck: Vec<(u16, u8, u8)> = runs
+        .iter()
+        .filter(|(_, gb, x, _)| gb.oam_entry(0)[1] != x.wrapping_add(60))
+        .map(|(delay, gb, x, _)| (*delay, *x, gb.oam_entry(0)[1]))
+        .collect();
+    assert!(
+        stuck.is_empty(),
+        "the sprite did not move one pixel a frame (delay, X before, X 60 frames later): {:?}",
+        stuck
+    );
+    // Then how it got there: one OAM DMA of the shadow OAM a frame, in VBlank
+    for (delay, gb, _, dmas) in &runs {
         assert_eq!(
             gb.oam_dmas().len() - dmas,
             60,
             "delay {}: one OAM DMA a frame",
             delay
         );
-        assert_sprites_shown_by_dma_in_vblank(&gb);
+        assert_sprites_shown_by_dma_in_vblank(gb);
     }
 }
 

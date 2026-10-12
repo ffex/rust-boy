@@ -1888,3 +1888,160 @@ fn get_tile_by_pixel_follows_active_background_map() {
         }
     }
 }
+
+#[test]
+fn background_tile_animation_sequences_pause_and_restart() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for area in [TilemapArea::Map9800, TilemapArea::Map9C00] {
+        for (kind, expected) in [
+            (AnimationType::Loop, vec![0, 0, 1, 1, 2, 2, 0, 0, 1]),
+            (AnimationType::PingPong, vec![0, 0, 1, 1, 2, 2, 1, 1, 0]),
+            (AnimationType::Once, vec![0, 0, 1, 1, 2, 2, 2, 2, 2]),
+        ] {
+            let mut game = RustBoy::new();
+            game.tiles
+                .add_background("Patterns", TileSource::from_raw(&[["$00"; 8]; 3]));
+            let animator = game.create_background_animation(
+                "Water",
+                BackgroundAnimationConfig::new(
+                    area,
+                    &[(0, 0), (31, 31)],
+                    &[vec![0, 2], vec![1, 1], vec![2, 0]],
+                )
+                .delay(2)
+                .playback(kind),
+            );
+            let request = game.vars.create_u8("wRequest", 0);
+            let finished = game.vars.create_u8("wFinished", 0);
+            let mut drive = Block::new();
+            drive
+                .label("DriveAnimation")
+                .ld_a_addr_def(request.name())
+                .and(R8::A)
+                .ret_cond(Condition::Z)
+                .ld(R8::B, R8::A)
+                .xor(R8::A)
+                .ld_addr_def_a(request.name())
+                .ld(R8::A, R8::B)
+                .cp(1)
+                .jr_cond(Condition::NZ, ".pause")
+                .emit_all(animator.step())
+                .jr(".end")
+                .label(".pause")
+                .cp(2)
+                .jr_cond(Condition::NZ, ".resume")
+                .emit_all(animator.pause())
+                .jr(".end")
+                .label(".resume")
+                .cp(3)
+                .jr_cond(Condition::NZ, ".restart")
+                .emit_all(animator.resume())
+                .jr(".end")
+                .label(".restart")
+                .emit_all(animator.restart())
+                .label(".end")
+                .emit_all(animator.finished())
+                .ld_addr_def_a(finished.name())
+                .ret();
+            game.define_function("DriveAnimation", drive.into_instrs());
+            let call = game.call("DriveAnimation");
+            game.add_to_main_loop(call);
+            let rom = Rom::build(&game.build().unwrap(), &[]);
+            let mut gb = rom.boot();
+            gb.run_frames(3);
+            let address = gb.symbol(request.name());
+            for (i, &frame) in expected.iter().enumerate() {
+                gb.write_ram(address, 1);
+                gb.run_frames(2);
+                assert_eq!(gb.read(area.address()), frame, "step {i}");
+                assert_eq!(gb.read(area.address() + 1023), 2 - frame);
+            }
+            let last = *expected.last().unwrap();
+            gb.write_ram(address, 2);
+            gb.run_frames(2);
+            for _ in 0..5 {
+                gb.write_ram(address, 1);
+                gb.run_frames(2);
+                assert_eq!(gb.read(area.address()), last);
+            }
+            gb.write_ram(address, 3);
+            gb.run_frames(2);
+            gb.write_ram(address, 4);
+            gb.run_frames(2);
+            assert_eq!(gb.read_symbol("wFinished"), 0);
+            gb.write_ram(address, 1);
+            gb.run_frames(2);
+            assert_eq!(gb.read(area.address()), 0);
+            assert_eq!(gb.blocked_accesses().0, 0);
+        }
+    }
+}
+
+#[test]
+fn background_animation_resumes_a_large_frame_before_advancing() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let cells: Vec<_> = (0..300u16)
+        .map(|i| ((i % 32) as u8, (i / 32) as u8))
+        .collect();
+    let animator = game.create_background_animation(
+        "Large",
+        BackgroundAnimationConfig::new(TilemapArea::Map9C00, &cells, &[vec![7; 300], vec![9; 300]])
+            .playback(AnimationType::Once),
+    );
+    game.add_to_main_loop(animator.step());
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let mut gb = rom.boot();
+    gb.run_frames(15);
+    assert_eq!(gb.read_symbol("wBgAnimLargeFrame"), 0);
+    let cursor = u16::from(gb.read_symbol("wBgAnimLargeCursor"))
+        | u16::from(gb.read(gb.symbol("wBgAnimLargeCursor") + 1)) << 8;
+    assert!(cursor > 12 && cursor < 300);
+    gb.run_frames(50);
+    assert_eq!(gb.read_symbol("wBgAnimLargeFinished"), 1);
+    for offset in 0..300 {
+        assert_eq!(gb.read(hw::SCRN1.value + offset), 9);
+    }
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wBgAnimLargeFrame"), 1);
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
+
+#[test]
+fn background_animation_handles_single_and_256_frame_ranges() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let once = game.create_background_animation(
+        "All",
+        BackgroundAnimationConfig::new(
+            TilemapArea::Map9800,
+            &[(0, 0)],
+            &(0..=255).map(|i| vec![i]).collect::<Vec<_>>(),
+        )
+        .playback(AnimationType::Once),
+    );
+    let single = game.create_background_animation(
+        "Single",
+        BackgroundAnimationConfig::new(TilemapArea::Map9800, &[(1, 0)], &[vec![42]])
+            .delay(255)
+            .playback(AnimationType::PingPong),
+    );
+    game.add_to_main_loop(once.step())
+        .add_to_main_loop(single.step());
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let mut gb = rom.boot();
+    gb.run_frames(270);
+    assert_eq!(gb.read(hw::SCRN0.value), 255);
+    assert_eq!(gb.read_symbol("wBgAnimAllFinished"), 1);
+    assert_eq!(gb.read_symbol("wBgAnimAllFrame"), 255);
+    assert_eq!(gb.read(hw::SCRN0.value + 1), 42);
+    assert_eq!(gb.read_symbol("wBgAnimSingleFrame"), 0);
+    assert_eq!(gb.read_symbol("wBgAnimSingleFinished"), 0);
+    assert_eq!(gb.blocked_accesses().0, 0);
+}

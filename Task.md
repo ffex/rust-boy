@@ -267,7 +267,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score
-- [ ] Background tile animation
+- [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
+      loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
 
 ### Animation

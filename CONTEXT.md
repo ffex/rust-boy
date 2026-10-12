@@ -1384,3 +1384,18 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 background tile animation (`refactor-p3-bg-animation`)
+
+`stdlib::graphics::tile_animation` owns a frame state machine and queued tilemap writes.
+The engine allocates seven WRAM bytes (cursor word plus frame, timer, direction, enabled,
+finished bytes) and ROM tables for map targets and tile-ID frames. `step` is called once
+per game frame from init/main; it finishes enqueueing a frame before advancing, so queue
+backpressure cannot skip a large frame. Playback supports loop, ping-pong, and once, with
+one through 256 frames and a per-animation hold of 1..=255 calls. Pausing preserves the
+current cursor/timer, while restarting resets playback without deleting pending writes.
+The Once finished flag marks final-frame enqueue completion, not flush completion.
+Animations change tile references on either background/window map; pattern artwork is
+loaded beforehand using existing tile APIs. Multi-cell frames are not atomic: the queue
+may flush a partial frame, and slow consumers extend the hold. Handler steps are rejected
+through the queue dependency check.

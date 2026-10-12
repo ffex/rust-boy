@@ -57,6 +57,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   retain entries for the next VBlank. Queue code belongs only in init/main: handler code that reaches
   it makes `build()` return `Error::MainLoopOnly`. A full queue leaves the main loop little VBlank time
   (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
+- **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
+  and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
+  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
+  keeps the scroll: set it in init.
 - **Window** (Phase 3): optional `RustBoyConfig::window(Window::new(map, x, y))`,
   `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
   `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded

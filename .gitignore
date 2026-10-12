@@ -3,6 +3,7 @@
 /target
 
 .claude/
+.worktrees/
 
 # RGBDS build outputs
 *.o

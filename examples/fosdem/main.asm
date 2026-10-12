@@ -19,14 +19,15 @@
     ld hl, $8400
     ld bc, player_rightEnd - player_right
     call Memcopy
+    call InitOamDma
     ld a, 0
     ld b, 160
-    ld hl, _OAMRAM
+    ld hl, wShadowOAM
     .clear_oam_8:
     ld [hli], a
     dec b
     jp nz, .clear_oam_8
-    ld hl, _OAMRAM
+    ld hl, wShadowOAM
     ld a, 88
     ld [hli], a
     ld a, 88
@@ -43,6 +44,8 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
+    ld a, HIGH(wShadowOAM)
+    call hOAMDMA
     ld a, 228
     ld [rBGP], a
     ld [rOBP0], a
@@ -130,7 +133,7 @@
     ld a, [wCurKeys]
     and a, PADF_LEFT
     jp z, .check_left_end_4
-    ld a, [_OAMRAM+1]
+    ld a, [wShadowOAM+1]
     sub a, 1
     jp c, .sprite0_left_limit_end_0
     sub a, 1
@@ -138,9 +141,9 @@
     ld a, 0
     .sprite0_left_limit_store_0:
     add a, 1
-    ld [_OAMRAM+1], a
+    ld [wShadowOAM+1], a
     add a, 8
-    ld [_OAMRAM+5], a
+    ld [wShadowOAM+5], a
     .sprite0_left_limit_end_0:
     ld a, 2
     ld [wAnim_player_left_Current], a
@@ -151,7 +154,7 @@
     ld a, [wCurKeys]
     and a, PADF_RIGHT
     jp z, .check_right_end_5
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     sub a, 149
     jp nc, .sprite1_right_limit_end_1
     add a, 1
@@ -159,9 +162,9 @@
     ld a, 0
     .sprite1_right_limit_store_1:
     add a, 149
-    ld [_OAMRAM+5], a
+    ld [wShadowOAM+5], a
     sub a, 8
-    ld [_OAMRAM+1], a
+    ld [wShadowOAM+1], a
     .sprite1_right_limit_end_1:
     ld a, 3
     ld [wAnim_player_left_Current], a
@@ -172,7 +175,7 @@
     ld a, [wCurKeys]
     and a, PADF_UP
     jp z, .check_up_end_6
-    ld a, [_OAMRAM+0]
+    ld a, [wShadowOAM+0]
     sub a, 1
     jp c, .sprite0_up_limit_end_2
     sub a, 1
@@ -180,8 +183,8 @@
     ld a, 0
     .sprite0_up_limit_store_2:
     add a, 1
-    ld [_OAMRAM+0], a
-    ld [_OAMRAM+4], a
+    ld [wShadowOAM+0], a
+    ld [wShadowOAM+4], a
     .sprite0_up_limit_end_2:
     ld a, 1
     ld [wAnim_player_left_Current], a
@@ -192,7 +195,7 @@
     ld a, [wCurKeys]
     and a, PADF_DOWN
     jp z, .check_down_end_7
-    ld a, [_OAMRAM+0]
+    ld a, [wShadowOAM+0]
     sub a, 149
     jp nc, .sprite0_down_limit_end_3
     add a, 1
@@ -200,8 +203,8 @@
     ld a, 0
     .sprite0_down_limit_store_3:
     add a, 149
-    ld [_OAMRAM+0], a
-    ld [_OAMRAM+4], a
+    ld [wShadowOAM+0], a
+    ld [wShadowOAM+4], a
     .sprite0_down_limit_end_3:
     ld a, 0
     ld [wAnim_player_left_Current], a
@@ -277,8 +280,29 @@
     .done:
     ei
     ret
+    ; Copy the OAM DMA routine to HRAM: during a DMA the CPU reaches only HRAM
+    InitOamDma:
+    ld hl, OamDmaCode
+    ld b, OamDmaCodeEnd - OamDmaCode
+    ld c, LOW(hOAMDMA)
+    .copy:
+    ld a, [hli]
+    ldh [c], a
+    inc c
+    dec b
+    jr nz, .copy
+    ret
+    ; The OAM DMA routine (run from HRAM): a = the source page
+    OamDmaCode:
+    ldh [rDMA], a
+    ld a, 40
+    .wait:
+    dec a
+    jr nz, .wait
+    ret
+    OamDmaCodeEnd:
     Anim_player_left_playerWalkFront:
-    ld a, [_OAMRAM+2]
+    ld a, [wShadowOAM+2]
     cp a, 0
     jr c, .reset_playerWalkFront
     cp a, 6
@@ -287,10 +311,10 @@
     ld a, 254
     .next_playerWalkFront:
     add a, 2
-    ld [_OAMRAM+2], a
+    ld [wShadowOAM+2], a
     ret
     Anim_player_left_playerWalkBack:
-    ld a, [_OAMRAM+2]
+    ld a, [wShadowOAM+2]
     cp a, 8
     jr c, .reset_playerWalkBack
     cp a, 14
@@ -299,10 +323,10 @@
     ld a, 6
     .next_playerWalkBack:
     add a, 2
-    ld [_OAMRAM+2], a
+    ld [wShadowOAM+2], a
     ret
     Anim_player_left_playerWalkLeft:
-    ld a, [_OAMRAM+2]
+    ld a, [wShadowOAM+2]
     cp a, 16
     jr c, .reset_playerWalkLeft
     cp a, 22
@@ -311,10 +335,10 @@
     ld a, 14
     .next_playerWalkLeft:
     add a, 2
-    ld [_OAMRAM+2], a
+    ld [wShadowOAM+2], a
     ret
     Anim_player_left_playerWalkRight:
-    ld a, [_OAMRAM+2]
+    ld a, [wShadowOAM+2]
     cp a, 24
     jr c, .reset_playerWalkRight
     cp a, 30
@@ -323,10 +347,10 @@
     ld a, 22
     .next_playerWalkRight:
     add a, 2
-    ld [_OAMRAM+2], a
+    ld [wShadowOAM+2], a
     ret
     Anim_player_right_playerWalkFront:
-    ld a, [_OAMRAM+6]
+    ld a, [wShadowOAM+6]
     cp a, 64
     jr c, .reset_playerWalkFront
     cp a, 70
@@ -335,10 +359,10 @@
     ld a, 62
     .next_playerWalkFront:
     add a, 2
-    ld [_OAMRAM+6], a
+    ld [wShadowOAM+6], a
     ret
     Anim_player_right_playerWalkBack:
-    ld a, [_OAMRAM+6]
+    ld a, [wShadowOAM+6]
     cp a, 72
     jr c, .reset_playerWalkBack
     cp a, 78
@@ -347,10 +371,10 @@
     ld a, 70
     .next_playerWalkBack:
     add a, 2
-    ld [_OAMRAM+6], a
+    ld [wShadowOAM+6], a
     ret
     Anim_player_right_playerWalkLeft:
-    ld a, [_OAMRAM+6]
+    ld a, [wShadowOAM+6]
     cp a, 80
     jr c, .reset_playerWalkLeft
     cp a, 86
@@ -359,10 +383,10 @@
     ld a, 78
     .next_playerWalkLeft:
     add a, 2
-    ld [_OAMRAM+6], a
+    ld [wShadowOAM+6], a
     ret
     Anim_player_right_playerWalkRight:
-    ld a, [_OAMRAM+6]
+    ld a, [wShadowOAM+6]
     cp a, 88
     jr c, .reset_playerWalkRight
     cp a, 94
@@ -371,10 +395,12 @@
     ld a, 86
     .next_playerWalkRight:
     add a, 2
-    ld [_OAMRAM+6], a
+    ld [wShadowOAM+6], a
     ret
     VBlankHandler:
     push af
+    ld a, HIGH(wShadowOAM)
+    call hOAMDMA
     ld a, 1
     ld [wVBlankFlag], a
     pop af
@@ -387,6 +413,12 @@
     INCBIN "char-dx.2bpp"
     player_rightEnd:
 
+    SECTION "Shadow OAM", WRAM0[$CF00]
+    wShadowOAM:
+    ds 160
+    SECTION "OAM DMA", HRAM[$FFB8]
+    hOAMDMA:
+    ds 8
     SECTION "Variables", WRAM0[$C000]
     wCurKeys: db
     wNewKeys: db

@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::asm::Instr;
 use crate::asm::labels::symbols;
+use crate::stdlib::graphics::oam::init_oam_dma;
 use crate::stdlib::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
 use crate::stdlib::inputs::{check_soft_reset, update_keys};
 use crate::stdlib::interrupts::wait_frame;
@@ -44,11 +45,14 @@ pub enum BuiltinFunction {
     /// Reset the game when A, B, Select and Start are held (see
     /// `stdlib::inputs::check_soft_reset`)
     CheckSoftReset,
+    /// Copy the OAM DMA routine to HRAM, at start-up (see
+    /// `stdlib::graphics::oam::init_oam_dma`)
+    InitOamDma,
 }
 
 impl BuiltinFunction {
     /// Every builtin, in the order `build()` emits them
-    pub const ALL: [BuiltinFunction; 8] = [
+    pub const ALL: [BuiltinFunction; 9] = [
         BuiltinFunction::Memcopy,
         BuiltinFunction::WaitVBlank,
         BuiltinFunction::WaitNotVBlank,
@@ -57,6 +61,7 @@ impl BuiltinFunction {
         BuiltinFunction::Delay,
         BuiltinFunction::WaitFrame,
         BuiltinFunction::CheckSoftReset,
+        BuiltinFunction::InitOamDma,
     ];
 
     /// Get the label name for this function
@@ -70,6 +75,7 @@ impl BuiltinFunction {
             BuiltinFunction::Delay => "Delay",
             BuiltinFunction::WaitFrame => "WaitFrame",
             BuiltinFunction::CheckSoftReset => "CheckSoftReset",
+            BuiltinFunction::InitOamDma => "InitOamDma",
         }
     }
 
@@ -92,6 +98,7 @@ impl BuiltinFunction {
             BuiltinFunction::Delay => delay(),
             BuiltinFunction::WaitFrame => wait_frame(),
             BuiltinFunction::CheckSoftReset => check_soft_reset(),
+            BuiltinFunction::InitOamDma => init_oam_dma(),
         }
     }
 
@@ -113,6 +120,8 @@ pub struct UsedFunctions {
     pub code: Vec<Instr>,
     /// The variables the emitted routines need, in the order of the routines, each once
     pub variables: Vec<String>,
+    /// The names of the emitted routines, in their order
+    pub names: Vec<String>,
 }
 
 /// A function a name refers to
@@ -490,6 +499,7 @@ impl FunctionRegistry {
         let mut used = UsedFunctions {
             code: Vec::new(),
             variables: Vec::new(),
+            names: Vec::new(),
         };
         for routine in routines {
             for variable in routine.variables() {
@@ -501,6 +511,7 @@ impl FunctionRegistry {
                 }
             }
             used.code.extend(routine.body().iter().cloned());
+            used.names.push(routine.name().to_string());
         }
         Ok(used)
     }
@@ -608,9 +619,11 @@ mod tests {
     fn test_builtin_dependencies_are_complete() {
         // build() does not read a builtin's body: what it needs is its dependencies and its
         // variables. So every global symbol its body refers to must be one of them, one of its
-        // own labels, or a hardware.inc name; and a dependency must be a builtin, which
+        // own labels, or a hardware.inc name, or a block of RAM build() reserves when it emits
+        // the builtin (`hOAMDMA` for InitOamDma); and a dependency must be a builtin, which
         // build() knows by name.
         let hardware: BTreeSet<&str> = crate::hw::SYMBOLS.iter().map(|(name, _)| *name).collect();
+        let buffers = [crate::stdlib::graphics::oam::OAM_DMA];
         for builtin in BuiltinFunction::ALL {
             let routine = builtin.routine();
             let (mut refs, mut defs) = (Vec::new(), BTreeSet::new());
@@ -621,7 +634,8 @@ mod tests {
                 let known = defs.contains(&name)
                     || routine.deps().iter().any(|dep| dep.name() == name)
                     || routine.variables().contains(&name)
-                    || hardware.contains(name.as_str());
+                    || hardware.contains(name.as_str())
+                    || buffers.contains(&name.as_str());
                 assert!(known, "{}: `{}` is not a dependency", builtin.label(), name);
             }
             for dep in routine.deps() {

@@ -102,6 +102,9 @@ pub enum Definition {
     GeneratedVariable(VarType),
     /// A function `build()` generates (an animation's, `Anim_{sprite}_{animation}`)
     GeneratedFunction,
+    /// A block of RAM `build()` reserves for the code it generates (the shadow OAM
+    /// `wShadowOAM`, the OAM DMA routine `hOAMDMA`)
+    GeneratedBuffer,
     /// A symbol defined outside the generated code (`RustBoy::external_symbol`)
     ExternalSymbol,
     /// A constant or a label of the program's code (`define_const`, a `DEF` or a label in
@@ -119,6 +122,9 @@ impl fmt::Display for Definition {
             }
             Definition::GeneratedFunction => {
                 write!(f, "a function build() generates (an animation's)")
+            }
+            Definition::GeneratedBuffer => {
+                write!(f, "a block of RAM build() reserves (the shadow OAM, ...)")
             }
             Definition::ExternalSymbol => write!(
                 f,

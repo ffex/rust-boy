@@ -61,6 +61,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
   keeps the scroll: set it in init.
+- **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
+  any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
+  per-part tiles/flags and creation-order OAM priority. Composite movement and animation
+  apply to the whole group. Existing 16x16 calls retain names and generated output.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

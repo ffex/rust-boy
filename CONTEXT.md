@@ -1343,7 +1343,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no window layer, no palette API/fades, no metasprites beyond 16×16, no text/numbers (a `$9C00` map
+- **Graphics:** no window layer, no palette API/fades, arbitrary metasprites since `refactor-p3-metasprites`, no text/numbers (a `$9C00` map
   exists since [B19](#b19), without a window layer). Background scrolling exists since `refactor-p3-scrolling` (see
   §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
@@ -1379,3 +1379,14 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 arbitrary metasprites
+
+`refactor-p3-metasprites` adds `MetaspritePart` and `RustBoy::add_metasprite(name, x, y, parts)`:
+any nonempty arrangement within available OAM/VRAM, with signed offsets, per-part tiles and
+attributes, in either 8x8 or 8x16 hardware size. Part order controls OAM priority. Generated names
+are `{name}_partN`; existing 16x16 creation reuses the same constructor but preserves `_left`/`_right`
+names and unchanged example output. Position, capacity and tile/alignment errors are checked before
+registration. Existing composite movement uses the leading member at each edge and keeps every
+part at its original offset; composite animation works in both hardware sizes. Emulator tests
+exercise an irregular six-part layout, all four limits and both sprite sizes, preserving tile/flags.

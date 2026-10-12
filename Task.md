@@ -264,7 +264,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       map at start-up, and since [B19](CONTEXT.md#b19) a second tilemap on the same map panics
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
-- [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
+- [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
+      lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
+      `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation

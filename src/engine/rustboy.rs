@@ -1529,6 +1529,87 @@ impl RustBoy {
         self.sprites.add(name, tiles, x, y, flags)
     }
 
+    /// Create an arbitrary metasprite from hardware parts at offsets from screen (x, y).
+    /// Supports either configured sprite size and up to the available 40 OAM entries.
+    /// Part order is OAM priority; each part gets `{name}_partN` tile/animation labels.
+    /// Composite movement preserves the layout and tests its leading part at limits.
+    ///
+    /// # Panics
+    /// If parts are empty, names collide, tiles/OAM are full, a part has no tiles or
+    /// violates 8x16 alignment, or an offset position is outside supported screen coordinates
+    /// (X 0..=247, Y 0..=239). Invalid layout/capacity is checked before registration.
+    pub fn add_metasprite(
+        &mut self,
+        name: &str,
+        x: u8,
+        y: u8,
+        parts: &[super::sprites::MetaspritePart],
+    ) -> super::sprites::CompositeSpriteId {
+        let names: Vec<_> = (0..parts.len())
+            .map(|index| format!("{name}_part{index}"))
+            .collect();
+        self.add_metasprite_named(name, x, y, parts, &names)
+    }
+
+    fn add_metasprite_named(
+        &mut self,
+        name: &str,
+        x: u8,
+        y: u8,
+        parts: &[super::sprites::MetaspritePart],
+        names: &[String],
+    ) -> super::sprites::CompositeSpriteId {
+        self.sprites.check_composite_parts(name, names);
+        let mut next_tile = usize::from(self.tiles.next_sprite_tile());
+        let positions: Vec<_> = parts
+            .iter()
+            .map(|part| {
+                let count = part.tiles.tile_count();
+                assert!(
+                    count > 0,
+                    "metasprite {name:?} part must have at least one tile"
+                );
+                if self.sprite_size() == SpriteSize::Size8x16 {
+                    assert!(
+                        count % 2 == 0 && next_tile % 2 == 0,
+                        "metasprite {name:?} needs even tile counts and indices in 8x16 mode"
+                    );
+                }
+                next_tile = next_tile
+                    .checked_add(count)
+                    .expect("metasprite tile count overflow");
+                assert!(
+                    next_tile
+                        <= usize::from(
+                            (hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE
+                        ),
+                    "metasprite {name:?} tiles do not fit in VRAM"
+                );
+                let coordinate = |anchor: u8, offset: i16, hardware_offset: u8| {
+                    let value = i32::from(anchor) + i32::from(offset);
+                    assert!(
+                        (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
+                        "metasprite {name:?} part position is outside supported screen coordinates"
+                    );
+                    value as u8
+                };
+                (
+                    coordinate(x, part.x, hw::OAM_X_OFFSET),
+                    coordinate(y, part.y, hw::OAM_Y_OFFSET),
+                )
+            })
+            .collect();
+        let sprites = parts
+            .iter()
+            .zip(names)
+            .zip(positions)
+            .map(|((part, label), (x, y))| {
+                self.add_sprite(label, part.tiles.clone(), x, y, part.flags)
+            })
+            .collect();
+        self.sprites.create_composite(name, sprites)
+    }
+
     /// Give sprite `sprite` more tiles, from another source: frames spread over several
     /// `.2bpp` files, for example
     ///
@@ -1636,16 +1717,17 @@ impl RustBoy {
                 )
             });
 
-        // Create the left sprite
-        let left_name = format!("{}_left", name);
-        let left_sprite = self.add_sprite(&left_name, left_tiles, x, y, flags);
-
-        // Create the right sprite
-        let right_name = format!("{}_right", name);
-        let right_sprite = self.add_sprite(&right_name, right_tiles, right_x, y, flags);
-        // Group them as a composite sprite
-        self.sprites
-            .create_composite(name, vec![left_sprite, right_sprite])
+        let parts = [
+            super::sprites::MetaspritePart::new(left_tiles, 0, 0, flags),
+            super::sprites::MetaspritePart::new(right_tiles, i16::from(right_x - x), 0, flags),
+        ];
+        self.add_metasprite_named(
+            name,
+            x,
+            y,
+            &parts,
+            &[format!("{name}_left"), format!("{name}_right")],
+        )
     }
 }
 

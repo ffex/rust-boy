@@ -1819,3 +1819,116 @@ fn engine_background_scroll_init_survives_and_zero_delta_is_idle() {
     assert_eq!(gb.read(hw::SCX.value), 255);
     assert_eq!(gb.read(hw::SCY.value), 128);
 }
+
+#[test]
+fn arbitrary_metasprites_keep_irregular_layout_at_every_edge() {
+    if !rgbds_enabled() {
+        return;
+    }
+    type Move = fn(&rust_boy::engine::SpriteManager, CompositeSpriteId, u8, u8) -> Vec<Instr>;
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        for (movement, axis, increasing) in [
+            (
+                rust_boy::engine::SpriteManager::move_composite_left_limit as Move,
+                1usize,
+                false,
+            ),
+            (
+                rust_boy::engine::SpriteManager::move_composite_right_limit as Move,
+                1,
+                true,
+            ),
+            (
+                rust_boy::engine::SpriteManager::move_composite_up_limit as Move,
+                0,
+                false,
+            ),
+            (
+                rust_boy::engine::SpriteManager::move_composite_down_limit as Move,
+                0,
+                true,
+            ),
+        ] {
+            let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(size));
+            // Irregular, 32 pixels wide, with neither leading X/Y part first.
+            let offsets = [(8, 8), (-8, 0), (16, -8), (0, -8), (-8, 8), (16, 8)];
+            let count = usize::from(size.tiles_per_sprite());
+            let parts: Vec<_> = offsets
+                .iter()
+                .enumerate()
+                .map(|(index, &(x, y))| {
+                    MetaspritePart::new(
+                        TileSource::from_raw(&vec![["$ff"; 8]; count]),
+                        x,
+                        y,
+                        (index as u8) << 4,
+                    )
+                })
+                .collect();
+            let meta = game.add_metasprite("LargeActor", 80, 72, &parts);
+            assert_eq!(
+                game.sprites.get_composite_sprites(meta).unwrap().len(),
+                offsets.len()
+            );
+            let limit = if increasing { 160 } else { 32 };
+            game.add_to_main_loop(movement(&game.sprites, meta, 19, limit));
+            let mut gb = engine_rom(&game).boot();
+            assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+            let initial: Vec<_> = (0..parts.len()).map(|index| gb.oam_entry(index)).collect();
+            let lead = if increasing {
+                initial.iter().map(|entry| entry[axis]).max().unwrap()
+            } else {
+                initial.iter().map(|entry| entry[axis]).min().unwrap()
+            };
+            gb.run_frames(12);
+            for (index, before) in initial.iter().enumerate() {
+                let entry = gb.oam_entry(index);
+                assert_eq!(
+                    i16::from(entry[axis]),
+                    i16::from(limit) + i16::from(before[axis]) - i16::from(lead)
+                );
+                assert_eq!(entry[1 - axis], before[1 - axis]);
+                assert_eq!(&entry[2..], &before[2..]);
+            }
+        }
+    }
+}
+
+#[test]
+fn arbitrary_metasprite_animation_advances_every_part_in_both_sizes() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(
+            RustBoyConfig::default()
+                .sprite_size(size)
+                .animation_delay(1),
+        );
+        let stride = size.tiles_per_sprite();
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(stride) * 2]);
+        let parts: Vec<_> = (0..3)
+            .map(|i| MetaspritePart::new(tiles.clone(), i * 8, i * 8, 0u8))
+            .collect();
+        let meta = game.add_metasprite("AnimatedActor", 40, 40, &parts);
+        game.sprites
+            .add_composite_animation(meta, "Walk", 0, 1, AnimationType::Loop);
+        game.sprites.set_composite_initial_animation(meta, 0);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..8 {
+            gb.run_frames(1);
+            let first = gb.oam_entry(0)[2];
+            assert!(first == 0 || first == stride);
+            seen.insert(first);
+            for index in 0..3 {
+                let entry = gb.oam_entry(index);
+                assert_eq!(entry[2], (index as u8) * stride * 2 + first);
+                assert_eq!(entry[0], 40 + (index as u8) * 8 + hw::OAM_Y_OFFSET);
+                assert_eq!(entry[1], 40 + (index as u8) * 8 + hw::OAM_X_OFFSET);
+            }
+        }
+        assert_eq!(seen.len(), 2);
+    }
+}

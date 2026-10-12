@@ -504,3 +504,30 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Arbitrary metasprites
+
+A metasprite is a list of hardware parts relative to a screen anchor. Parts may have
+negative offsets and independent tile data/attributes. Their list order is OAM priority.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new(); // 8x8 hardware parts; 8x16 is also supported
+let tiles = TileSource::from_raw(&[["$ff"; 8]]);
+let parts = [
+    MetaspritePart::new(tiles.clone(), -8, 0, 0u8),
+    MetaspritePart::new(tiles.clone(), 0, 0, 0u8),
+    MetaspritePart::new(tiles.clone(), 8, 0, 0u8),
+    MetaspritePart::new(tiles, 0, 8, 0u8),
+];
+let actor = gb.add_metasprite("Actor", 80, 72, &parts);
+gb.add_to_main_loop(gb.sprites.move_composite_left_limit(actor, 3, hw::OAM_X_OFFSET));
+# gb.build().unwrap();
+```
+
+The leading part stops at the included OAM limit and the others keep their offsets.
+Every initial part position must fit the existing screen coordinate range (X 0..=247,
+Y 0..=239); the constructor checks layout and capacity before registration. Hardware
+parts share the configured size, and each 8x16 frame requires two aligned tiles.
+The older `add_sprite_16x16` helper keeps its existing labels and output.

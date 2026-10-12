@@ -6,6 +6,18 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
+### Tracker music (Phase 3)
+
+- `Song` imports self-contained hUGETracker 1.0.1 RGBDS exports with namespaced
+  internal symbols. `RustBoy::enable_music` embeds pinned public-domain hUGEDriver
+  6.1.1, starts a song at boot/reset and reserves 102 WRAM0 bytes through the allocator.
+- Main-frame or VBlank clocks, multiple songs, start/pause/resume/stop and SFX channel
+  reservation are available. With music enabled, `play_sfx` requires a reserved channel;
+  CH3 release invalidates the driver wave cache. An inherited audio policy becomes On.
+- `music` demonstrates offline assembly/ROM generation. Driver controls are main-only;
+  song banks must stay mapped, callbacks must not reenter controls, and complex VBlank
+  ticks can overrun its budget. Existing examples' output stays unchanged.
+
 ### Sound effects (Phase 3)
 
 - `RustBoy::play_sfx` / `stdlib::audio::play_sfx` trigger typed one-shot effects on

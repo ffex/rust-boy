@@ -52,3 +52,6 @@ pub use crate::stdlib::audio::{
     AudioConfig, Channel, Duty, Envelope, EnvelopeDirection, Mixer, NoiseEffect, NoiseWidth,
     PulseEffect, Sfx, Sweep, SweepDirection, WaveEffect, WaveLevel, WavePattern,
 };
+
+pub use crate::engine::MusicClock;
+pub use crate::stdlib::audio::music::Song;

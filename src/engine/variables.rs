@@ -455,7 +455,6 @@ impl VariableManager {
 
     /// The address of the buffer `label` ([`reserve_buffer`](Self::reserve_buffer)), where
     /// rgblink puts it; `None` for no such buffer, or one that does not fit
-    #[cfg(test)]
     pub(crate) fn buffer_address(&self, label: &str) -> Option<u16> {
         let index = self.buffers.iter().position(|b| b.label == label)?;
         self.layout().buffers[index]

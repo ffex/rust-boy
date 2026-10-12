@@ -26,7 +26,7 @@ pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};
 pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
-pub use rustboy::RustBoy;
+pub use rustboy::{MusicClock, RustBoy};
 pub use sprites::{ANIM_DISABLED, CompositeSpriteId, SpriteId, SpriteManager, SpriteSize};
 pub use tiles::{TileId, TileManager, TileSource, TilemapArea};
 pub use variables::{Var, VarId, VarType, VariableManager};

@@ -1347,7 +1347,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
-- **Audio:** opt-in power/mixer initialization and typed one-shot effects exist; music driver integration remains.
+- **Audio:** opt-in power/mixer initialization and typed one-shot effects exist; pinned hUGEDriver music integration exists.
 - **Graphics:** no window layer, no palette API/fades, no metasprites beyond 16×16, no text/numbers (a `$9C00` map
   exists since [B19](#b19), without a window layer). Background scrolling exists since `refactor-p3-scrolling` (see
   §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
@@ -1417,3 +1417,39 @@ check bounds, unique local labels in an If, and register preservation. Linked-RO
 checks verify channel register values and wave uploads, but the test emulator has
 no APU synthesis, so audible output is not verified. Music arbitration is the driver
 integration task. No existing example output changes.
+
+### Phase 3 tracker music (`refactor-p3-music`, depends on sound effects)
+
+Pinned public-domain hUGEDriver 6.1.1 (`13a26513498637baee9997bd3cad9476224db723`)
+files are vendored unchanged with upstream license/readme and checksums. The stdlib
+embeds/expands includes, modernizes legacy EQU declarations for RGBDS >=0.9,
+namespaces driver globals/macros, disables preview/GBDK branches, and turns the
+100-byte WRAM declarations into constants pointing into the engine buffer. The
+engine allocator reserves that buffer (and two zero-initialized control bytes),
+checks exhaustion/conflicts, and emits its numeric base before the driver. User
+variable addresses stay stable; generated assembly is deterministic and offline.
+`Song` imports self-contained hUGETracker 1.0.1 exports, retaining the public
+descriptor but prefixing internal labels/constants and section names. Multiple
+songs share the one driver and are emitted in insertion order. ROMX songs must
+remain mapped; banking is the later platform task.
+
+`enable_music` starts the first song before user init on cold/soft startup and
+turns inherited audio into On(default mixer), preserving explicit On/Off. Ticks
+run once per completed main frame by default, or in VBlank after DMA/queue flush
+with all registers saved. Long main frames slow music; complex VBlank ticks can
+spill beyond VBlank. Off APU skips ticks. Start pauses the consumer, silences all
+channels, initializes pointers/state, then publishes ready/playing. Pause freezes
+position and cuts only unreserved channels; stop also disarms resume; resume after
+pause continues with notes retriggered at the next note row. Reserved SFX channels
+survive pause/stop. CH3 release invalidates the wave cache before unmuting. Engine
+SFX rejects unreserved channels. User handlers reaching music controls/driver tick
+are rejected transitively; only the engine owns the consumer. Song callbacks must
+not reenter controls, and game audio writers must be serialized.
+
+Tests assemble/run multiple namespaced songs on the SM83, check note progression,
+clock modes, pause/stop/switch, APU gating, channel ownership/wave restoration,
+register preservation and injected VBlank during initialization. Exhaustion and
+symbol-conflict tests cover reserved state. The ROM test symbol parser now skips
+exported EQU constants rather than treating them as addresses (with a fixture test).
+The emulator still has no APU synthesis; audible output is not verified. The new
+music example/snapshot exercises offline generation; older snapshots are unchanged.

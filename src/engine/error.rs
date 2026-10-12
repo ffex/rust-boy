@@ -89,7 +89,8 @@ pub enum Error {
     Section(String),
     /// Code of an interrupt handler reaches a routine that only start-up and main-loop code
     /// may run: `QueueVramWrite`, since the VRAM queue has one producer (an interrupt in the
-    /// middle of the main loop's write would fill the same entry)
+    /// middle of the main loop's write would fill the same entry). Music controls also
+    /// have one owner; the engine schedules their tick and excludes user handlers.
     MainLoopOnly {
         /// The routine, e.g. `QueueVramWrite`
         routine: String,

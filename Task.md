@@ -281,7 +281,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Sound-effect API for channels 1–4 (`play_sfx`; `refactor-p3-sfx`): typed pulse/sweep,
       wave patterns/levels and noise effects, hardware one-shot length/envelope, channel stop,
       powered-off rejection; mixer and other channels preserved
-- [ ] Music: integrate a driver (e.g. hUGEDriver)
+- [x] Music: integrate a driver (`refactor-p3-music`, hUGEDriver 6.1.1 pinned/vendored
+      offline; multiple exports, allocator-accounted state, main-frame/VBlank clocks,
+      start/pause/resume/stop and channel reservation with wave-cache restoration)
 
 ### Input
 - [ ] Just-pressed (`wNewKeys`), released, and held as separate bindings

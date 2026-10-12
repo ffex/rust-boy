@@ -259,8 +259,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
       (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))
-- [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its
-      map at start-up, and since [B19](CONTEXT.md#b19) a second tilemap on the same map panics
+- [x] Tilemaps kept in ROM only, to copy at runtime (branch `refactor-p3-runtime-tilemaps`):
+      `TileManager::add_tilemap_rom` and `copy_tilemap`; multiple levels coexist and copy to either map.
+      Full-map copying needs the LCD off; automatic startup tilemaps retain their existing checks.
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))

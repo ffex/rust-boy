@@ -1378,3 +1378,13 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 runtime tilemaps
+
+`refactor-p3-runtime-tilemaps` adds `TileManager::add_tilemap_rom` for multiple level/screen maps
+kept in ROM, emitted in creation order and omitted from startup copies. They reserve no VRAM
+destination (`get_address` returns `None`). `copy_tilemap(id, area)` uses the single Memcopy routine
+to copy a registered map into either VRAM map while the LCD is off; full maps exceed VBlank.
+Partial maps leave trailing rows unchanged; empty maps copy nothing. Startup maps keep B19 checks.
+Emulator coverage loads two complete levels into both maps after startup and checks every byte,
+including an empty copy and no blocked VRAM accesses.

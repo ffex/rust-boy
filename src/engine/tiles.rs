@@ -101,7 +101,8 @@ pub(crate) struct TileData {
     pub name: String,
     pub source: TileSource,
     pub vram_address: u16,
-    pub is_sprite: bool,  // Sprites go to $8000, background to $9000
+    pub is_sprite: bool, // Sprites go to $8000, background to $9000
+    pub copy_at_startup: bool,
     pub is_tilemap: bool, // Tilemaps go to $9800 or $9C00
 }
 
@@ -217,6 +218,7 @@ impl TileManager {
                 vram_address,
                 is_sprite,
                 is_tilemap,
+                copy_at_startup: true,
             },
         );
         id
@@ -250,6 +252,23 @@ impl TileManager {
         area: TilemapArea,
         tilemap: &[[u8; 32]],
     ) -> TileId {
+        self.add_tilemap_data(name, area, tilemap, true)
+    }
+
+    /// Keep a tilemap in ROM without reserving a VRAM map or copying at startup.
+    /// Multiple levels may coexist. Use [`Self::copy_tilemap`] while the LCD is off.
+    /// Empty maps are allowed; more than 32 rows panics.
+    pub fn add_tilemap_rom(&mut self, name: &str, tilemap: &[[u8; 32]]) -> TileId {
+        self.add_tilemap_data(name, TilemapArea::Map9800, tilemap, false)
+    }
+
+    fn add_tilemap_data(
+        &mut self,
+        name: &str,
+        area: TilemapArea,
+        tilemap: &[[u8; 32]],
+        copy_at_startup: bool,
+    ) -> TileId {
         super::sprites::check_label("tile", name);
         if tilemap.len() > usize::from(hw::SCRN_VY_B.value) {
             panic!(
@@ -261,11 +280,12 @@ impl TileManager {
                 area
             );
         }
-        if let Some(other) = self
-            .tiles
-            .values()
-            .find(|tile| tile.is_tilemap && tile.vram_address == area.address())
-        {
+        if let Some(other) = self.tiles.values().find(|tile| {
+            copy_at_startup
+                && tile.copy_at_startup
+                && tile.is_tilemap
+                && tile.vram_address == area.address()
+        }) {
             panic!(
                 "tilemap \"{}\": the map at {} already has the tilemap \"{}\", and both would be \
                  copied there; put one of them at the other map with add_tilemap_at",
@@ -287,18 +307,39 @@ impl TileManager {
             })
             .collect();
 
-        self.insert(
+        let id = self.insert(
             name,
             TileSource::Raw(converted),
             area.address(),
             false,
             true,
-        )
+        );
+        self.tiles.get_mut(&id).unwrap().copy_at_startup = copy_at_startup;
+        id
     }
 
-    /// Get the VRAM address for a tile
+    /// Get the startup VRAM address; ROM-only tilemaps have no address and return None.
     pub fn get_address(&self, id: TileId) -> Option<u16> {
-        self.tiles.get(&id).map(|t| t.vram_address)
+        self.tiles
+            .get(&id)
+            .filter(|t| t.copy_at_startup)
+            .map(|t| t.vram_address)
+    }
+
+    /// Copy a registered tilemap to either VRAM map at runtime.
+    ///
+    /// Emits a call to Memcopy (auto-included by RustBoy). Clobbers A, flags, BC,
+    /// DE and HL. Call while the LCD is off: a full map exceeds VBlank's budget.
+    /// Disable the LCD during VBlank, copy levels in the main loop, then enable it.
+    /// Short maps leave the destination's remaining rows unchanged.
+    /// Panics for an unknown id or an id belonging to tile graphics rather than a map.
+    pub fn copy_tilemap(&self, id: TileId, area: TilemapArea) -> Vec<Instr> {
+        let tile = self
+            .tiles
+            .get(&id)
+            .filter(|t| t.is_tilemap)
+            .unwrap_or_else(|| panic!("tiles {:?} are not a tilemap of this program", id));
+        cp_in_memory(&tile.name, Expr::hex(area.address()))
     }
 
     /// Get the label name for a tile
@@ -403,7 +444,7 @@ impl TileManager {
         asm.into_instrs()
     }
 
-    /// Generate the code that copies every blob to VRAM, in creation order
+    /// Generate startup copies to VRAM, in creation order; skip ROM-only maps.
     ///
     /// An empty blob of raw data (`from_raw` with no tiles, a tilemap with no rows) is not
     /// copied: there is nothing to copy, so no code is spent on it (`Memcopy` itself copies
@@ -413,6 +454,7 @@ impl TileManager {
     pub(crate) fn generate_memcopy_calls(&self) -> Vec<Instr> {
         self.tiles
             .values()
+            .filter(|tile| tile.copy_at_startup)
             .filter(|tile| !matches!(&tile.source, TileSource::Raw(data) if data.is_empty()))
             .flat_map(|tile| cp_in_memory(&tile.name, Expr::hex(tile.vram_address)))
             .collect()
@@ -427,6 +469,49 @@ impl TileManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rom_maps_do_not_reserve_or_initialize_vram() {
+        let mut tiles = TileManager::new();
+        let a = tiles.add_tilemap_rom("LevelA", &[[1; 32]]);
+        tiles.add_tilemap_rom("LevelB", &[[2; 32]]);
+        assert!(tiles.generate_memcopy_calls().is_empty());
+        assert_eq!(tiles.get_address(a), None);
+        tiles.add_tilemap("Startup", &[[3; 32]]);
+        let copies: Vec<_> = tiles
+            .generate_memcopy_calls()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(copies.iter().any(|line| line.contains("Startup")));
+        assert!(!copies.iter().any(|line| line.contains("Level")));
+        let data: Vec<_> = tiles
+            .generate_tilemap_data()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(data.iter().any(|line| line == "LevelA:"));
+        assert!(data.iter().any(|line| line == "LevelB:"));
+    }
+
+    #[test]
+    fn runtime_map_operations_reject_bad_ids_and_oversized_maps() {
+        let mut tiles = TileManager::new();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || tiles.add_tilemap_rom("TooLarge", &[[0; 32]; 33])
+            ))
+            .is_err()
+        );
+        let graphic = tiles.add_background("Graphic", TileSource::from_raw(&[["$00"; 8]]));
+        assert!(
+            std::panic::catch_unwind(|| tiles.copy_tilemap(graphic, TilemapArea::Map9800)).is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| tiles.copy_tilemap(TileId(999), TilemapArea::Map9800))
+                .is_err()
+        );
+    }
 
     #[test]
     fn test_sprite_allocation() {

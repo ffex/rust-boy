@@ -1819,3 +1819,41 @@ fn engine_background_scroll_init_survives_and_zero_delta_is_idle() {
     assert_eq!(gb.read(hw::SCX.value), 255);
     assert_eq!(gb.read(hw::SCY.value), 128);
 }
+
+#[test]
+fn rom_tilemaps_copy_multiple_levels_to_either_map_at_runtime() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let first = game.tiles.add_tilemap_rom("LevelOne", &[[11; 32]; 32]);
+    let second = game.tiles.add_tilemap_rom("LevelTwo", &[[29; 32]; 32]);
+    let empty = game.tiles.add_tilemap_rom("EmptyLevel", &[]);
+    assert_eq!(game.tiles.get_address(first), None);
+    let ready = game.vars.create_u8("wLevelReady", 0);
+    let mut load = Block::new();
+    load.call("WaitVBlank")
+        .emit_all(rust_boy::stdlib::graphics::utility::turn_off_screen())
+        .emit_all(game.tiles.copy_tilemap(first, TilemapArea::Map9800))
+        .emit_all(game.tiles.copy_tilemap(second, TilemapArea::Map9C00))
+        .emit_all(game.tiles.copy_tilemap(empty, TilemapArea::Map9800))
+        .emit_all(rust_boy::stdlib::graphics::utility::turn_on_screen())
+        .emit_all(ready.set(1));
+    game.add_to_main_loop(ready.get());
+    game.add_to_main_loop(IfA::eq(0, load.into_instrs()));
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 5));
+    // ROM-only maps have not been copied by startup.
+    assert!(
+        gb.vram()[usize::from(hw::SCRN0.value - hw::VRAM.value)..]
+            .iter()
+            .all(|&b| b == 0)
+    );
+    gb.run_frames(8);
+    assert_eq!(gb.read_symbol("wLevelReady"), 1);
+    for (area, value) in [(TilemapArea::Map9800, 11), (TilemapArea::Map9C00, 29)] {
+        let offset = usize::from(area.address() - hw::VRAM.value);
+        assert!(gb.vram()[offset..offset + 1024].iter().all(|&b| b == value));
+    }
+    assert_eq!(gb.blocked_accesses().0, 0);
+}

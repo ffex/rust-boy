@@ -60,6 +60,10 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates.
+- **Runtime tilemaps** (Phase 3): `tiles.add_tilemap_rom` keeps multiple levels/screens
+  in ROM without startup copies or VRAM reservations; `tiles.copy_tilemap(id, area)`
+  loads a map into either VRAM destination using Memcopy. Copy full maps with the LCD
+  off; partial maps leave trailing rows intact. Existing startup tilemap behavior is unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

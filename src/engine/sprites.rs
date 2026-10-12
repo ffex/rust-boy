@@ -705,6 +705,7 @@ impl SpriteManager {
 
     // ==================== Composite Sprite Methods ====================
 
+    #[track_caller]
     pub(crate) fn check_composite_parts(&self, name: &str, names: &[String]) {
         check_name("composite sprite", name);
         assert!(

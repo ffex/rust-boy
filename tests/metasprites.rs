@@ -65,3 +65,31 @@ fn metasprites_are_deterministic_and_names_do_not_collide() {
     );
     assert_eq!(game.build().unwrap(), before);
 }
+
+/// The file of the panic `f` raises: `#[track_caller]` makes it the caller's
+fn panic_file(f: impl FnOnce()) -> String {
+    use std::cell::RefCell;
+    thread_local!(static FILE: RefCell<String> = const { RefCell::new(String::new()) });
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|info| {
+        let file = info
+            .location()
+            .map(|l| l.file().to_string())
+            .unwrap_or_default();
+        FILE.with(|cell| *cell.borrow_mut() = file);
+    }));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    std::panic::set_hook(previous);
+    assert!(result.is_err(), "it did not panic");
+    FILE.with(|cell| cell.borrow().clone())
+}
+
+#[test]
+fn metasprite_panics_point_at_the_caller() {
+    for parts in [vec![], vec![part(0, 0, 0)], vec![part(-81, 0, 1)]] {
+        let file = panic_file(|| {
+            RustBoy::new().add_metasprite("Bad", 80, 72, &parts);
+        });
+        assert!(file.ends_with("metasprites.rs"), "{file}");
+    }
+}

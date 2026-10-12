@@ -1629,44 +1629,42 @@ impl RustBoy {
     ) -> super::sprites::CompositeSpriteId {
         self.sprites.check_composite_parts(name, names);
         let mut next_tile = usize::from(self.tiles.next_sprite_tile());
-        let positions: Vec<_> = parts
-            .iter()
-            .map(|part| {
-                let count = part.tiles.tile_count();
+        // A loop, not a closure: the asserts must report the caller's line (#[track_caller])
+        let mut positions = Vec::with_capacity(parts.len());
+        for part in parts {
+            let count = part.tiles.tile_count();
+            assert!(
+                count > 0,
+                "metasprite {name:?} part must have at least one tile"
+            );
+            if self.sprite_size() == SpriteSize::Size8x16 {
                 assert!(
-                    count > 0,
-                    "metasprite {name:?} part must have at least one tile"
+                    count % 2 == 0 && next_tile % 2 == 0,
+                    "metasprite {name:?} needs even tile counts and indices in 8x16 mode"
                 );
-                if self.sprite_size() == SpriteSize::Size8x16 {
-                    assert!(
-                        count % 2 == 0 && next_tile % 2 == 0,
-                        "metasprite {name:?} needs even tile counts and indices in 8x16 mode"
-                    );
-                }
-                next_tile = next_tile
-                    .checked_add(count)
-                    .expect("metasprite tile count overflow");
+            }
+            next_tile = next_tile
+                .checked_add(count)
+                .expect("metasprite tile count overflow");
+            assert!(
+                next_tile
+                    <= usize::from((hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE),
+                "metasprite {name:?} tiles do not fit in VRAM"
+            );
+            let mut position = [0u8; 2];
+            for (slot, anchor, offset, hardware_offset) in [
+                (0, x, part.x, hw::OAM_X_OFFSET),
+                (1, y, part.y, hw::OAM_Y_OFFSET),
+            ] {
+                let value = i32::from(anchor) + i32::from(offset);
                 assert!(
-                    next_tile
-                        <= usize::from(
-                            (hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE
-                        ),
-                    "metasprite {name:?} tiles do not fit in VRAM"
+                    (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
+                    "metasprite {name:?} part position is outside supported screen coordinates"
                 );
-                let coordinate = |anchor: u8, offset: i16, hardware_offset: u8| {
-                    let value = i32::from(anchor) + i32::from(offset);
-                    assert!(
-                        (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
-                        "metasprite {name:?} part position is outside supported screen coordinates"
-                    );
-                    value as u8
-                };
-                (
-                    coordinate(x, part.x, hw::OAM_X_OFFSET),
-                    coordinate(y, part.y, hw::OAM_Y_OFFSET),
-                )
-            })
-            .collect();
+                position[slot] = value as u8;
+            }
+            positions.push((position[0], position[1]));
+        }
         let sprites = parts
             .iter()
             .zip(names)

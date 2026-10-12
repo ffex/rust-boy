@@ -284,8 +284,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
       lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
-- [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
-      off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
+- [x] Follow-up of the metasprites (review of #50): metasprite parts may begin partly off-screen at the left/top;
+      encoded OAM positions must remain bytes (screen X -8..=247, Y -16..=239), and OAM coordinate 0 hides that part.
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation

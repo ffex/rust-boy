@@ -339,11 +339,17 @@ impl Sprite {
     /// Write the sprite's OAM entry through `hl`, which must point at it (`ld [hli], a`,
     /// four times: Y + 16, X + 8, tile, flags); see [`draw_sprites`]
     pub fn draw(&self) -> Vec<Instr> {
+        self.draw_at_oam(self.y + hw::OAM_Y_OFFSET, self.x + hw::OAM_X_OFFSET)
+    }
+
+    /// Write this entry using already encoded OAM coordinates, allowing engine metasprites
+    /// to place a part partly outside the screen without wrapping a byte.
+    pub(crate) fn draw_at_oam(&self, y: u8, x: u8) -> Vec<Instr> {
         let mut asm = Block::new();
 
-        asm.ld_a(self.y + hw::OAM_Y_OFFSET)
+        asm.ld_a(y)
             .ld(Mem::Hli, R8::A)
-            .ld_a(self.x + hw::OAM_X_OFFSET)
+            .ld_a(x)
             .ld(Mem::Hli, R8::A)
             .ld_a(self.tile)
             .ld(Mem::Hli, R8::A)

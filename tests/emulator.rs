@@ -1895,6 +1895,27 @@ fn arbitrary_metasprites_keep_irregular_layout_at_every_edge() {
 }
 
 #[test]
+fn metasprite_parts_can_be_partly_off_screen_at_left_and_top_edges() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let tile = || TileSource::from_raw(&[["$ff"; 8]]);
+    let parts = [
+        MetaspritePart::new(tile(), -4, -4, 0),
+        MetaspritePart::new(tile(), 8, 0, 0),
+        MetaspritePart::new(tile(), -8, -16, 0),
+    ];
+    let mut game = RustBoy::new();
+    game.add_metasprite("Clipped", 0, 0, &parts);
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    assert_eq!(gb.oam_entry(0), [12, 4, 0, 0]);
+    assert_eq!(gb.oam_entry(1), [16, 16, 1, 0]);
+    assert_eq!(gb.oam_entry(2), [0, 0, 2, 0]);
+}
+
+#[test]
 fn typed_flags_reach_every_part_of_a_16x16_sprite_and_a_metasprite() {
     if !rgbds_enabled() {
         return;

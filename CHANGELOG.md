@@ -89,7 +89,8 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
   per-part tiles/flags and OAM entries in creation order. Composite movement and animation
-  apply to the whole group. Existing 16x16 calls retain names and generated output.
+  apply to the whole group. Parts may start partly off-screen at X -8 or Y -16; OAM coordinate zero hides a part.
+  Existing 16x16 calls retain names and generated output.
 - **Per-animation timing** (Phase 3): `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's
   period (1..=255). Sprites with overrides get their own clock; their other animations use the global period.
   Selection changes reset the clock, repeated enable calls keep it, disabled frames stop it. The composite setters

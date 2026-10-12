@@ -5,11 +5,11 @@ use std::collections::BTreeMap;
 use super::memory::{MemoryAllocator, MemoryRegion};
 use super::tiles::TileId;
 use crate::{
-    asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, R16Stack, is_identifier},
+    asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, R16, R16Stack, is_identifier},
     engine::animations::Animation,
     hw,
     stdlib::graphics::sprites::{
-        MoveDir, OamTarget, Sprite, draw_sprites, move_coord_limit, move_coord_var, pivot,
+        MoveDir, OamTarget, Sprite, move_coord_limit, move_coord_var, pivot,
     },
 };
 
@@ -160,8 +160,9 @@ pub(crate) struct SpriteData {
     #[cfg_attr(not(test), allow(dead_code))] // the tests check it against tile_index
     pub tile_id: TileId,
     pub oam_index: u8,
-    pub x: u8,
-    pub y: u8,
+    /// Initial screen-space coordinate; signed so metasprite parts can be partly off-screen.
+    pub x: i16,
+    pub y: i16,
     /// Tile index of the sprite's first tile, from the tile manager (B18)
     pub tile_index: u8,
     /// Number of tiles of the sprite (its frames are among them)
@@ -256,7 +257,7 @@ enum Axis {
 
 impl Axis {
     /// The sprite's initial position on this axis (screen coordinates)
-    fn position(self, sprite: &SpriteData) -> u8 {
+    fn position(self, sprite: &SpriteData) -> i16 {
         match self {
             Axis::X => sprite.x,
             Axis::Y => sprite.y,
@@ -336,14 +337,14 @@ impl SpriteManager {
     /// - In 8x16 mode, if the sprite has an odd number of tiles (the bottom half of the
     ///   last frame would be the next tile in VRAM, which is not this sprite's), or starts
     ///   on an odd tile (the hardware ignores bit 0 of the index).
-    /// - If `x` is above 247 or `y` above 239: OAM X = x + 8 and OAM Y = y + 16 are bytes.
+    /// - If `x + 8` or `y + 16` is outside the OAM byte range.
     /// - If OAM is full: it holds 40 sprites.
     pub(crate) fn add(
         &mut self,
         name: &str,
         tiles: SpriteTiles,
-        x: u8,
-        y: u8,
+        x: i16,
+        y: i16,
         flags: u8,
     ) -> SpriteId {
         check_name("sprite", name);
@@ -371,7 +372,7 @@ impl SpriteManager {
         }
         // OAM X = x + 8 and OAM Y = y + 16 are bytes (B17)
         for (axis, value, offset) in [("x", x, hw::OAM_X_OFFSET), ("y", y, hw::OAM_Y_OFFSET)] {
-            if value.checked_add(offset).is_none() {
+            if !(0..=i16::from(u8::MAX)).contains(&(value + i16::from(offset))) {
                 panic!(
                     "sprite \"{}\": {} = {} is too large: its OAM coordinate, {} + {}, must fit \
                      in a byte, so {} is at most {}",
@@ -441,7 +442,7 @@ impl SpriteManager {
             first: u8::try_from(first).expect("too many tiles for a test"),
             count: tile_count.into(),
         };
-        self.add(name, tiles, x, y, flags)
+        self.add(name, tiles, i16::from(x), i16::from(y), flags)
     }
 
     /// The tile right after the last tile of sprite `id`, where more tiles must go to
@@ -983,7 +984,7 @@ impl SpriteManager {
             .iter()
             .map(|sprite_id| self.sprite(*sprite_id))
             .collect();
-        let pos = |sprite: &SpriteData| i16::from(axis.position(sprite));
+        let pos = |sprite: &SpriteData| axis.position(sprite);
 
         // The leftmost / rightmost / topmost / lowest member; the first one on a tie
         let Some(lead) = members.iter().copied().reduce(|lead, sprite| {
@@ -1013,18 +1014,35 @@ impl SpriteManager {
     }
 
     /// Generate the code that writes every sprite to the shadow OAM, at start-up: `stdlib`'s
-    /// [`draw_sprites`], in OAM order (the shadow OAM was cleared before, with
+    /// [`crate::stdlib::graphics::sprites::draw_sprites`], in OAM order (the shadow OAM was cleared before, with
     /// `stdlib::graphics::sprites::clear_objects_screen`, and an OAM DMA copies it to OAM
     /// before the LCD is turned on)
     pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
         let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
         sorted_sprites.sort_by_key(|s| s.oam_index);
-        // `add` checked that each position fits in OAM (B17)
-        let sprites: Vec<Sprite> = sorted_sprites
-            .into_iter()
-            .map(|s| Sprite::new(s.oam_index, s.x, s.y, s.tile_index, s.flags).in_shadow_oam())
-            .collect();
-        draw_sprites(&sprites)
+        // `add` checked the encoded position (B17). Keep the same ordered HLI writes as
+        // `draw_sprites`, but use the already encoded OAM coordinates for signed positions.
+        let mut code = Block::new();
+        let mut next_entry = None;
+        for sprite in sorted_sprites {
+            if next_entry != Some(sprite.oam_index) {
+                let address = if sprite.oam_index == 0 {
+                    SHADOW.base()
+                } else {
+                    SHADOW.entry(sprite.oam_index, hw::OAMA_Y)
+                };
+                code.ld(R16::HL, address);
+            }
+            let y = u8::try_from(sprite.y + i16::from(hw::OAM_Y_OFFSET))
+                .expect("sprite OAM Y was checked when added");
+            let x = u8::try_from(sprite.x + i16::from(hw::OAM_X_OFFSET))
+                .expect("sprite OAM X was checked when added");
+            let entry = Sprite::new(sprite.oam_index, 0, 0, sprite.tile_index, sprite.flags)
+                .in_shadow_oam();
+            code.emit_all(entry.draw_at_oam(y, x));
+            next_entry = sprite.oam_index.checked_add(1);
+        }
+        code.into_instrs()
     }
 
     /// Set a sprite's runtime attributes in shadow OAM; startup attributes are unchanged.
@@ -1038,15 +1056,10 @@ impl SpriteManager {
         flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> Vec<Instr> {
         let sprite = self.sprite(id);
-        Sprite::new(
-            sprite.oam_index,
-            sprite.x,
-            sprite.y,
-            sprite.tile_index,
-            sprite.flags,
-        )
-        .in_shadow_oam()
-        .set_flags(flags)
+        let mut code = Block::new();
+        code.ld_a(flags.into().bits())
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_FLAGS));
+        code.into_instrs()
     }
 
     /// Generate movement code for a specific sprite: add the value of the variable
@@ -1410,10 +1423,14 @@ mod tests {
         let mut cpu = TestCpu::default();
         for sprite in sm.sprites.values() {
             let entry = sprite.oam_index * 4;
-            cpu.mem
-                .insert(format!("wShadowOAM+{}", entry), sprite.y + 16);
-            cpu.mem
-                .insert(format!("wShadowOAM+{}", entry + 1), sprite.x + 8);
+            cpu.mem.insert(
+                format!("wShadowOAM+{}", entry),
+                u8::try_from(sprite.y + i16::from(hw::OAM_Y_OFFSET)).unwrap(),
+            );
+            cpu.mem.insert(
+                format!("wShadowOAM+{}", entry + 1),
+                u8::try_from(sprite.x + i16::from(hw::OAM_X_OFFSET)).unwrap(),
+            );
         }
         cpu
     }

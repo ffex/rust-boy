@@ -1835,6 +1835,7 @@ fn get_tile_by_pixel_follows_active_background_map() {
             let tile = game.vars.create_u8("wTile", 0);
             let address = game.vars.create_u16("wAddress", 0);
             let second = game.vars.create_u8("wSecondTile", 0);
+            let second_address = game.vars.create_u16("wSecondAddress", 0);
             let mut code = Block::new();
             code.ld(R8::B, x)
                 .ld(R8::C, y)
@@ -1852,6 +1853,10 @@ fn get_tile_by_pixel_follows_active_background_map() {
                 .ld(R8::C, y)
                 .call("GetTileByPixel")
                 .ld_addr_def_a(second.name())
+                .ld(R8::A, R8::L)
+                .ld_addr_def_a(second_address.name())
+                .ld(R8::A, R8::H)
+                .ld(Mem::addr(Expr::sym(second_address.name()) + 1), R8::A)
                 .ld_a_addr_def(hw::LCDC)
                 .xor(hw::LCDCF_BG9C00)
                 .ld_addr_def_a(hw::LCDC);
@@ -1869,10 +1874,16 @@ fn get_tile_by_pixel_follows_active_background_map() {
             );
             let stored = gb.symbol("wAddress");
             let actual = u16::from_le_bytes([gb.read(stored), gb.read(stored + 1)]);
-            assert_eq!(
-                actual,
-                map.address() + u16::from(y / 8) * 32 + u16::from(x / 8)
-            );
+            let offset = u16::from(y / 8) * 32 + u16::from(x / 8);
+            assert_eq!(actual, map.address() + offset);
+            let other = if map == TilemapArea::Map9800 {
+                TilemapArea::Map9C00
+            } else {
+                TilemapArea::Map9800
+            };
+            let stored = gb.symbol("wSecondAddress");
+            let actual = u16::from_le_bytes([gb.read(stored), gb.read(stored + 1)]);
+            assert_eq!(actual, other.address() + offset);
             assert_eq!(gb.blocked_accesses().0, 0);
         }
     }

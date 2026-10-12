@@ -251,13 +251,18 @@ mod tests {
         (addr % 251) as u8
     }
 
-    /// A CPU whose background map at `$9800` holds [`tile_at`]
+    /// A CPU whose background maps at `$9800` and `$9C00` hold [`tile_at`], showing `$9800`
     fn cpu_with_map() -> TestCpu {
+        cpu_with_lcdc(0)
+    }
+
+    /// [`cpu_with_map`] with `rLCDC` = `lcdc`
+    fn cpu_with_lcdc(lcdc: u8) -> TestCpu {
         let mut cpu = TestCpu::default();
-        cpu.mem.insert(hw::LCDC.name.to_string(), 0);
+        cpu.mem.insert(hw::LCDC.name.to_string(), lcdc);
         cpu.consts
             .insert(hw::LCDCF_BG9C00.name.to_string(), hw::LCDCF_BG9C00.value);
-        for addr in 0x9800..0x9C00 {
+        for addr in 0x9800..0xA000 {
             cpu.mem.insert(format!("${:04X}", addr), tile_at(addr));
         }
         cpu
@@ -267,19 +272,35 @@ mod tests {
     fn test_get_tile_by_pixel_returns_the_address_and_the_tile() {
         // B23: one contract. In: b = X, c = Y (pixels). Out: hl = $9800 + (Y/8)*32 + X/8,
         // a = [hl]; de kept. (The stdlib copy did not return the tile in a.)
+        // The map is the one LCDC bit 3 selects: $9C00 when set, whatever the other bits
         let routine = get_tile_by_pixel();
         let positions = [0u8, 1, 7, 8, 9, 100, 143, 159, 255];
-        for x in positions {
-            for y in positions {
-                let mut cpu = cpu_with_map();
-                (cpu.b, cpu.c, cpu.d, cpu.e) = (x, y, 0x12, 0x34);
-                cpu.run(routine.body());
-                let addr = 0x9800 + u16::from(y / 8) * 32 + u16::from(x / 8);
-                let hl = u16::from_be_bytes([cpu.h, cpu.l]);
-                assert_eq!(hl, addr, "hl for X {} Y {}", x, y);
-                assert_eq!(cpu.a, tile_at(addr), "a for X {} Y {}", x, y);
-                assert_eq!((cpu.d, cpu.e), (0x12, 0x34), "de kept");
-                assert!(cpu.trace.is_empty(), "no writes: {:?}", cpu.trace);
+        let lcdc_on = hw::LCDCF_ON.value | hw::LCDCF_BGON.value;
+        for (lcdc, map) in [
+            (0, 0x9800u16),
+            (lcdc_on, 0x9800),
+            (hw::LCDCF_BG9C00.value, 0x9C00),
+            (lcdc_on | hw::LCDCF_BG9C00.value, 0x9C00),
+        ] {
+            for x in positions {
+                for y in positions {
+                    let mut cpu = cpu_with_lcdc(lcdc);
+                    (cpu.b, cpu.c, cpu.d, cpu.e) = (x, y, 0x12, 0x34);
+                    cpu.run(routine.body());
+                    let addr = map + u16::from(y / 8) * 32 + u16::from(x / 8);
+                    let hl = u16::from_be_bytes([cpu.h, cpu.l]);
+                    assert_eq!(hl, addr, "hl for LCDC {:#04x} X {} Y {}", lcdc, x, y);
+                    assert_eq!(
+                        cpu.a,
+                        tile_at(addr),
+                        "a for LCDC {:#04x} X {} Y {}",
+                        lcdc,
+                        x,
+                        y
+                    );
+                    assert_eq!((cpu.d, cpu.e), (0x12, 0x34), "de kept");
+                    assert!(cpu.trace.is_empty(), "no writes: {:?}", cpu.trace);
+                }
             }
         }
     }

@@ -62,7 +62,8 @@ pub(crate) const SHADOW: OamTarget = OamTarget::Shadow;
 pub struct SpriteId(pub(crate) usize);
 
 /// A hardware-sprite part of an arbitrary metasprite, relative to its screen anchor.
-/// Part order determines OAM priority; offsets may be negative.
+/// Parts take OAM entries in list order; offsets may be negative. On DMG, where parts overlap,
+/// the smaller X draws on top and OAM order only breaks ties (and picks the 10 objects of a line).
 #[derive(Debug, Clone)]
 pub struct MetaspritePart {
     /// Tiles for this part; two per frame in 8x16 mode.

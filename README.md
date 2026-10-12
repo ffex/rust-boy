@@ -195,6 +195,34 @@ arrangement of a whole composite: a 16x16 composite flipped in X mirrors each
 half in place, so swap the halves' tiles too. Change a composite's attributes per member sprite
 (`get_composite_sprites`).
 
+### Arbitrary metasprites
+
+A metasprite is a list of hardware parts relative to a screen anchor. Parts may have
+negative offsets and independent tile data/attributes. They take OAM entries in list order.
+On DMG, where two parts overlap, the one with the smaller X draws on top and the list order only breaks ties; at most 10 parts show on one line, the first ones in list order.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new(); // 8x8 hardware parts; 8x16 is also supported
+let tiles = TileSource::from_raw(&[["$ff"; 8]]);
+let parts = [
+    MetaspritePart::new(tiles.clone(), -8, 0, 0u8),
+    MetaspritePart::new(tiles.clone(), 0, 0, 0u8),
+    MetaspritePart::new(tiles.clone(), 8, 0, 0u8),
+    MetaspritePart::new(tiles, 0, 8, 0u8),
+];
+let actor = gb.add_metasprite("Actor", 80, 72, &parts);
+gb.add_to_main_loop(gb.sprites.move_composite_left_limit(actor, 3, hw::OAM_X_OFFSET));
+# gb.build().unwrap();
+```
+
+The leading part stops at the included OAM limit and the others keep their offsets.
+Every initial part position must fit the existing screen coordinate range (X 0..=247,
+Y 0..=239); the constructor checks layout and capacity before registration. Hardware
+parts share the configured size, and each 8x16 frame requires two aligned tiles.
+The older `add_sprite_16x16` helper keeps its existing labels and output.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:
@@ -487,15 +515,15 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
-  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, 16×16 composite sprites
-  (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
+  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
+  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and
   the timer, a soft reset (see [Frames and interrupts](#frames-and-interrupts-rustboy)), and routines (the builtins and
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too
   many tiles or sprites (40) panic with a clear message where they are added, as do unknown sprite ids and animation
   names; variables that do not fit in WRAM0 or HRAM make `build()` return `Error::MemoryFull` (a problem of the whole program,
   like a name defined twice: `build()` returns an `Error` for those, and a wrong call panics where it is made). The output is deterministic: things appear in the order you created them.
-- **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
+- **Known limits:** all animations share one speed,
   there is no sound yet, and the engine puts everything in one ROM bank (`asm` programs can open `ROMX` sections, but
   nothing switches banks yet). The full list, with fixes planned, is in
   [CONTEXT.md](CONTEXT.md).
@@ -556,30 +584,3 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
-
-### Arbitrary metasprites
-
-A metasprite is a list of hardware parts relative to a screen anchor. Parts may have
-negative offsets and independent tile data/attributes. Their list order is OAM priority.
-
-```rust
-use rust_boy::prelude::*;
-
-let mut gb = RustBoy::new(); // 8x8 hardware parts; 8x16 is also supported
-let tiles = TileSource::from_raw(&[["$ff"; 8]]);
-let parts = [
-    MetaspritePart::new(tiles.clone(), -8, 0, 0u8),
-    MetaspritePart::new(tiles.clone(), 0, 0, 0u8),
-    MetaspritePart::new(tiles.clone(), 8, 0, 0u8),
-    MetaspritePart::new(tiles, 0, 8, 0u8),
-];
-let actor = gb.add_metasprite("Actor", 80, 72, &parts);
-gb.add_to_main_loop(gb.sprites.move_composite_left_limit(actor, 3, hw::OAM_X_OFFSET));
-# gb.build().unwrap();
-```
-
-The leading part stops at the included OAM limit and the others keep their offsets.
-Every initial part position must fit the existing screen coordinate range (X 0..=247,
-Y 0..=239); the constructor checks layout and capacity before registration. Hardware
-parts share the configured size, and each 8x16 frame requires two aligned tiles.
-The older `add_sprite_16x16` helper keeps its existing labels and output.

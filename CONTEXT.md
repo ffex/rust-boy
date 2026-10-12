@@ -232,6 +232,16 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Arbitrary metasprites** (since `refactor-p3-metasprites`): `MetaspritePart` and `RustBoy::add_metasprite(name, x, y,
+  parts)`: any nonempty arrangement within the free OAM entries and VRAM, with signed offsets, per-part tiles and
+  attributes, in 8x8 or 8x16 hardware size. Parts take OAM entries in list order; on DMG overlapping objects are drawn
+  by smaller X first (OAM order breaks ties and picks the 10 objects of a line). Generated names are `{name}_partN`;
+  `add_sprite_16x16` reuses the same constructor with its `_left`/`_right` names and unchanged output. Positions
+  (X 0..=247, Y 0..=239), capacity and 8x16 tile alignment are checked before anything is registered. Composite
+  moves stop the leading member at the limit and keep every part's offset; composite animation works in both sizes.
+  Emulator tests: an irregular six-part layout moved towards the four limits in both sizes (tiles and flags kept),
+  animation of every part, typed flags on every part of a 16x16 sprite and of a metasprite.
+
 - **Typed sprite attributes** (since `refactor-p3-sprite-flags`): `SpriteFlags`, `ObjectPalette` and `SpritePriority`
   in `stdlib::graphics::sprites` (prelude exports). `Sprite::new`, `RustBoy::add_sprite` and `add_sprite_16x16` take
   typed flags or raw `u8` values; the raw conversion keeps every bit, the CGB ones too, and the builders set or clear
@@ -1426,14 +1436,3 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
-
-### Phase 3 arbitrary metasprites
-
-`refactor-p3-metasprites` adds `MetaspritePart` and `RustBoy::add_metasprite(name, x, y, parts)`:
-any nonempty arrangement within available OAM/VRAM, with signed offsets, per-part tiles and
-attributes, in either 8x8 or 8x16 hardware size. Part order controls OAM priority. Generated names
-are `{name}_partN`; existing 16x16 creation reuses the same constructor but preserves `_left`/`_right`
-names and unchanged example output. Position, capacity and tile/alignment errors are checked before
-registration. Existing composite movement uses the leading member at each edge and keeps every
-part at its original offset; composite animation works in both hardware sizes. Emulator tests
-exercise an irregular six-part layout, all four limits and both sprite sizes, preserving tile/flags.

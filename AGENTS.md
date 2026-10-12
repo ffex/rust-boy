@@ -105,7 +105,8 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 - Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
 - Before pushing, run what CI runs (`.github/workflows/ci.yml`): `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
-  `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`).
+  `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`),
+  and `cargo +1.85 test` too when Rust 1.85 is installed (CI's MSRV job).
 - Push the branch and open a **PR into `refactor`** (never straight into `main`), then hand it to Claude
   (below). Claude reviews, fixes and merges it. When everything is done, `refactor` → `main` is the
   final PR, which only the maintainer merges.
@@ -114,11 +115,12 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 
 ### Handoff to Claude
 
-When the PR is open and its CI checks pass locally, hand it to Claude: give the PR number, the
-branch and, for stacked PRs, the merge order. Do not push to the branch after the handoff, unless
+When the PR is open and its CI checks pass locally, hand it to Claude: give the maintainer the PR
+number, the branch and, for stacked PRs, the merge order, and leave the PR's *Independent review*
+section as "pending" (Claude also picks up open PRs marked so). Do not push to the branch after the handoff, unless
 Claude or the maintainer asks you to. If something is unfinished or uncertain, say so in the PR's
 *Risks and follow-ups* section rather than in the handoff, so the reviewer reads it independently.
-Leave the PR's *Independent review* section as "pending": Claude fills it in.
+Claude fills in the *Independent review* section.
 
 ### PR description template
 

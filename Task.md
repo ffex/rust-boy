@@ -2,7 +2,8 @@
 
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
-[`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review, fixes and merges.
+[`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review,
+fixes and merges.
 
 ## How we work
 
@@ -24,9 +25,8 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 ## Phase 0 — Housekeeping & prerequisites
 
 - [x] Create `Task.md` and `CONTEXT.md` (branch `refactor-p0-plan-docs`)
-- [x] Introduce Codex as implementer (`AGENTS.md`) and make Claude PR-review-only (`CLAUDE.md`)
-      (branch `refactor-codex-entry`); then Codex makes the first try only, and Claude reviews, fixes and
-      merges into `refactor` (branch `refactor-codex-workflow`)
+- [x] Introduce Codex (`AGENTS.md`): Codex makes the first try of a task, and Claude reviews, fixes and
+      merges into `refactor` (`CLAUDE.md`) (branches `refactor-codex-entry`, then `refactor-codex-workflow`)
 - [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
 - [x] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1) (branch `refactor-p0-fix-build`)
 - [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)

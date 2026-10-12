@@ -38,9 +38,10 @@ pub use crate::asm::{
     Asm, Block, Condition, Emittable, Expr, Instr, LabelAllocator, Mem, R8, R16, Section,
 };
 pub use crate::engine::{
-    ANIM_DISABLED, AnimationType, BuiltinFunction, Chunk, CompositeSpriteId, Definition, Error,
-    InputManager, Layout, Lcdc, MemoryRegion, Palettes, RustBoy, RustBoyConfig, SpriteId,
-    SpriteSize, TileSource, TilemapArea, Var, VarType,
+    ANIM_DISABLED, AnimationType, AssetError, BuiltinFunction, Chunk, CompositeSpriteId,
+    Definition, Error, InputManager, Layout, Lcdc, MemoryRegion, Palettes, PngColorMapping,
+    PngOptions, RustBoy, RustBoyConfig, SpriteId, SpriteSize, TileOrder, TileSource, TilemapArea,
+    Var, VarType, png_to_2bpp,
 };
 pub use crate::hw;
 pub use crate::stdlib::flow::{Call, If, IfA, IfCall, IfConst};

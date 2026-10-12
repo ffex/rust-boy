@@ -268,7 +268,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Sprite show / hide, OAM slot allocation
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation
-- [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
+- [x] PNG → 2bpp conversion in Rust (tile count derived from file size): `refactor-p3-png-assets`,
+      owned PNG/binary loaders, palette/transparency rules and 8×16 tile ordering; FOSDEM/coin migrated
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)

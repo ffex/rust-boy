@@ -27,7 +27,8 @@ into a ROM:
 your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ──rgblink──▶ main.gb ──rgbfix──▶ playable ROM
 ```
 
-- Zero Rust dependencies, edition 2024.
+- Edition 2024. The snapshot had zero Rust dependencies; `refactor-p3-png-assets` adds the pure-Rust
+  `png` decoder (0.18.1, declared MSRV 1.73) for host-side asset conversion.
 - The project is built with RGBDS 1.0 (the `.o` files once committed were object format `RGB9`). Generated code uses `0x05`-style
   constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
@@ -1384,3 +1385,24 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 PNG and binary tile assets (`refactor-p3-png-assets`)
+
+`engine::assets::png_to_2bpp` converts static PNGs into owned tile bytes, using the `png`
+crate for decompression, sample expansion, interlacing and checksums. Explicit palette
+slots map to Game Boy pixel indices; exact matching is default, nearest RGB distance is
+opt-in with deterministic ties. Fully transparent pixels map to an explicit index (zero
+by default); normalized partial alpha is rejected. Sixteen-bit samples use the high byte;
+there is no gamma correction, dithering, tile deduplication or implicit cropping/padding.
+Default tiles are row-major, with top/bottom pairing available for 8×16 sprites. Animated
+PNGs are rejected. Decoded output is limited to 64 MiB before allocating its frame.
+
+`TileSource::from_png`, `from_2bpp`, and `from_2bpp_bytes` derive tile counts and return
+`AssetError` for malformed assets. They reuse the existing Raw representation with
+little-endian DW pairs, so no enum variant/exhaustive match migration is needed. File
+paths resolve in the generating process, and loaded sources own their bytes; subsequent
+file edits cannot invalidate their VRAM allocation. The legacy `from_file(path,count)`
+still defers INCBIN to RGBDS and requires a manually correct count. FOSDEM loads its
+right half from its existing PNG (a byte-for-byte test against committed 2bpp); its left
+half and the coin use file-derived binary counts. Their snapshots expand INCBIN into
+DW data; the graphics and runtime code are unchanged.

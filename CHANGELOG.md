@@ -6,6 +6,19 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
+### PNG and binary tile assets (Phase 3)
+
+- `TileSource::from_png(path, options)` converts PNGs in Rust. `PngOptions` specifies the
+  four RGB colors, exact/nearest matching, transparent pixel index, and row-major/8×16
+  pair ordering. Partial alpha and animated PNGs are rejected.
+- `TileSource::from_2bpp(path)` and `from_2bpp_bytes(bytes)` validate complete sixteen-byte
+  tiles and derive the count. All three APIs return `AssetError` and own their data.
+  Paths resolve in the generating process; RGBDS no longer needs asset include paths.
+- Existing `from_file(path, count)` keeps its deferred INCBIN behavior and manual count.
+  No public enum variants change. FOSDEM uses its PNG and file-derived left-half count;
+  coin uses a file-derived count. Snapshots expand INCBIN into byte-equivalent DW data.
+- Host-side conversion adds the pure-Rust `png` dependency; Game Boy routines are unchanged.
+
 ### Highlights
 
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),

@@ -8,6 +8,7 @@
 //! [`Error`]).
 
 mod animations;
+pub mod assets;
 mod config;
 mod error;
 mod functions;
@@ -43,3 +44,5 @@ pub(crate) fn panic_message<R>(f: impl FnOnce() -> R) -> String {
         .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default()
 }
+
+pub use assets::{AssetError, PngColorMapping, PngOptions, TileOrder, png_to_2bpp};

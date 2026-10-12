@@ -504,3 +504,39 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### PNG and binary tile assets
+
+Use `TileSource::from_png(path, &options)` to load tile artwork directly. Palette slots
+are pixel indices 0..=3; default colors are `[255,255,255]`, `[170,170,170]`, `[85,85,85]`,
+and black. Exact matching rejects unknown colors; nearest RGB matching is explicit.
+Fully transparent pixels map to index zero by default, and partial alpha is rejected.
+
+```no_run
+use rust_boy::prelude::*;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = PngOptions::default()
+        .mapping(PngColorMapping::Nearest)
+        .tile_order(TileOrder::Sprite8x16);
+    let artwork = TileSource::from_png("player.png", &options)?;
+    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    gb.add_sprite("Player", artwork, 80, 72, 0);
+    println!("{}", gb.build()?);
+    Ok(())
+}
+```
+
+PNG dimensions must be multiples of eight; 8×16 ordering additionally requires a
+height divisible by sixteen and emits each vertical pair consecutively. Indexed,
+grayscale, RGB, alpha, and interlaced static PNGs are supported. Packed samples expand
+to 8 bits; 16-bit samples use their high byte. Mapping does not apply gamma correction,
+dithering, deduplication, padding or cropping. Animated PNGs are rejected.
+
+`png_to_2bpp(&png_bytes, &options)` returns binary bytes that you can write as a `.2bpp`
+file. `TileSource::from_2bpp(path)` reads a nonempty multiple of sixteen bytes and derives
+the count; `from_2bpp_bytes(&bytes)` does the same for memory. Loaded sources own their
+data and emit DW pairs, so no asset INCBIN include path is needed. Paths resolve relative
+to the generating program's current directory; use `CARGO_MANIFEST_DIR` for crate assets.
+All loaders return `AssetError`; allocation limits remain the tile manager's existing
+128 background / 256 sprite tiles. The legacy `from_file(path,count)` remains available
+for deferred RGBDS INCBIN, where you supply the correct count and include directory.

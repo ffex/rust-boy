@@ -160,7 +160,10 @@ pub fn get_tile_by_pixel() -> Routine {
     let mut asm = Block::new();
 
     asm.comment("Convert a pixel position to a tilemap address and read the tile there");
-    asm.comment("hl = active background map + X / 8 + (Y / 8) * 32");
+    asm.comment(&format!(
+        "hl = active background map + X / 8 + (Y / 8) * {}",
+        hw::SCRN_VX_B.value
+    ));
     asm.comment("@param b: X");
     asm.comment("@param c: Y");
     asm.comment("@return hl: tile address");

@@ -1114,7 +1114,7 @@ label, two contracts. Memcopy, WaitVBlank, WaitNotVBlank and UpdateKeys are also
 `src/bin/unbricked.rs` has a third copy. *Fix:* one routine registry.
 **Status: fixed** on `refactor-p1-builtins`. There is one `GetTileByPixel`, in `gb_std`
 (`src/stdlib/graphics/utility.rs:159`), with the contract of the `rust_boy` copy, which `unbricked_rustboy` and
-the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them);
+the `Call` doc example rely on: in, `b` = X and `c` = Y (pixels on the `$9800` map, as `get_pivot` loads them; since `refactor-p3-tilemap-lookup`, on the map LCDC bit 3 selects);
 out, `hl` = the address of the tile and `a` = the tile index (`[hl]`); it changes `bc` and the flags and keeps
 `de` (documented on the function). `BuiltinFunction::generate` (`src/engine/functions.rs:83`, the code of `BuiltinFunction::routine`, `:71`, since `refactor-p2-routines`) returns the
 `gb_std` routine for Memcopy, WaitVBlank, WaitNotVBlank, UpdateKeys and GetTileByPixel (the other four were

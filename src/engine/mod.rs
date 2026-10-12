@@ -15,6 +15,7 @@ mod inputs;
 mod layout;
 mod memory;
 mod rustboy;
+mod scenes;
 mod sprites;
 mod tiles;
 mod variables;
@@ -27,6 +28,7 @@ pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};
 pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
 pub use rustboy::RustBoy;
+pub use scenes::SceneManager;
 pub use sprites::{
     ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
 };

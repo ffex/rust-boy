@@ -13,7 +13,7 @@ use crate::stdlib::inputs::select_all_keys;
 use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
 
-use super::config::{Palettes, RustBoyConfig};
+use super::config::{Palettes, RustBoyConfig, Window};
 use super::error::Error;
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
@@ -181,7 +181,7 @@ impl RustBoy {
     /// (`LCDCF_BG9C00`) when it turns the LCD on (B19)
     ///
     /// Put a tilemap there with `tiles.add_tilemap_at`. `GetTileByPixel` (and so
-    /// `get_pivot` + `GetTileByPixel` collisions) reads the `$9800` map only.
+    /// `get_pivot` + `GetTileByPixel` collisions) reads the currently selected background map.
     pub fn set_background_tilemap(&mut self, area: TilemapArea) -> &mut Self {
         self.config.background_tilemap = area;
         self
@@ -222,6 +222,60 @@ impl RustBoy {
     /// The tilemap the background shows (see [`RustBoy::set_background_tilemap`])
     pub fn background_tilemap(&self) -> TilemapArea {
         self.config.background_tilemap
+    }
+
+    /// Configure the startup window; `None` keeps it disabled.
+    pub fn set_window(&mut self, window: Option<Window>) -> &mut Self {
+        self.config.window = window;
+        self
+    }
+
+    /// Move the window to screen pixels. Emit in init or VBlank.
+    ///
+    /// # Panics
+    /// If X is not 0..=158 or Y not 0..=143.
+    #[track_caller]
+    pub fn set_window_position(&self, x: u8, y: u8) -> Vec<Instr> {
+        crate::stdlib::graphics::window::set_position(x, y)
+    }
+
+    /// Show or hide the window, preserving the other LCDC bits. Emit in VBlank: in
+    /// [`RustBoy::init`] it has no effect, since `build()` writes the LCD-on LCDC value
+    /// (from [`RustBoyConfig::window`]) after init code.
+    /// The background/window enable bit must also be set on DMG. Showing it writes neither
+    /// its position nor its map: without a [`Window`] configured, set them first
+    /// ([`RustBoy::set_window_position`], [`RustBoy::select_window_tilemap`]), or it shows at
+    /// WX=0, WY=0 (the values after the boot ROM).
+    pub fn show_window(&self, shown: bool) -> Vec<Instr> {
+        crate::stdlib::graphics::window::set_enabled(shown)
+    }
+
+    /// Change the window map at runtime, preserving the background map. Emit in VBlank: in
+    /// [`RustBoy::init`] it has no effect (see [`RustBoy::show_window`]); choose the start-up
+    /// map with [`Window::new`].
+    pub fn select_window_tilemap(&self, area: TilemapArea) -> Vec<Instr> {
+        crate::stdlib::graphics::window::select_tilemap(area == TilemapArea::Map9C00)
+    }
+
+    /// Write a DMG palette at runtime. Emit in init or VBlank for stable frames.
+    /// Changes A only; startup palettes are configured separately with set_palettes.
+    pub fn set_palette(
+        &self,
+        register: crate::stdlib::graphics::palette::PaletteRegister,
+        palette: impl Into<crate::stdlib::graphics::palette::Palette>,
+    ) -> Vec<Instr> {
+        crate::stdlib::graphics::palette::set_palette(register, palette)
+    }
+
+    /// Apply a nonblocking palette fade using A as progress (0..=3; >=3 completes).
+    /// Emit in VBlank after loading your progress variable. Changes A and flags only:
+    /// A holds the palette byte afterwards, so load the progress again before the next fade.
+    pub fn fade_palette(
+        &self,
+        register: crate::stdlib::graphics::palette::PaletteRegister,
+        fade: crate::stdlib::graphics::palette::PaletteFade,
+    ) -> Vec<Instr> {
+        fade.emit(self.labels(), register)
     }
 
     /// Define a constant value
@@ -794,6 +848,11 @@ impl RustBoy {
             .filter(|interrupt| self.has_handler(*interrupt))
             .collect();
         finish.emit_all(interrupts::set_enabled(&enabled));
+        if let Some(window) = self.config.window {
+            finish.emit_all(crate::stdlib::graphics::window::set_position_raw(
+                window.wx, window.wy,
+            ));
+        }
         finish.emit_all(self.init_code.clone());
         finish.emit_all(self.raw_chunk(Chunk::Init));
 
@@ -810,6 +869,12 @@ impl RustBoy {
         lcdc = lcdc | self.sprites.size().lcdc_flag();
         if self.config.background_tilemap != TilemapArea::Map9800 {
             lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
+        }
+        if let Some(window) = self.config.window {
+            lcdc = lcdc | hw::LCDCF_WINON;
+            if window.tilemap == TilemapArea::Map9C00 {
+                lcdc = lcdc | hw::LCDCF_WIN9C00;
+            }
         }
         finish.ld(R8::A, lcdc);
         finish.ld_addr_def_a(hw::LCDC);
@@ -3862,6 +3927,37 @@ mod tests {
         assert_eq!(lcdc_on(&out), "ld a, LCDCF_ON | LCDCF_OBJON | LCDCF_OBJ8");
     }
 
+    #[test]
+    fn test_window_from_the_config_at_start_up() {
+        // The start-up code on the test CPU: WX/WY before user init, the window bits in the
+        // LCD-on value. LCDC writes of init code are replaced by that value (documented on
+        // `show_window`): a configured window hidden in init shows anyway.
+        for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
+            let mut gb =
+                RustBoy::with_config(RustBoyConfig::default().window(Window::new(map, 40, 112)));
+            gb.init(gb.show_window(false));
+            let (code, mut cpu) = startup(&mut gb);
+            cpu.stubs.insert("Memcopy".to_string());
+            cpu.consts.retain(|text, _| !text.contains('|'));
+            for flag in [
+                hw::LCDCF_ON,
+                hw::LCDCF_BGON,
+                hw::LCDCF_OBJON,
+                hw::LCDCF_OBJ8,
+                hw::LCDCF_WINON,
+                hw::LCDCF_WIN9C00,
+            ] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.consts
+                .insert("LOW(~LCDCF_WINON)".to_string(), !hw::LCDCF_WINON.value);
+            cpu.run(&code);
+            assert_mem(&cpu, "rWX", 47);
+            assert_mem(&cpu, "rWY", 112);
+            assert_mem(&cpu, "rLCDC", 0x83 | 0x20 | map_bit);
+        }
+    }
+
     // ==================== Variable addresses and HRAM ====================
 
     use crate::asm::label_check::rgbds_rom_and_symbols;
@@ -4519,6 +4615,9 @@ mod tests {
             (BLANK_TILE, [0, 0]),
         ] {
             let mut cpu = TestCpu::default();
+            cpu.mem.insert(hw::LCDC.name.to_string(), 0);
+            cpu.consts
+                .insert(hw::LCDCF_BG9C00.name.to_string(), hw::LCDCF_BG9C00.value);
             cpu.mem.insert("wShadowOAM+4".to_string(), 57);
             cpu.mem.insert("wShadowOAM+5".to_string(), 48);
             cpu.mem.insert(map(hit), tile);

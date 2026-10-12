@@ -212,6 +212,34 @@ no more VBlank left than the main loop.
 `stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
 Programs that never request the queue emit no queue code or storage.
 
+## Palettes and fades (`RustBoy`)
+
+DMG palettes map four colour indices to shades. The background and window share BGP;
+object index 0 stays transparent. Startup `Palettes` still accepts hardware bytes.
+Use typed palettes for runtime writes and `PaletteFade` for nonblocking fade-in/out:
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let step = gb.vars.create_u8("wFadeProgress", 0);
+let fade = PaletteFade::fade_in(Palette::default(), Shade::White);
+let mut apply = Block::new();
+apply.emit_all(step.get())
+    .emit_all(gb.fade_palette(PaletteRegister::Background, fade));
+gb.on_vblank(apply);
+// Advance wFadeProgress from 0 to 3 at your chosen frame interval.
+// Values >=3 keep the final palette; reset to 0 to restart.
+# gb.build().unwrap();
+```
+
+`PaletteFade::fade_out(palette, Shade::Black)` fades to black; either direction also
+supports white or grey. Runtime snippets change A and flags only; a direct
+`gb.set_palette(register, palette)` write preserves flags. Emit in init or VBlank
+for a stable whole-frame palette. Each colour moves at most one shade per stage.
+A fade leaves the palette byte in A, not the progress: to fade several registers,
+load the progress again before each `fade_palette`.
+
 ## Low level (`asm`)
 
 The same building blocks the engine uses, one instruction at a time. An `Asm` is a program: it is printed in the
@@ -434,7 +462,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM and HRAM
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), runtime palette
+  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, 16×16 composite sprites
   (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and

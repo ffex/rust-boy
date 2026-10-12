@@ -330,7 +330,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
 - [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
 - [ ] RNG
-- [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
+- [x] Sprite-vs-sprite AABB checks (branch `refactor-p3-aabb-collision`): `Aabb::overlaps` uses
+      screen-coordinate snippets and half-open rectangle edges; edge contact is not a hit.
+- [ ] Generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /

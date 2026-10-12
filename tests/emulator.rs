@@ -921,6 +921,33 @@ fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
 }
 
+#[test]
+fn aabb_collision_uses_half_open_edges_on_the_gameboy() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    for (other_x, other_y, expected) in [(17, 10, 1), (18, 10, 0), (10, 18, 0), (9, 10, 1)] {
+        let mut game = RustBoy::new();
+        let ax = game.vars.create_u8("wRectAX", 10);
+        let ay = game.vars.create_u8("wRectAY", 10);
+        let bx = game.vars.create_u8("wRectBX", other_x);
+        let by = game.vars.create_u8("wRectBY", other_y);
+        let hit = game.vars.create_u8("wRectHit", 0);
+        let a = Aabb::new(ax.get(), ay.get(), 8, 8);
+        let b = Aabb::new(bx.get(), by.get(), 8, 8);
+        game.add_to_main_loop(a.overlaps(&b, hit.set(1)));
+
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(2);
+        assert_eq!(
+            gb.read_symbol("wRectHit"),
+            expected,
+            "other rect at ({other_x}, {other_y})"
+        );
+    }
+}
+
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a
 /// `halt`
 fn halted_share(gb: &mut GameBoy, frames: u64, samples: u64) -> f64 {

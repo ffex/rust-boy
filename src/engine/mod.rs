@@ -8,6 +8,7 @@
 //! [`Error`]).
 
 mod animations;
+mod collision;
 mod config;
 mod error;
 mod functions;
@@ -20,6 +21,7 @@ mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
+pub use collision::Aabb;
 pub use config::{Lcdc, Palettes, RustBoyConfig, Window};
 pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;

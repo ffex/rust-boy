@@ -916,6 +916,7 @@ impl SpriteManager {
 
     // ==================== Composite Sprite Methods ====================
 
+    #[track_caller]
     pub(crate) fn check_composite_parts(&self, name: &str, names: &[String]) {
         check_name("composite sprite", name);
         assert!(
@@ -1374,6 +1375,10 @@ impl SpriteManager {
     }
 
     /// Generate the main loop animation code with frame-based timing
+    ///
+    /// This is the shared-clock dispatcher, for programs where no animation has a period of
+    /// its own; otherwise the per-sprite one, `generate_independent_animation_calls`, is
+    /// generated instead (its labels are listed there).
     /// Uses wFrameCounter for non-blocking animation updates
     /// - Increments frame counter each frame
     /// - Only updates animations when counter >= delay
@@ -1456,8 +1461,14 @@ impl SpriteManager {
         asm.into_instrs()
     }
 
-    // Preserve BC while keeping the shared-clock predicate in C across the existing
-    // AF-only animation functions. B holds the selected animation on a timed sprite.
+    /// The dispatcher when an animation has a period of its own: the global `wFrameCounter`
+    /// still sets the shared tick (kept in C), and a timed sprite has `wAnim_{name}_Timer`,
+    /// reset when its selection (`wAnim_{name}_Current` against `wAnim_{name}_Previous`) changes.
+    /// BC is preserved around the AF-only animation functions; B holds a timed sprite's selection.
+    ///
+    /// Its labels are local: `.anim_global_not_due_N`, `.anim_sprite_end_N` after a sprite's
+    /// part, `.anim_selection_same_N` (timed sprites) and `.anim_selection_skip_N` after an
+    /// animation's call.
     fn generate_independent_animation_calls(
         &self,
         labels: &LabelAllocator,

@@ -900,6 +900,79 @@ impl SpriteManager {
         draw_sprites(&sprites)
     }
 
+    /// Hide this sprite by setting shadow OAM Y=0. Tile/flags/X are kept.
+    /// Show it again with show_at; moving its Y can make it visible again.
+    pub fn hide(&self, id: SpriteId) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        Sprite::new(
+            sprite.oam_index,
+            sprite.x,
+            sprite.y,
+            sprite.tile_index,
+            sprite.flags,
+        )
+        .in_shadow_oam()
+        .hide()
+    }
+
+    /// Show/place this sprite at screen pixels, keeping tile/flags. Changes A only.
+    /// Panics for an unknown id or a position outside X 0..=247/Y 0..=239.
+    pub fn show_at(&self, id: SpriteId, x: u8, y: u8) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        Sprite::new(
+            sprite.oam_index,
+            sprite.x,
+            sprite.y,
+            sprite.tile_index,
+            sprite.flags,
+        )
+        .in_shadow_oam()
+        .show_at(x, y)
+    }
+
+    /// Hide all composite parts by setting their shadow OAM Y to zero.
+    pub fn hide_composite(&self, id: CompositeSpriteId) -> Vec<Instr> {
+        self.composite(id)
+            .sprites
+            .iter()
+            .flat_map(|&id| self.hide(id))
+            .collect()
+    }
+
+    /// Show/place a composite with its first registered part at screen (x, y), preserving
+    /// the original offsets and every tile/attribute. Changes A only.
+    pub fn show_composite_at(&self, id: CompositeSpriteId, x: u8, y: u8) -> Vec<Instr> {
+        let members = &self.composite(id).sprites;
+        let first = self.sprite(members[0]);
+        members
+            .iter()
+            .flat_map(|&id| {
+                let sprite = self.sprite(id);
+                let coordinate = |anchor: u8, value: u8, first: u8| {
+                    u8::try_from(i16::from(anchor) + i16::from(value) - i16::from(first))
+                        .expect("composite part position is outside screen coordinate range")
+                };
+                self.show_at(
+                    id,
+                    coordinate(x, sprite.x, first.x),
+                    coordinate(y, sprite.y, first.y),
+                )
+            })
+            .collect()
+    }
+
+    pub(crate) fn reserve_pool_slots(&mut self, count: u8) -> u8 {
+        assert!(
+            count > 0 && count <= hw::OAM_COUNT.value,
+            "invalid sprite pool capacity"
+        );
+        let address = self
+            .oam
+            .allocate(u16::from(count) * u16::from(hw::OAM_ENTRY_SIZE.value))
+            .expect("sprite pool does not fit in available OAM");
+        ((address - hw::OAMRAM.value) / u16::from(hw::OAM_ENTRY_SIZE.value)) as u8
+    }
+
     /// Generate movement code for a specific sprite: add the value of the variable
     /// `var_name` to its X (changes `a`, `b` and the flags)
     ///
@@ -1014,7 +1087,7 @@ impl SpriteManager {
 
     /// Check if any sprites have been added
     pub fn is_empty(&self) -> bool {
-        self.sprites.is_empty()
+        self.oam.current_address() == hw::OAMRAM.value
     }
 
     /// Check if any animations have been added to any sprite

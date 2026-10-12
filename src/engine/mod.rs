@@ -15,7 +15,9 @@ mod inputs;
 mod layout;
 mod memory;
 mod rustboy;
+mod sprite_pool;
 mod sprites;
+pub use sprite_pool::SpritePool;
 mod tiles;
 mod variables;
 

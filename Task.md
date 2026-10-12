@@ -265,7 +265,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
-- [ ] Sprite show / hide, OAM slot allocation
+- [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
+      static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
+      with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
+      operations with carry. Pools have a single init/main producer and handler use is rejected.
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)

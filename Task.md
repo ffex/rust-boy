@@ -298,9 +298,12 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Music: integrate a driver (e.g. hUGEDriver)
 
 ### Input
-- [ ] Just-pressed (`wNewKeys`), released, and held as separate bindings
-- [ ] Auto-repeat
-- [ ] Multiple bindings for the same button
+- [x] Just-pressed (`wNewKeys`), released (`wReleasedKeys`), and held as separate bindings
+      (`InputManager::on_just_pressed`, `on_release`, and `on_held`; `on_press` remains a
+      backwards-compatible alias for held actions)
+- [x] Auto-repeat (`on_repeat(button, delay, interval, action)` runs on press immediately,
+      then after the delay and at each interval while held; counters are per binding)
+- [x] Multiple bindings for the same button (all bindings run in registration order)
 
 ### Engine
 - [x] VBlank interrupt + `halt` main loop (instead of busy-polling `LY`) (branch `refactor-p3-interrupts`: the vector

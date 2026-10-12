@@ -1,103 +1,176 @@
-//! Input manager for handling Game Boy controller input
-//!
-//! Provides a high-level API for binding button presses to actions.
+//! Input manager for handling Game Boy controller input.
 
-use crate::asm::{Instr, LabelAllocator};
-use crate::stdlib::inputs::{PadButton, check_key};
+use crate::asm::{Block, Condition, Instr, LabelAllocator, R8};
+use crate::stdlib::inputs::{PadButton, check_key_state};
 
-/// A registered input binding
+enum BindingKind {
+    Held,
+    JustPressed,
+    Released,
+    Repeat { delay: u8, interval: u8 },
+}
+
 struct InputBinding {
     button: PadButton,
     action: Vec<Instr>,
+    kind: BindingKind,
 }
 
-/// Manages input handling for the game
-///
-/// The InputManager provides a clean API for registering button actions.
-/// When built, it automatically:
-/// 1. Calls UpdateKeys to poll the controller
-/// 2. Checks each registered button
-/// 3. Executes the associated action when pressed
-///
-/// # Example
-/// ```ignore
-/// let mut inputs = InputManager::new();
-/// inputs.on_press(PadButton::Left, gb.sprites.move_left_limit(paddle, 1, 16));
-/// inputs.on_press(PadButton::Right, gb.sprites.move_right_limit(paddle, 1, 104));
-/// gb.add_inputs(inputs);
-/// ```
+/// Registers actions for held, newly pressed, released, or repeating buttons.
 #[derive(Default)]
 pub struct InputManager {
     bindings: Vec<InputBinding>,
 }
 
 impl InputManager {
-    /// Create a new InputManager
+    /// Create a new input manager.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Register an action to execute when a button is pressed
-    ///
-    /// # Arguments
-    /// * `button` - The button to check
-    /// * `action` - Instructions to execute when the button is pressed
+    /// Run `action` every frame while `button` is held. This preserves the original
+    /// behavior of `on_press`; use [`on_just_pressed`](Self::on_just_pressed) for an edge.
     pub fn on_press(&mut self, button: PadButton, action: Vec<Instr>) -> &mut Self {
-        self.bindings.push(InputBinding { button, action });
+        self.push(button, action, BindingKind::Held)
+    }
+
+    /// Run `action` every frame while `button` is held.
+    pub fn on_held(&mut self, button: PadButton, action: Vec<Instr>) -> &mut Self {
+        self.push(button, action, BindingKind::Held)
+    }
+
+    /// Run `action` only on the frame `button` transitions from up to down.
+    pub fn on_just_pressed(&mut self, button: PadButton, action: Vec<Instr>) -> &mut Self {
+        self.push(button, action, BindingKind::JustPressed)
+    }
+
+    /// Run `action` only on the frame `button` transitions from down to up.
+    pub fn on_release(&mut self, button: PadButton, action: Vec<Instr>) -> &mut Self {
+        self.push(button, action, BindingKind::Released)
+    }
+
+    /// Run `action` immediately on press, then after `delay` held frames and every
+    /// `interval` held frames. Both frame counts must be in `1..=255`.
+    #[track_caller]
+    pub fn on_repeat(
+        &mut self,
+        button: PadButton,
+        delay: u8,
+        interval: u8,
+        action: Vec<Instr>,
+    ) -> &mut Self {
+        assert!(delay > 0, "repeat delay must be in 1..=255");
+        assert!(interval > 0, "repeat interval must be in 1..=255");
+        self.push(button, action, BindingKind::Repeat { delay, interval })
+    }
+
+    fn push(&mut self, button: PadButton, action: Vec<Instr>, kind: BindingKind) -> &mut Self {
+        self.bindings.push(InputBinding {
+            button,
+            action,
+            kind,
+        });
         self
     }
 
-    /// Check if any bindings have been registered
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
     }
 
-    /// Generate the input handling code, with local labels numbered by `labels`
-    ///
-    /// This does NOT include the UpdateKeys call - that is handled by RustBoy
-    /// to ensure the function is properly registered as used.
-    pub(crate) fn generate_code(&self, labels: &LabelAllocator) -> Vec<Instr> {
-        let mut instrs = Vec::new();
+    pub(crate) fn binding_count(&self) -> usize {
+        self.bindings.len()
+    }
 
-        for binding in &self.bindings {
-            instrs.extend(check_key(labels, binding.button, binding.action.clone()));
+    pub(crate) fn generate_code(&self, labels: &LabelAllocator, first_id: usize) -> Vec<Instr> {
+        let mut out = Vec::new();
+        for (index, binding) in self.bindings.iter().enumerate() {
+            match binding.kind {
+                BindingKind::Held => out.extend(check_key_state(
+                    labels,
+                    binding.button,
+                    "wCurKeys",
+                    binding.action.clone(),
+                )),
+                BindingKind::JustPressed => out.extend(check_key_state(
+                    labels,
+                    binding.button,
+                    "wNewKeys",
+                    binding.action.clone(),
+                )),
+                BindingKind::Released => out.extend(check_key_state(
+                    labels,
+                    binding.button,
+                    "wReleasedKeys",
+                    binding.action.clone(),
+                )),
+                BindingKind::Repeat { delay, interval } => {
+                    let id = first_id + index;
+                    let new_stem = format!("input_repeat_new_{id}");
+                    let held_stem = format!("input_repeat_held_{id}");
+                    let done_stem = format!("input_repeat_done_{id}");
+                    let [new, held, done] =
+                        labels.locals([new_stem.as_str(), held_stem.as_str(), done_stem.as_str()]);
+                    let state = format!("wInputRepeat_{id}");
+                    let mut code = Block::new();
+                    code.ld_a_addr_def("wNewKeys").and(binding.button.flag());
+                    code.jp_cond(Condition::NZ, &new);
+                    code.ld_a_addr_def("wCurKeys").and(binding.button.flag());
+                    code.jp_cond(Condition::NZ, &held);
+                    code.xor(R8::A).ld_addr_def_a(&state).jp(&done);
+                    code.label(&held);
+                    code.ld_a_addr_def(&state).dec(R8::A).ld_addr_def_a(&state);
+                    code.jp_cond(Condition::NZ, &done);
+                    code.ld_a(interval).ld_addr_def_a(&state);
+                    code.emit_all(binding.action.clone());
+                    code.jp(&done);
+                    code.label(&new).ld_a(delay).ld_addr_def_a(&state);
+                    code.emit_all(binding.action.clone());
+                    code.jp(&done);
+                    code.label(&done);
+                    out.extend(code.into_instrs());
+                }
+            }
         }
+        out
+    }
 
-        instrs
+    pub(crate) fn repeat_variable_names(&self, first_id: usize) -> Vec<String> {
+        self.bindings
+            .iter()
+            .enumerate()
+            .filter(|(_, binding)| matches!(binding.kind, BindingKind::Repeat { .. }))
+            .map(|(index, _)| format!("wInputRepeat_{}", first_id + index))
+            .collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asm::Block;
 
     #[test]
-    fn test_new_input_manager() {
-        let inputs = InputManager::new();
-        assert!(inputs.is_empty());
-    }
-
-    #[test]
-    fn test_on_press() {
+    fn bindings_keep_same_button_actions_and_allocate_repeat_state() {
         let mut inputs = InputManager::new();
-        let mut asm = Block::new();
-        asm.ret();
-
-        inputs.on_press(PadButton::Left, asm.into_instrs());
-        assert!(!inputs.is_empty());
-    }
-
-    #[test]
-    fn test_generate_code() {
-        let mut inputs = InputManager::new();
-        let mut asm = Block::new();
-        asm.ret();
-
-        inputs.on_press(PadButton::A, asm.into_instrs());
-        let code = inputs.generate_code(&LabelAllocator::new());
-
-        // Should contain check_key generated code
+        inputs
+            .on_held(PadButton::A, Vec::new())
+            .on_just_pressed(PadButton::A, Vec::new())
+            .on_release(PadButton::A, Vec::new())
+            .on_repeat(PadButton::A, 4, 2, Vec::new());
+        let code = inputs.generate_code(&LabelAllocator::new(), 3);
+        assert_eq!(inputs.binding_count(), 4);
+        assert_eq!(inputs.repeat_variable_names(3), ["wInputRepeat_6"]);
         assert!(!code.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "repeat delay")]
+    fn repeat_rejects_zero_delay() {
+        InputManager::new().on_repeat(PadButton::A, 0, 1, Vec::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "repeat interval")]
+    fn repeat_rejects_zero_interval() {
+        InputManager::new().on_repeat(PadButton::A, 1, 0, Vec::new());
     }
 }

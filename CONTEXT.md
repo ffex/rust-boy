@@ -1394,6 +1394,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
+- **Input:** `InputManager` supports held (`on_press` / `on_held`), just-pressed, released, and per-binding
+  auto-repeat actions. Several actions may bind the same button and run in registration order; repeat delay and interval
+  count sampled frames and each must be 1–255.
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,

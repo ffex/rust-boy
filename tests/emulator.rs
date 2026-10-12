@@ -1371,6 +1371,42 @@ fn engine_joypad_handler_runs_on_a_press() {
     assert_eq!(gb.read_symbol("wPressLY"), 50);
 }
 
+#[test]
+fn engine_input_edges_hold_and_repeat_are_separate_bindings() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = RustBoy::new();
+    for name in ["wJustPressed", "wReleased", "wHeld", "wRepeats"] {
+        gb.vars.create_u8(name, 0);
+    }
+    let mut inputs = InputManager::new();
+    inputs
+        .on_just_pressed(PadButton::A, count("wJustPressed").into_instrs())
+        .on_release(PadButton::A, count("wReleased").into_instrs())
+        .on_held(PadButton::A, count("wHeld").into_instrs())
+        .on_repeat(PadButton::A, 3, 2, count("wRepeats").into_instrs());
+    gb.add_inputs(inputs);
+    let mut gb = engine_rom(&gb).boot();
+    gb.run_frames(4);
+    gb.run_script(&[(7, &[Button::A])]);
+    assert_eq!(gb.read_symbol("wJustPressed"), 1);
+    assert_eq!(
+        gb.read_symbol("wRepeats"),
+        3,
+        "immediate, then after 3 and 5 frames"
+    );
+    assert!(
+        gb.read_symbol("wHeld") >= 7,
+        "held action runs each sampled frame"
+    );
+    gb.run_script(&[(3, &[])]);
+    assert_eq!(gb.read_symbol("wReleased"), 1);
+    gb.run_script(&[(2, &[Button::A]), (2, &[])]);
+    assert_eq!(gb.read_symbol("wJustPressed"), 2, "a new press fires again");
+    assert_eq!(gb.read_symbol("wReleased"), 2, "a new release fires again");
+}
+
 /// The soft reset: A + B + Select + Start held together run the start-up code again, once
 /// per press. `wBoots`, a byte the start-up does not set, counts the start-ups (the `init`
 /// code adds 1); `wFrames`, a variable, counts the frames since the last one.

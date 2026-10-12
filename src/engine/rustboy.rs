@@ -81,6 +81,9 @@ pub struct RustBoy {
     /// reads the keys it updates
     updates_keys: bool,
 
+    /// Next stable id for per-binding auto-repeat counters.
+    input_binding_count: usize,
+
     /// Whether the program uses the bounded VRAM write queue.
     vram_queue: bool,
 
@@ -129,6 +132,7 @@ impl RustBoy {
             handlers: BTreeMap::new(),
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
+            input_binding_count: 0,
             vram_queue: false,
             config,
         }
@@ -426,7 +430,7 @@ impl RustBoy {
     /// the ones those functions refer to, and so on. A function is found by its name
     /// anywhere in an instruction's code: `call`, `jp`, `IfCall`, `Call`, `ld hl, Name`,
     /// `dw Name`, raw lines (`raw`, one or several lines); not in comments or strings.
-    /// The variables a builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are created
+    /// The variables a builtin needs (`wCurKeys`, `wNewKeys`, and `wReleasedKeys` for `UpdateKeys`) are created
     /// with it. So keep only a function that is called from code `build()` does not see:
     /// asm added to its output afterwards, or an `INCLUDE`d file. For the opposite, a
     /// routine *defined* where `build()` does not see, use [`RustBoy::external_symbol`].
@@ -463,7 +467,7 @@ impl RustBoy {
     /// `INCLUDE`d files. A program that includes its own `UpdateKeys` (or another routine
     /// with a builtin's name) declares it here, so the builtin is not emitted as well (that
     /// would be a duplicate label), and neither are the variables that builtin needs
-    /// (`wCurKeys`, `wNewKeys`): the included code defines what it uses. The opposite of
+    /// (`wCurKeys`, `wNewKeys`, `wReleasedKeys`): the included code defines what it uses. The opposite of
     /// [`RustBoy::keep_function`], which emits a function that only outside code calls.
     ///
     /// # Panics
@@ -1120,7 +1124,7 @@ impl RustBoy {
         asm.emit_all(raw_functions);
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
-        // The variables of the emitted routines (`wCurKeys`, `wNewKeys` for UpdateKeys, and
+        // The variables of the emitted routines (`wCurKeys`, `wNewKeys`, and `wReleasedKeys` for UpdateKeys, and
         // those of the user's routines), however the program calls them, unless it defines
         // them already (as variables or in raw code)
         for name in functions.variables {
@@ -1254,6 +1258,11 @@ impl RustBoy {
         // Auto-create input variables required by UpdateKeys
         self.vars.create_u8("wCurKeys", 0);
         self.vars.create_u8("wNewKeys", 0);
+        self.vars.create_u8("wReleasedKeys", 0);
+        let first_id = self.input_binding_count;
+        for name in inputs.repeat_variable_names(first_id) {
+            self.vars.create_u8(&name, 0);
+        }
 
         // Add call to UpdateKeys
         self.main_loop_code.push(Instr::Call {
@@ -1262,7 +1271,8 @@ impl RustBoy {
 
         // Add the input handling code (the actions are the user's code)
         self.main_loop_code
-            .extend(checked(inputs.generate_code(self.asm.labels())));
+            .extend(checked(inputs.generate_code(self.asm.labels(), first_id)));
+        self.input_binding_count += inputs.binding_count();
         self.updates_keys = true;
 
         self
@@ -1943,6 +1953,7 @@ mod tests {
         let out = gb.build().unwrap();
         assert_eq!(out.matches("wCurKeys: db").count(), 1);
         assert_eq!(out.matches("wNewKeys: db").count(), 1);
+        assert_eq!(out.matches("wReleasedKeys: db").count(), 1);
     }
 
     #[test]
@@ -3996,7 +4007,7 @@ mod tests {
         function_of(&mut gb, "SetSpeed", vars[3].set(7));
         function_of(&mut gb, "GetSpeed", vars[3].get());
         // An animated sprite and inputs: build() adds wFrameCounter, wAnim_Coin_Current
-        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys and wNewKeys (called through a
+        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys, wNewKeys, and wReleasedKeys (called through a
         // function, so they are build()'s, not add_inputs'). The review of #32 found they
         // went into the first section and moved the second one: `wHigh` was at $C001 by
         // get_address, $C003 once linked
@@ -4025,7 +4036,7 @@ mod tests {
                  SECTION \"Variables\", WRAM0[$C000]\n    wLives: db\n    wScore: dw\n    \
                  SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    wVBlankFlag: db\n    \
                  wFrameCounter: db\n    wAnim_Coin_Current: db\n    wAnim_Coin_Dir: db\n    \
-                 wCurKeys: db\n    wNewKeys: db\n    SECTION \"Buffer\", WRAM0\n"
+                 wCurKeys: db\n    wNewKeys: db\n    wReleasedKeys: db\n    SECTION \"Buffer\", WRAM0\n"
             ),
             "{}",
             data
@@ -4055,6 +4066,7 @@ mod tests {
             ("wFrameCounter", 0xC006),
             ("wAnim_Coin_Current", 0xC007),
             ("wNewKeys", 0xC00A),
+            ("wReleasedKeys", 0xC00B),
             // The sprite's shadow OAM on the last page of WRAM0, and the OAM DMA routine at
             // the top of the variables' HRAM (B12): no variable moved for them
             ("wShadowOAM", 0xCF00),

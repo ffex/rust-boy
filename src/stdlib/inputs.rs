@@ -51,21 +51,23 @@ impl PadButton {
 
 /// Polls the Game Boy controller and updates key state variables.
 /// This function reads both button and D-pad inputs, combines them,
-/// and tracks which keys are currently pressed and newly pressed.
+/// and tracks which keys are currently pressed, newly pressed, and newly released.
 ///
 /// @requires wCurKeys: 1 byte variable to store currently pressed keys
 /// @requires wNewKeys: 1 byte variable to store newly pressed keys
+/// @requires wReleasedKeys: 1 byte variable to store newly released keys
 /// @requires P1F_GET_BTN, P1F_GET_DPAD, P1F_GET_NONE constants
 /// @requires rP1: Joypad register
 ///
 /// # Key States
 /// - wCurKeys: Bitmap of currently pressed keys (1 = pressed, 0 = not pressed)
 /// - wNewKeys: Bitmap of keys that just transitioned to pressed this frame
+/// - wReleasedKeys: Bitmap of keys that just transitioned to released this frame
 ///
 /// # Calling convention
-/// - Reads and returns nothing in registers: the keys go to `wCurKeys` and `wNewKeys`,
-///   its two variables ([`Routine::variables`]).
-/// - Clobbers: `a`, `b` and the flags.
+/// - Reads and returns nothing in registers: the keys go to `wCurKeys`, `wNewKeys`, and
+///   `wReleasedKeys`, its variables ([`Routine::variables`]).
+/// - Clobbers: `a`, `b`, `c` and the flags.
 pub fn update_keys() -> Routine {
     let mut asm = Block::new();
 
@@ -84,9 +86,14 @@ pub fn update_keys() -> Routine {
     asm.ldh(Mem::addr(hw::P1), R8::A);
 
     asm.ld_a_addr_def("wCurKeys");
+    asm.ld(R8::C, R8::A);
     asm.xor(R8::B);
     asm.and(R8::B);
     asm.ld_addr_def_a("wNewKeys");
+    asm.ld(R8::A, R8::B);
+    asm.cpl();
+    asm.and(R8::C);
+    asm.ld_addr_def_a("wReleasedKeys");
     asm.ld(R8::A, R8::B);
     asm.ld_addr_def_a("wCurKeys");
     asm.ret();
@@ -105,7 +112,28 @@ pub fn update_keys() -> Routine {
     Routine::new("UpdateKeys", asm)
         .with_variable("wCurKeys")
         .with_variable("wNewKeys")
-        .with_clobbers(Regs::A | Regs::B | Regs::F)
+        .with_variable("wReleasedKeys")
+        .with_clobbers(Regs::A | Regs::B | Regs::C | Regs::F)
+}
+
+/// Run `action` when `button` is set in the named key-state bitmap.
+pub(crate) fn check_key_state(
+    labels: &LabelAllocator,
+    button: PadButton,
+    state: &'static str,
+    action: Vec<Instr>,
+) -> Vec<Instr> {
+    let stem = button.label().to_owned();
+    let end_stem = format!("{stem}_end");
+    let [start, end] = labels.locals([stem.as_str(), end_stem.as_str()]);
+    let mut asm = Block::new();
+    asm.label(&start);
+    asm.ld_a_addr_def(state);
+    asm.and(button.flag());
+    asm.jp_cond(Condition::Z, &end);
+    asm.emit_all(action);
+    asm.label(&end);
+    asm.into_instrs()
 }
 /// Run `pressed_func` while `button` is held (its bit is set in `wCurKeys`)
 ///

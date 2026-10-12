@@ -86,6 +86,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
   existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
   runtime, preserving coordinates and tile indices. Default/example output is unchanged.
+- **Input bindings** (Phase 3): held (`on_press` / `on_held`), just-pressed, released, repeat, and multiple actions
+  per button. `on_press` keeps its existing held behavior.
+- **Input migration**: standalone users of `stdlib::inputs::update_keys()` must provide the new one-byte
+  `wReleasedKeys` variable. `RustBoy::add_inputs` creates it automatically.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

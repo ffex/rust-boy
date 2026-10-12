@@ -1878,10 +1878,13 @@ fn window_startup_and_vblank_preserve_other_lcdc_bits() {
                 gb.read(hw::LCDC.value),
                 (lcdc & !hw::LCDCF_WINON.value) ^ hw::LCDCF_WIN9C00.value
             );
+            // Appended after the code above: the window is shown again, on the switched map
             game.on_vblank(game.show_window(true));
             let mut gb = engine_rom(&game).boot();
             gb.run_frames(2);
-            assert_ne!(gb.read(hw::LCDC.value) & hw::LCDCF_WINON.value, 0);
+            assert_eq!(gb.read(hw::WX.value), 165);
+            assert_eq!(gb.read(hw::WY.value), 143);
+            assert_eq!(gb.read(hw::LCDC.value), lcdc ^ hw::LCDCF_WIN9C00.value);
         }
     }
 }

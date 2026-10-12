@@ -277,6 +277,7 @@ impl Window {
     /// gb.on_vblank(frame);
     /// # gb.build().unwrap();
     /// ```
+    #[track_caller]
     pub fn new(tilemap: TilemapArea, x: u8, y: u8) -> Self {
         let (wx, wy) = crate::stdlib::graphics::window::screen_to_raw(x, y);
         Self { tilemap, wx, wy }

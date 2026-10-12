@@ -12,6 +12,7 @@ use crate::hw;
 ///
 /// # Panics
 /// If X is not 0..=158 or Y not 0..=143.
+#[track_caller]
 pub fn screen_to_raw(x: u8, y: u8) -> (u8, u8) {
     assert!(x < hw::SCRN_X.value - 1, "window X must be 0..=158");
     assert!(y < hw::SCRN_Y.value, "window Y must be 0..=143");
@@ -23,6 +24,7 @@ pub fn screen_to_raw(x: u8, y: u8) -> (u8, u8) {
 ///
 /// # Panics
 /// If X is not 0..=158 or Y not 0..=143.
+#[track_caller]
 pub fn set_position(x: u8, y: u8) -> Vec<Instr> {
     let (wx, wy) = screen_to_raw(x, y);
     set_position_raw(wx, wy)

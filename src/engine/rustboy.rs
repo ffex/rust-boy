@@ -231,6 +231,10 @@ impl RustBoy {
     }
 
     /// Move the window to screen pixels. Emit in init or VBlank.
+    ///
+    /// # Panics
+    /// If X is not 0..=158 or Y not 0..=143.
+    #[track_caller]
     pub fn set_window_position(&self, x: u8, y: u8) -> Vec<Instr> {
         crate::stdlib::graphics::window::set_position(x, y)
     }

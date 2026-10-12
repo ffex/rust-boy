@@ -76,6 +76,12 @@ together: every breaking change of the refactoring is in this release, so a prog
   off; partial maps leave trailing rows intact. Existing startup tilemap behavior is unchanged.
   `stdlib::graphics::utility::lcd_off`/`lcd_on` turn the LCD off and on keeping the other LCDC bits
   (maps, sprite size, window), unlike `turn_off_screen`/`turn_on_screen`, which write fixed values.
+- **Palettes and fades** (Phase 3): typed `Palette`, `Shade`, `PaletteRegister`,
+  runtime `RustBoy::set_palette`, and four-stage `PaletteFade` through `fade_palette`.
+  Load progress into A and apply in VBlank; the game controls speed, and progress >=3
+  holds the final stage. Fade from/to a solid shade without blocking the main loop.
+  Existing startup `Palettes` bytes and example output remain compatible. `Shade` is ordered from white to black.
+  A fade leaves the palette byte in A: load the progress again before each fade.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

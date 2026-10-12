@@ -270,7 +270,12 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `TileManager::add_tilemap_rom` and `copy_tilemap`; multiple levels coexist and copy to either map.
       Full-map copying needs the LCD off (`lcd_off`/`lcd_on` keep the other LCDC bits); automatic startup tilemaps
       retain their existing checks.
-- [ ] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out
+- [x] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out (branch `refactor-p3-palettes`):
+      typed `Palette`/`Shade`/`PaletteRegister`, runtime writes, four-stage nonblocking `PaletteFade`;
+      progress supplied in A, clamps at 3, supports fades from/to white or black (or either grey).
+- [ ] Follow-ups of the palettes (from the review of #48, maintainer decisions): whether the start-up `Palettes` should
+      take `impl Into<Palette>` (today raw bytes, `Palette::byte()` converts), and whether the start-up palette write
+      should reuse `stdlib::graphics::palette::set_palette` (`ldh` instead of `ld [rBGP], a`: changes every example's asm)
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
 - [ ] Sprite show / hide, OAM slot allocation

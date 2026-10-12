@@ -257,6 +257,27 @@ impl RustBoy {
         crate::stdlib::graphics::window::select_tilemap(area == TilemapArea::Map9C00)
     }
 
+    /// Write a DMG palette at runtime. Emit in init or VBlank for stable frames.
+    /// Changes A only; startup palettes are configured separately with set_palettes.
+    pub fn set_palette(
+        &self,
+        register: crate::stdlib::graphics::palette::PaletteRegister,
+        palette: impl Into<crate::stdlib::graphics::palette::Palette>,
+    ) -> Vec<Instr> {
+        crate::stdlib::graphics::palette::set_palette(register, palette)
+    }
+
+    /// Apply a nonblocking palette fade using A as progress (0..=3; >=3 completes).
+    /// Emit in VBlank after loading your progress variable. Changes A and flags only:
+    /// A holds the palette byte afterwards, so load the progress again before the next fade.
+    pub fn fade_palette(
+        &self,
+        register: crate::stdlib::graphics::palette::PaletteRegister,
+        fade: crate::stdlib::graphics::palette::PaletteFade,
+    ) -> Vec<Instr> {
+        fade.emit(self.labels(), register)
+    }
+
     /// Define a constant value
     pub fn define_const(&mut self, name: &str, value: impl std::fmt::Display) -> &mut Self {
         self.constants

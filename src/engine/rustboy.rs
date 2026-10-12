@@ -189,7 +189,8 @@ impl RustBoy {
 
     /// Set the background viewport's top-left world pixel, wrapping at 256.
     /// Returns code to put in `init` or `on_vblank`; main-loop writes can tear.
-    /// Changes A and flags. Sprites stay in screen coordinates.
+    /// Changes A and flags. Sprites stay in screen coordinates. Start-up code does not write
+    /// SCX/SCY, so a soft reset keeps the scroll: set it in init to start from a known camera.
     ///
     /// ```
     /// use rust_boy::prelude::*;
@@ -205,14 +206,15 @@ impl RustBoy {
     /// Move the background camera by signed pixel deltas, wrapping at 256.
     /// Positive X/Y moves the viewport right/down. Changes A and flags.
     /// Emit during LCD-off initialization or VBlank to avoid tearing. A soft reset keeps the
-    /// scroll: call [`RustBoy::set_background_scroll`] in init to start from a known camera.
+    /// scroll (see [`RustBoy::set_background_scroll`]).
     pub fn scroll_background_by(&self, dx: i8, dy: i8) -> Vec<Instr> {
         crate::stdlib::graphics::scroll::scroll_by(dx, dy)
     }
 
     /// Keep world pixel (B = X, C = Y) at the given screen pixel anchor.
     /// Coordinates wrap at 256 and exclude OAM offsets. Changes A and flags.
-    /// Emit during LCD-off initialization or VBlank to avoid tearing.
+    /// Emit during LCD-off initialization or VBlank to avoid tearing. A soft reset keeps the
+    /// scroll (see [`RustBoy::set_background_scroll`]).
     pub fn follow_background_point(&self, anchor_x: u8, anchor_y: u8) -> Vec<Instr> {
         crate::stdlib::graphics::scroll::follow_point(anchor_x, anchor_y)
     }

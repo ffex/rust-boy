@@ -106,8 +106,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   the whole program by construction: `If*` → `.end_if_N`, `.else_N`, `.then_N`; `check_key` →
   `.check_left_N`, `.check_left_end_N`; a limited move → `.sprite0_left_limit_store_N`, `…_end_N`;
   `clear_objects_screen` → `.clear_oam_N` (was the global `ClearOam`); the animation dispatcher →
-  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`, and with per-animation
-  periods `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`. The code
+  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`; when an animation
+  has a period of its own, the per-sprite dispatcher (since `refactor-p3-animation-speed`) →
+  `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`. The code
   `build()` generates (start-up, dispatcher) uses a fork of the allocator (`LabelAllocator::fork`: the same
   sequence from where it is, not shared), so two builds print the same labels ([B14](#b14)). Local labels never
   change the RGBDS scope, so they can go inside an `If` body. Global labels are left to routines and functions,

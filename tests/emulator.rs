@@ -1786,14 +1786,23 @@ fn engine_background_camera_wraps_and_follows_world_pixels() {
         code.ld(R8::B, x)
             .ld(R8::C, y)
             .emit_all(game.follow_background_point(80, 72))
-            .ld_addr_def_a("wAfterFollow");
+            .ld_addr_def_a("wAfterFollow")
+            .ld(R8::A, R8::B)
+            .ld_addr_def_a("wAfterB")
+            .ld(R8::A, R8::C)
+            .ld_addr_def_a("wAfterC");
         game.vars.create_u8("wAfterFollow", 0);
+        game.vars.create_u8("wAfterB", 0);
+        game.vars.create_u8("wAfterC", 0);
         game.on_vblank(code);
         let mut gb = engine_rom(&game).boot();
         gb.run_frames(2);
         assert_eq!(gb.read(hw::SCX.value), x.wrapping_sub(80));
         assert_eq!(gb.read(hw::SCY.value), y.wrapping_sub(72));
         assert_eq!(gb.read_symbol("wAfterFollow"), y.wrapping_sub(72));
+        // B and C, the target, are preserved
+        assert_eq!(gb.read_symbol("wAfterB"), x);
+        assert_eq!(gb.read_symbol("wAfterC"), y);
     }
 }
 

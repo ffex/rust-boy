@@ -232,6 +232,12 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Background camera** (since `refactor-p3-scrolling`): `stdlib::graphics::scroll` has three stateless snippets,
+  reused by `RustBoy::set_background_scroll`, `scroll_background_by` and `follow_background_point`. They write
+  `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and
+  flags, and leave sprites in screen coordinates. `follow_background_point` keeps the world pixel (B, C) at a screen
+  anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
+
 - **VRAM write queue** (since `refactor-codex-p3-vram-queue`):
   `stdlib::graphics::vram_queue` owns the `QueueVramWrite` and `FlushVramQueue` routines.
   `RustBoy::queue_vram_write(address, value)` or `queue_vram_write_from_registers()` opts in:
@@ -1336,12 +1342,9 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** background scrolling and camera helpers exist since `refactor-p3-scrolling`
-  (`stdlib::graphics::scroll`, reused by `RustBoy::set_background_scroll`, `scroll_background_by`,
-  `follow_background_point`). They write SCX/SCY immediately, wrap at 256, change A/flags and
-  leave sprites in screen coordinates; use init or VBlank for a stable whole-frame camera.
-  Emulator tests check initialization, wrapping, signed movement and world-point anchors. No window layer (the shadow OAM and its DMA exist since `refactor-codex-p3-sprites`), no palette API/fades, no
-  metasprites beyond 16×16, no text/numbers (a `$9C00` map exists since [B19](#b19), without a window layer).
+- **Graphics:** no window layer, no palette API/fades, no metasprites beyond 16×16, no text/numbers (a `$9C00` map
+  exists since [B19](#b19), without a window layer). Background scrolling exists since `refactor-p3-scrolling` (see
+  §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).

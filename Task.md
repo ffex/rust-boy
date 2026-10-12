@@ -295,6 +295,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
 - [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
       overrides, independent selection clocks, default/global fallback, composite setters)
+- [ ] Follow-up of the per-animation speed (from the review of the #50 chain, maintainer decision): the name
+      `SpriteManager::set_animation_delay(sprite, index, frames)` is the global `RustBoy::set_animation_delay(frames)`'s,
+      with another meaning; `set_animation_period` would tell them apart (an API rename)
 - [ ] End-of-animation events / callbacks
 
 ### Audio *(nothing exists today)*

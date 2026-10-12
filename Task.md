@@ -327,7 +327,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
 - [ ] Scenes / game states
 - [ ] Entities: spawn / despawn
-- [ ] Fixed-point sub-pixel movement, velocity, gravity
+- [x] Fixed-point sub-pixel movement, velocity, gravity (branch `refactor-p3-fixed-point`):
+      `stdlib::movement::step_8_8` advances signed 8.8 position by velocity and adds gravity
+      to velocity, preserving the fractional low byte across frames.
 - [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision

@@ -2,9 +2,12 @@
 
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
-[`CLAUDE.md`](CLAUDE.md).
+[`AGENTS.md`](AGENTS.md) for Codex implementation and [`CLAUDE.md`](CLAUDE.md) for Claude PR review.
 
 ## How we work
+
+- Codex implements changes and opens PRs; Claude only reviews them. Codex fixes review findings,
+  and the maintainer decides whether to merge.
 
 - `refactor` is the integration branch (created from `main` at `4601a5c`).
 - Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
@@ -21,6 +24,8 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 ## Phase 0 — Housekeeping & prerequisites
 
 - [x] Create `Task.md` and `CONTEXT.md` (branch `refactor-p0-plan-docs`)
+- [x] Introduce Codex as implementer (`AGENTS.md`) and make Claude PR-review-only (`CLAUDE.md`)
+      (branch `refactor-codex-entry`)
 - [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
 - [x] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1) (branch `refactor-p0-fix-build`)
 - [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)
@@ -336,7 +341,7 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Tutorial: "your first game" step by step with `RustBoy`
 - [ ] Hardware notes: VBlank & OAM timing, 8×16 rules, coordinate offsets (+8 / +16)
 - [x] `CHANGELOG.md` (the release notes of the refactoring, branch `refactor-p2-engine-api-prelude`; keep it up to date)
-- [ ] Keep `CLAUDE.md` and `CONTEXT.md` up to date as phases land
+- [ ] Keep `AGENTS.md`, `CLAUDE.md` and `CONTEXT.md` up to date as phases land
 
 ## Future
 

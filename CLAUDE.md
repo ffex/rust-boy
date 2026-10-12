@@ -3,22 +3,29 @@
 rust-boy is a Rust DSL that generates Game Boy assembly in RGBDS syntax (`cargo run` → `.asm` →
 `rgbasm`/`rgblink`/`rgbfix` → `.gb`). It is being refactored:
 
-- [`Task.md`](Task.md) — what to do next (phased checklist).
-- [`CONTEXT.md`](CONTEXT.md) — why: architecture, levels assessment, bug catalogue B1–B30, branch analysis.
+- [`Task.md`](Task.md) — phased checklist.
+- [`CONTEXT.md`](CONTEXT.md) — architecture, levels assessment, bug catalogue B1–B30 and branch analysis.
+- [`AGENTS.md`](AGENTS.md) — Codex's implementation and git/PR workflow.
 
-Read both before starting a task, and keep them up to date in the same branch as the change.
+Read these before reviewing a PR.
+
+## Role: PR review only
+
+Claude only reviews PRs implemented by Codex. Do not implement features or fixes, edit project
+files or snapshots, tick tasks, commit, push, open PRs, or merge. Report findings to the maintainer;
+Codex makes the fixes and updates the PR. The maintainer decides whether to merge.
+
+Work in a separate review worktree so Codex's implementation checkout is left alone. Local
+throwaway merge commits, build outputs and test fixtures needed to verify the PR are permitted
+in that worktree; do not publish them. GitHub access is read-only: no comments or submitted reviews.
+Do not overwrite generated-asm snapshots to make tests pass; review any mismatch as a finding.
 
 ## Working style
 
-When a step doesn't need my input, keep going. Put status notes in the
-same message as your next action.
-Stop and ask only when you can't continue without me, or before anything
-destructive: deleting data, force-pushing, or changing anything outside
-this repository.
-
-Once you have answered something, treat that answer as done. Focus on
-what I'm asking now, and don't go back over an earlier answer unless I
-ask about it or point out a problem with it.
+Continue independently when the next review step needs no input. Ask only when required information
+is missing or an action is destructive. Report concrete findings with severity, file and line,
+failure scenario and evidence. Separate confirmed bugs from questions and unverified concerns.
+State which checks ran, their results and any limits; never describe a skipped check as passing.
 
 ## Commands
 
@@ -86,64 +93,30 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   (`UPDATE_SNAPSHOTS=1 cargo test --test snapshots`); the PR shows the asm change in that diff.
 - Never commit build artifacts (`*.gb`, `*.o`, `target/`).
 
-## Git workflow
+## Review workflow
 
-- `refactor` is the integration branch. Never commit directly to `main` or `refactor`.
-- For each phase, or each major edit, create a branch from an up-to-date `refactor`:
-  `refactor-<phase>-<topic>`, e.g. `refactor-p1-if-semantics`, `refactor-p2-typed-operands`.
-  (Use a dash, not a slash: git cannot have both a `refactor` branch and `refactor/...` branches.)
-- If the work needs a PR that is not merged yet, branch from that PR's branch instead (stacked PR),
-  still target `refactor`, and start the PR description with "Depends on #N".
-- Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
-- Before pushing, run what CI runs (`.github/workflows/ci.yml`): `cargo fmt --check`,
-  `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
-  `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`).
-- Push the branch and open a **PR into `refactor`** (never straight into `main`). When everything is done,
-  `refactor` → `main` is a final PR.
-- Never force-push, rewrite published history or delete branches without asking first.
-- Do not mention or link the Claude session in commit messages or PR descriptions.
+`refactor` is the integration branch; Codex's PRs target it. The final release PR targets `main`
+from `refactor`. Review stacked PRs in their declared dependency order.
 
-### Independent review before asking for a merge
+Start a fresh review session with only the PR numbers, branches and merge order, without Codex's
+implementation-session context or conclusions. Read the PR descriptions and diffs yourself.
 
-Before telling the maintainer that a PR (or a chain of stacked PRs) is ready, have an agent with **no
-context** from the work review it. Give it only the PR numbers, their branches and the merge order, not
-your own conclusions. It must:
+1. Record the base and PR head commit ids. Simulate merging the PRs into `refactor` in order in
+   the separate worktree (never push), and report conflicts. If a merge cannot be simulated, state
+   which checks of the merged result are blocked.
+2. Run the CI checks from `.github/workflows/ci.yml` on the merged result: `cargo fmt --check`,
+   `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
+   `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` after fetching the
+   pinned test ROMs with `scripts/fetch-test-roms.sh <dir>`. CI also tests with Rust 1.85; report
+   whether that check ran locally. Report missing tools or unavailable checks explicitly.
+3. Compare each PR description with the actual changes and verification evidence. Flag false,
+   outdated or unverified claims, including claims about unchanged ROMs or generated asm.
+4. Review for bugs, regressions, missing regression coverage and violations of the architecture
+   rules above or the implementation workflow in `AGENTS.md`.
+5. Check that `Task.md`, `CONTEXT.md` and, where relevant, `CHANGELOG.md` agree with the code.
+   Check intentional generated-asm changes have matching committed snapshots and still assemble.
+6. Return a report with the reviewed commit ids, merge conflicts, findings, checks and results,
+   and unresolved questions. Say "no findings" only if there are none, while still listing limits.
 
-1. Simulate the merge into `refactor` locally (in order, never push) and report conflicts.
-2. Run the same checks as CI on the merged result (fmt, clippy `-D warnings`, tests,
-   `scripts/assemble-examples.sh`).
-3. Compare each PR description with the code it really changes, and flag false or unverified claims.
-4. Review the changes for bugs, regressions and violations of the rules in this file.
-5. Check that `Task.md` and `CONTEXT.md` agree with the code.
-
-The reviewer is read-only towards GitHub (no pushes, comments or reviews) and works in its own worktree.
-Fix what it finds, or say in the PR why not, before asking for the merge; mention in the PR that the
-independent review was done and what it found.
-
-### PR description template
-
-```markdown
-## Summary
-Why this change: the problem and the outcome, in 2–4 sentences.
-
-## What changed
-- Per file or area, what was changed and why.
-
-## Tasks closed
-- Task.md items ticked, bug ids (e.g. B5, B7).
-
-## How it was verified
-- Commands run and their results (build, test, clippy, rgbasm/rgblink of affected examples).
-
-## Generated-asm impact
-- Which examples' output changes and how (attach a short diff excerpt if relevant), or "none".
-
-## Risks and follow-ups
-- Breaking changes, open questions, what is left for a later PR.
-
-## Independent review
-- What the context-free reviewer found and which commit fixed each finding (or why not), or "no findings".
-
-## How to review
-- Suggested reading order / what to focus on.
-```
+After Codex fixes findings, review the updated heads and re-run the affected checks. Any prior
+review applies only to the commit ids it recorded. Claude does not fix findings or authorize a merge.

@@ -2,8 +2,8 @@
 
 Background for humans and AI assistants working on rust-boy: what the project is, how it is
 built, how the code is layered, what is broken and why. The actionable checklist lives in
-[`Task.md`](Task.md); Codex's first-implementation rules live in [`AGENTS.md`](AGENTS.md), and Claude's review, fix and merge
-rules in [`CLAUDE.md`](CLAUDE.md).
+[`Task.md`](Task.md); Codex's first-implementation rules live in
+[`AGENTS.md`](AGENTS.md), and Claude's review, fix and merge rules in [`CLAUDE.md`](CLAUDE.md).
 
 Codex implements on feature branches based on `refactor-codex-entry`; feature PRs target
 that branch. Claude reviews them independently, Codex fixes findings, and the maintainer

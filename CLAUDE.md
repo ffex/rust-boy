@@ -7,7 +7,7 @@ rust-boy is a Rust DSL that generates Game Boy assembly in RGBDS syntax (`cargo 
 - [`CONTEXT.md`](CONTEXT.md) — architecture, levels assessment, bug catalogue B1–B30 and branch analysis.
 - [`AGENTS.md`](AGENTS.md) — Codex's implementation and git/PR workflow.
 
-Read these before reviewing or fixing a PR.
+Read these before reviewing or fixing a PR, and keep them up to date in the same branch as the change.
 
 ## Roles
 
@@ -107,6 +107,11 @@ order, with "Depends on #N"). The final release PR targets `main` from `refactor
 directly to `main` or `refactor`; never force-push, rewrite published history or delete branches
 without asking first. Do not mention or link AI sessions in commit messages or PR descriptions.
 
+**Finding Codex's PRs.** Codex hands a PR over through the maintainer, who gives Claude its number,
+or Claude picks up the open PRs into `refactor` whose *Independent review* section says "pending".
+A PR Claude writes itself (a follow-up, a docs change) follows the git workflow of
+[`AGENTS.md`](AGENTS.md) (branch names, small commits, ticking `Task.md`) and the same steps below.
+
 For each Codex PR (or chain of stacked PRs):
 
 1. **Independent review.** Start a reviewer agent with **no context** from the work, in its own
@@ -126,16 +131,18 @@ For each Codex PR (or chain of stacked PRs):
       that intentional generated-asm changes have matching snapshots that still assemble.
    6. Return the reviewed commit ids, conflicts, findings, checks and results, and open questions.
 2. **Fix.** Claude fixes every finding on the PR branch (merge `refactor` into it when it is behind;
-   never rebase a published branch), or writes in the PR why a finding is not fixed. Run the CI
-   checks before every push. Snapshots are updated only for an intended asm change, never to make a
-   test pass.
+   never rebase a published branch), or writes in the PR why a finding is not fixed. A fix that
+   changes behaviour updates `Task.md`, `CONTEXT.md` and `CHANGELOG.md` in the same branch, and
+   comes with a test. Run the CI checks before every push. Snapshots are updated only for an
+   intended asm change, never to make a test pass.
 3. **Re-review.** A review applies only to the commit ids it recorded: after fixes, start a new
    context-free review of the new head. Repeat 2–3 until the reviewer has no findings that block.
-4. **Merge.** Update the PR description (template below), including the *Independent review*
-   section: what each review found and which commit fixed it. Then merge into `refactor` with a
-   merge commit pinned to the reviewed head SHA, and check that CI on `refactor` is green.
-   Merge only when CI is green on the reviewed head, there are no conflicts and no finding is left
-   open without a written disposition.
+4. **Merge.** Merge only when CI is green on the reviewed head, there are no conflicts and no
+   finding is left open without a written disposition. Update the PR description (template
+   below), including the *Independent review* section: what each review found and which commit
+   fixed it. Then merge into `refactor` with a merge commit pinned to the reviewed head SHA (the
+   merge tool's expected head SHA, or `gh pr merge N --merge --match-head-commit <sha>`), and check
+   that CI on `refactor` is green; if it is red, fix it at once with a new PR through the same steps.
 5. **Release PR.** `refactor` → `main` is never merged by Claude: when it is ready, tell the
    maintainer and wait.
 

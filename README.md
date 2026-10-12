@@ -422,7 +422,7 @@ examples/<bin>/               # per example: main.asm, its generated asm (the sn
 scripts/run.sh                # build one binary into a ROM (.gb, .sym, .map) and run it in an emulator
 scripts/assemble-examples.sh  # build every example into a ROM
 scripts/fetch-test-roms.sh    # Blargg's test ROMs, which check the test emulator
-Task.md, CONTEXT.md, CLAUDE.md
+Task.md, CONTEXT.md, AGENTS.md, CLAUDE.md
 ```
 
 ## Development
@@ -438,7 +438,8 @@ scripts/fetch-test-roms.sh /tmp/gb-test-roms
 RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --lib --test emulator
 ```
 
-Work happens on branches merged through pull requests into `refactor`; see [CLAUDE.md](CLAUDE.md).
+Work happens on branches merged through pull requests into `refactor`; see [AGENTS.md](AGENTS.md) and
+[CLAUDE.md](CLAUDE.md).
 
 ## Inspirational Projects
 

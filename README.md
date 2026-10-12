@@ -237,7 +237,7 @@ Programs that never request the queue emit no queue code or storage.
 ## Palettes and fades (`RustBoy`)
 
 DMG palettes map four colour indices to shades. The background and window share BGP;
-object index 0 stays transparent. Startup `Palettes` still accepts hardware bytes.
+object index 0 stays transparent. Startup `Palettes` accepts typed `Palette` values or raw `u8` hardware bytes.
 Use typed palettes for runtime writes and `PaletteFade` for nonblocking fade-in/out:
 
 ```rust

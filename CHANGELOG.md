@@ -80,7 +80,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   runtime `RustBoy::set_palette`, and four-stage `PaletteFade` through `fade_palette`.
   Load progress into A and apply in VBlank; the game controls speed, and progress >=3
   holds the final stage. Fade from/to a solid shade without blocking the main loop.
-  Existing startup `Palettes` bytes and example output remain compatible. `Shade` is ordered from white to black.
+  Startup `Palettes` accepts typed palettes or raw hardware bytes. Startup uses the shared `set_palette` routine's
+  `ldh` writes; generated example assembly changes accordingly. `Shade` is ordered from white to black.
   A fade leaves the palette byte in A: load the progress again before each fade.
 - **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside

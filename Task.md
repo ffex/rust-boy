@@ -273,9 +273,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out (branch `refactor-p3-palettes`):
       typed `Palette`/`Shade`/`PaletteRegister`, runtime writes, four-stage nonblocking `PaletteFade`;
       progress supplied in A, clamps at 3, supports fades from/to white or black (or either grey).
-- [ ] Follow-ups of the palettes (from the review of #48, maintainer decisions): whether the start-up `Palettes` should
-      take `impl Into<Palette>` (today raw bytes, `Palette::byte()` converts), and whether the start-up palette write
-      should reuse `stdlib::graphics::palette::set_palette` (`ldh` instead of `ld [rBGP], a`: changes every example's asm)
+- [x] Follow-ups of the palettes (from the review of #48): startup `Palettes` accepts `impl Into<Palette>` while
+      retaining raw `u8` support, and startup writes reuse `stdlib::graphics::palette::set_palette` (`ldh`).
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.

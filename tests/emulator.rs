@@ -1895,6 +1895,35 @@ fn arbitrary_metasprites_keep_irregular_layout_at_every_edge() {
 }
 
 #[test]
+fn typed_flags_reach_every_part_of_a_16x16_sprite_and_a_metasprite() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let flags = SpriteFlags::new()
+        .flip_y(true)
+        .palette(ObjectPalette::Palette1)
+        .priority(SpritePriority::BehindBackground);
+    let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    let tiles = || TileSource::from_raw(&[["$ff"; 8]; 2]);
+    game.add_sprite_16x16("Hero", tiles(), tiles(), 40, 40, flags);
+    let parts = [
+        MetaspritePart::new(tiles(), 0, 0, flags.flip_x(true)),
+        MetaspritePart::new(tiles(), 8, 0, 0x10u8),
+    ];
+    game.add_metasprite("Actor", 80, 72, &parts);
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    for (entry, expected) in [
+        (0, flags.bits()),
+        (1, flags.bits()),
+        (2, flags.flip_x(true).bits()),
+        (3, 0x10),
+    ] {
+        assert_eq!(gb.oam_entry(entry)[3], expected, "OAM entry {entry}");
+    }
+}
+
+#[test]
 fn arbitrary_metasprite_animation_advances_every_part_in_both_sizes() {
     if !rgbds_enabled() {
         return;

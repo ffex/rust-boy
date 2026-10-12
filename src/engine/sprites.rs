@@ -75,13 +75,18 @@ pub struct MetaspritePart {
     pub flags: u8,
 }
 impl MetaspritePart {
-    /// Create a part with relative offsets and OAM attributes.
-    pub fn new(tiles: super::tiles::TileSource, x: i16, y: i16, flags: impl Into<u8>) -> Self {
+    /// Create a part with relative offsets and OAM attributes (raw or [`SpriteFlags`](crate::stdlib::graphics::sprites::SpriteFlags)).
+    pub fn new(
+        tiles: super::tiles::TileSource,
+        x: i16,
+        y: i16,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Self {
         Self {
             tiles,
             x,
             y,
-            flags: flags.into(),
+            flags: flags.into().bits(),
         }
     }
 }

@@ -504,3 +504,25 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### WRAM arrays
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let scores = gb.vars.create_array("wScores", ArrayElement::U16, 300, 100);
+gb.init(scores.set(299, 65535)); // static index and value checked here
+let mut code = Block::new();
+code.ld(R16::BC, 256u16).ld(R16::DE, 1234u16)
+    .emit_all(scores.set_indexed(gb.labels()));
+gb.add_to_main_loop(code); // carry set if BC >= 300; nothing written on rejection
+# gb.build().unwrap();
+```
+
+Arrays occupy contiguous WRAM0 bytes and share the variable allocator. Initialization
+repeats the supplied value with a compact loop. Byte elements use `U8`/`I8`, words
+`U16`/`I16` and little-endian storage. Runtime getters return A for bytes or HL for words;
+setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` returns
+HL and carry status for custom operations; branch on carry before dereferencing it.
+Static operations panic on invalid indices/values; runtime bounds rejection sets carry.

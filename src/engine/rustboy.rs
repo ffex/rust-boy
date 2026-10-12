@@ -1072,7 +1072,7 @@ impl RustBoy {
 
         asm.chunk(Chunk::Init);
         asm.emit_all(startup);
-        asm.emit_all(vars.generate_init_code());
+        asm.emit_all(vars.generate_init_code(&labels));
         asm.emit_all(finish);
 
         asm.chunk(Chunk::Data);

@@ -64,6 +64,11 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
   LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
   or `$9C00`; map-pixel coordinates and the calling convention are unchanged.
+- **WRAM arrays** (Phase 3): `vars.create_array` with `ArrayElement` and `WramArray`
+  supports contiguous signed/unsigned bytes and words. Static access checks indices and values;
+  runtime BC-indexed access sets carry on bounds failure and performs no array access.
+  Arrays share WRAM0 allocation, initialize through compact loops and keep little-endian words.
+  `VarType` gains an `Array` variant; exhaustive downstream matches must handle it.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

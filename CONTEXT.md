@@ -1384,3 +1384,16 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 WRAM arrays
+
+`refactor-p3-wram-arrays` adds `ArrayElement` (signed/unsigned bytes/words), `WramArray`
+and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0
+variables reserved as contiguous `ds` bytes in the existing allocator/creation order, with uniform
+initialization through a compact local-label loop. Static get/set/address reject bounds or values
+outside the element range. BC-indexed address/get/set return carry on out-of-range indices and
+perform no memory access in that case; setters take E/DE and preserve BC/DE. Word values are
+little-endian; getters return A or HL. Array shape is part of VarType and name-conflict checks.
+Initialization labels use build()'s fork, retaining deterministic rebuilds and unchanged scalar output.
+Emulator coverage checks all four types, page crossings, every initialized byte, guard bytes,
+invalid indices 300/65535 and a nearly-full 4095-byte WRAM0 array with compact startup code.

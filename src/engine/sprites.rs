@@ -1196,6 +1196,29 @@ mod tests {
         cpu
     }
 
+    #[test]
+    fn set_flags_writes_the_shadow_oam_entry_of_the_sprite() {
+        // OAM itself is locked while the screen is drawn and rewritten by every DMA: the
+        // engine setter must write the sprite's shadow OAM entry, and only its attribute byte
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        sm.add_for_test("Paddle", 16, 128, 0, 1);
+        let ball = sm.add_for_test("Ball", 32, 100, 0x80, 1);
+        let code = sm.set_flags(
+            ball,
+            crate::stdlib::graphics::sprites::SpriteFlags::new().flip_x(true),
+        );
+        let mut cpu = TestCpu::default();
+        cpu.run(&code);
+        let flags = OamTarget::Shadow.entry(1, hw::OAMA_FLAGS).to_string();
+        assert!(flags.starts_with("wShadowOAM"), "{flags}");
+        assert_eq!(cpu.mem[&flags], hw::OAMF_XFLIP.value);
+        assert_eq!(
+            cpu.mem.keys().count(),
+            1,
+            "only the attribute byte is written"
+        );
+    }
+
     type LimitMove = fn(&SpriteManager, SpriteId, u8, u8) -> Vec<Instr>;
 
     #[test]

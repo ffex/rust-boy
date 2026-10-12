@@ -16,6 +16,7 @@ mod layout;
 mod memory;
 mod rustboy;
 mod sprites;
+mod text;
 mod tiles;
 mod variables;
 
@@ -43,3 +44,5 @@ pub(crate) fn panic_message<R>(f: impl FnOnce() -> R) -> String {
         .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default()
 }
+
+pub use text::{Font, NumberFormat, NumberPrinter, TextPrinter};

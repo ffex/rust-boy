@@ -1397,3 +1397,17 @@ little-endian; getters return A or HL. Array shape is part of VarType and name-c
 Initialization labels use build()'s fork, retaining deterministic rebuilds and unchanged scalar output.
 Emulator coverage checks all four types, page crossings, every initialized byte, guard bytes,
 invalid indices 300/65535 and a nearly-full 4095-byte WRAM0 array with compact startup code.
+
+### Phase 3 text rendering (`refactor-p3-text`)
+
+`stdlib::graphics::text` owns ASCII glyph mapping, map layout, resumable queued printing, and
+unsigned-decimal / packed-BCD encoders. The engine loads fonts through the existing background
+tile allocator and reserves printer cursors and number buffers through the variable allocator
+(WRAM arrays, #51). A print job queues until full and resumes at its cursor on the next main-loop
+call; carry clear means queued, not yet flushed. It never writes VRAM directly. Newlines and
+wrapping return to the initial X column; unsupported glyphs and overflowing layouts panic before
+allocating a job. Decimal scores have five leading-zero digits, BCD scores four; invalid BCD
+leaves the previous buffer/cursor intact. Jobs are single main/init producers; handler calls to
+printing are rejected through the existing queue dependency check. Replacing a number or resetting
+a job retains already pending writes: the final new value is correct, but a partial old value can
+be visible while it drains. This is text output, without proportional fonts or Unicode shaping.

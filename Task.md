@@ -266,7 +266,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Typed sprite flags (flip X/Y, priority, palette)
 - [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
 - [ ] Sprite show / hide, OAM slot allocation
-- [ ] Text: font loading, print string, print number / BCD score
+- [x] Text: font loading, print string, print number / BCD score (`refactor-p3-text`, stacked on
+      WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
 - [ ] Background tile animation
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
 

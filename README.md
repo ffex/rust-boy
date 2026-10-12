@@ -526,3 +526,31 @@ repeats the supplied value with a compact loop. Byte elements use `U8`/`I8`, wor
 setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` returns
 HL and carry status for custom operations; branch on carry before dereferencing it.
 Static operations panic on invalid indices/values; runtime bounds rejection sets carry.
+
+### Text and scores
+
+Load one 8×8 tile per consecutive ASCII character, then call each printer's `step` in
+the main loop. Long strings resume across frames using the VBlank VRAM queue (12 pending
+writes). Carry set means retry next frame; carry clear means queued, with display updates
+at a subsequent VBlank. Enable the background/window for the selected map in your config.
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+// Supply real glyph tiles here, or TileSource::from_file("digits.2bpp", 10).
+let font = gb.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+let text = gb.create_text_printer("Message", font, TilemapArea::Map9800, 0, 0, "0123456789");
+let score = gb.create_number_printer("Score", font, TilemapArea::Map9800, 0, 1, NumberFormat::DecimalU16);
+let mut init = Block::new();
+init.ld(R16::DE, 12345).emit_all(score.set_value(gb.labels()));
+gb.init(init);
+gb.add_to_main_loop(text.step()).add_to_main_loop(score.step());
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Coordinates are tiles in the 32×32 map. Wrapping/newlines return to the initial X column;
+unsupported characters and writes beyond the map panic. Decimal uses five digits, packed
+BCD four. Invalid BCD keeps the old score and returns carry. Set numbers only when they
+change; resetting/replacing retains pending writes, so partial values can briefly display.
+Printer steps belong in init/main code; interrupt handlers cannot produce queue entries.

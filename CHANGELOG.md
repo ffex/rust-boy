@@ -6,6 +6,17 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
+### Text rendering (Phase 3)
+
+- `load_font` loads contiguous ASCII tile fonts; `create_text_printer` prints strings with
+  newline/wrapping support on either tilemap. `TextPrinter::step` resumes when the VBlank
+  queue fills; carry clear means all glyphs are queued. Reset explicitly to print again.
+- `create_number_printer` supports five-digit unsigned decimal and four-digit packed BCD,
+  with leading zeroes. `NumberPrinter::set_value(labels)` reads DE and restarts the job;
+  invalid BCD returns carry without changing its buffer. Call `step` from the main loop.
+- Existing example assembly is unchanged. Fonts use existing background tile capacity;
+  each printer adds a WRAM word cursor, and scores add four or five WRAM bytes.
+
 ### Highlights
 
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),

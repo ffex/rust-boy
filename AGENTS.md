@@ -8,11 +8,13 @@ rust-boy is a Rust DSL that generates Game Boy assembly in RGBDS syntax (`cargo 
 
 Read both before starting a task, and keep them up to date in the same branch as the change.
 
-## Role: implementation with Codex
+## Role: first implementation with Codex
 
-Codex owns implementation, tests, documentation, branches, commits and feature PRs into `refactor-codex-entry`.
-Claude only reviews Codex's PRs, following [`CLAUDE.md`](CLAUDE.md). Codex fixes review findings;
-the maintainer decides whether to merge. Do not treat a Codex self-review as Claude's independent review.
+Codex makes the **first try** of a task: implementation, tests, documentation, snapshots, a branch,
+commits and a PR into `refactor`. Then Codex hands the PR to Claude and stops working on it.
+Claude, following [`CLAUDE.md`](CLAUDE.md), has the PR reviewed, fixes the findings on the PR
+branch, and merges it into `refactor` when everything is OK. Only the final `refactor` → `main` PR
+needs the maintainer. Do not treat a Codex self-review as Claude's independent review.
 
 ## Working style
 
@@ -94,42 +96,29 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 
 ## Git workflow
 
-- `refactor-codex-entry` is Codex's integration branch; `refactor` is the shared integration branch.
-  Never commit directly to `main`, `refactor` or `refactor-codex-entry`.
-- For each phase, or each major edit, create a branch from an up-to-date `refactor-codex-entry`:
+- `refactor` is the integration branch. Never commit directly to `main` or `refactor`.
+- For each phase, or each major edit, create a branch from an up-to-date `refactor`:
   `refactor-<phase>-<topic>`, e.g. `refactor-p1-if-semantics`, `refactor-p2-typed-operands`.
   (Use a dash, not a slash: git cannot have both a `refactor` branch and `refactor/...` branches.)
 - If the work needs a PR that is not merged yet, branch from that PR's branch instead (stacked PR),
-  still target `refactor-codex-entry`, and start the PR description with "Depends on #N".
+  still target `refactor`, and start the PR description with "Depends on #N".
 - Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
 - Before pushing, run what CI runs (`.github/workflows/ci.yml`): `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
   `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`).
-- Push the feature branch and open a **PR into `refactor-codex-entry`**. Claude reviews it,
-  Codex addresses findings, and the maintainer merges it. Promote coherent, small batches with a
-  separate PR `refactor-codex-entry` → `refactor`, reviewed by Claude and merged by the maintainer.
-  Regularly merge updated `refactor` into the Codex integration branch through a synchronization PR
-  to keep conflicts small. When everything is done, `refactor` → `main` is the final release PR.
+- Push the branch and open a **PR into `refactor`** (never straight into `main`), then hand it to Claude
+  (below). Claude reviews, fixes and merges it. When everything is done, `refactor` → `main` is the
+  final PR, which only the maintainer merges.
 - Never force-push, rewrite published history or delete branches without asking first.
 - Do not mention or link AI sessions in commit messages or PR descriptions.
 
-### Claude review before asking for a merge
+### Handoff to Claude
 
-Before telling the maintainer that a PR (or a chain of stacked PRs) is ready to merge, prepare a
-handoff for a fresh Claude review session following [`CLAUDE.md`](CLAUDE.md). Give Claude only
-the PR numbers, their branches and the merge order, not implementation-session context or your
-own conclusions. The reviewer reads the repository instructions and PRs independently.
-
-Claude simulates the merge into the PR's actual base in its own worktree, runs the CI checks, checks the PR descriptions,
-reviews for bugs and regressions, and checks that `Task.md` and `CONTEXT.md` agree with the code.
-Claude is read-only towards GitHub and reports findings to the maintainer; Codex implements fixes
-on the PR branch and requests another review of the updated commits when needed.
-
-If Claude is not available in the current session, provide the handoff to the maintainer and
-mark the PR as awaiting Claude review. Never claim that an independent review happened without
-its report. Record the reviewed commit ids, findings, verification results and fixes in the PR;
-report any checks that could not run. Only mark it ready after the findings are resolved or their
-disposition is documented and Claude's review is complete. Merging remains the maintainer's decision.
+When the PR is open and its CI checks pass locally, hand it to Claude: give the PR number, the
+branch and, for stacked PRs, the merge order. Do not push to the branch after the handoff, unless
+Claude or the maintainer asks you to. If something is unfinished or uncertain, say so in the PR's
+*Risks and follow-ups* section rather than in the handoff, so the reviewer reads it independently.
+Leave the PR's *Independent review* section as "pending": Claude fills it in.
 
 ### PR description template
 
@@ -153,7 +142,8 @@ Why this change: the problem and the outcome, in 2–4 sentences.
 - Breaking changes, open questions, what is left for a later PR.
 
 ## Independent review
-- What Claude found, the reviewed commit ids, and which commit fixed each finding (or why not), or "no findings".
+- "Pending" when the PR is opened; Claude records what each review found, the reviewed commit ids,
+  and which commit fixed each finding (or why not).
 
 ## How to review
 - Suggested reading order / what to focus on.

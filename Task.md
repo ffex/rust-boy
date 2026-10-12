@@ -2,20 +2,17 @@
 
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
-[`AGENTS.md`](AGENTS.md) for Codex implementation and [`CLAUDE.md`](CLAUDE.md) for Claude PR review.
+[`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review, fixes and merges.
 
 ## How we work
 
-- Codex implements changes and opens PRs; Claude only reviews them. Codex fixes review findings,
-  and the maintainer decides whether to merge.
-
-- `refactor` is the shared integration branch (created from `main` at `4601a5c`).
-- Codex branches from `refactor-codex-entry` and opens feature PRs into that branch. After Claude
-  review and maintainer merges, small batches are promoted with a PR `refactor-codex-entry` →
-  `refactor`. Bring changes from `refactor` back regularly through synchronization PRs.
-- Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor-codex-entry`,
+- Codex makes the first try of a task and opens its PR into `refactor`. Claude then has it reviewed by a
+  context-free agent, fixes the findings, has it reviewed again and merges it. Only the final
+  `refactor` → `main` PR waits for the maintainer.
+- `refactor` is the integration branch (created from `main` at `4601a5c`).
+- Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
   named `refactor-<phase>-<topic>` (e.g. `refactor-p1-if-semantics`), and merged through a **PR into
-  `refactor-codex-entry`** for review.
+  `refactor`** for review.
 - Tick the boxes in this file **in the same PR** that completes the task.
 - When all phases are done: one PR `refactor` → `main`.
 
@@ -28,7 +25,8 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 
 - [x] Create `Task.md` and `CONTEXT.md` (branch `refactor-p0-plan-docs`)
 - [x] Introduce Codex as implementer (`AGENTS.md`) and make Claude PR-review-only (`CLAUDE.md`)
-      (branch `refactor-codex-entry`)
+      (branch `refactor-codex-entry`); then Codex makes the first try only, and Claude reviews, fixes and
+      merges into `refactor` (branch `refactor-codex-workflow`)
 - [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
 - [x] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1) (branch `refactor-p0-fix-build`)
 - [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)

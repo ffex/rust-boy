@@ -11,6 +11,10 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
+    ld a, 0
+    ldh [rSCX], a
+    ld a, 0
+    ldh [rSCY], a
     ld de, player_left
     ld hl, $8000
     ld bc, player_leftEnd - player_left

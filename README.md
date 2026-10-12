@@ -203,6 +203,9 @@ off so VRAM is readable:
 gb.call_args("GetTileByScreenPixel", gb.sprites.get_pivot(ball, 0, 1));
 ```
 
+Startup resets the camera to (0, 0), including after soft reset. Put a custom `set_background_scroll` call in `init`
+when the game should start elsewhere.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:

@@ -25,9 +25,9 @@ Bug ids link to [`CONTEXT.md`](CONTEXT.md#4-bug-catalogue).
 ## Phase 0 — Housekeeping & prerequisites
 
 - [x] Create `Task.md` and `CONTEXT.md` (branch `refactor-p0-plan-docs`)
+- [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
 - [x] Introduce Codex (`AGENTS.md`): Codex makes the first try of a task, and Claude reviews, fixes and
       merges into `refactor` (`CLAUDE.md`) (branches `refactor-codex-entry`, then `refactor-codex-workflow`)
-- [x] **Add `CLAUDE.md`** — commands, layer rules, working style, git/PR workflow (branch `refactor-p0-plan-docs`)
 - [x] **P0** Fix `cargo test` compilation — [B1](CONTEXT.md#b1) (branch `refactor-p0-fix-build`)
 - [x] **P0** Fix the `coin-anim` binary — [B2](CONTEXT.md#b2) (branch `refactor-p0-fix-build`)
 - [x] Deterministic output: replace `HashMap`/`HashSet` iteration with `BTreeMap`/ordered `Vec` — [B13](CONTEXT.md#b13).

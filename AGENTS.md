@@ -102,7 +102,8 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   (Use a dash, not a slash: git cannot have both a `refactor` branch and `refactor/...` branches.)
 - If the work needs a PR that is not merged yet, branch from that PR's branch instead (stacked PR),
   still target `refactor`, and start the PR description with "Depends on #N".
-- Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch.
+- Small, focused commits with clear messages. Tick the matching boxes in `Task.md` in the same branch, and
+  record user-visible and breaking changes in `CHANGELOG.md` (with the migration notes).
 - Before pushing, run what CI runs (`.github/workflows/ci.yml`): `cargo fmt --check`,
   `cargo clippy --all-targets -- -D warnings`, `cargo test`, `scripts/assemble-examples.sh`, and
   `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`),
@@ -121,6 +122,9 @@ section as "pending" (Claude also picks up open PRs marked so). Do not push to t
 Claude or the maintainer asks you to. If something is unfinished or uncertain, say so in the PR's
 *Risks and follow-ups* section rather than in the handoff, so the reviewer reads it independently.
 Claude fills in the *Independent review* section.
+
+In *How it was verified*, list each command you ran and its result. Never describe a skipped check as
+passing: name the checks that did not run and why.
 
 ### PR description template
 

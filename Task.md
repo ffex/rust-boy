@@ -251,7 +251,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       enqueue instruction boundary and check delayed main-loop writes, late flush and the full queue plus DMA
       handler (967 M-cycles, within 1140); standalone routines in `stdlib::graphics::vram_queue`)
 - [ ] Background scrolling (`SCX`/`SCY`), camera helpers
-- [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
+- [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
+      screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`
       (`RustBoy::set_background_tilemap`, [B19](CONTEXT.md#b19))
 - [ ] Tilemaps kept in ROM only, to copy at runtime (several levels or screens): today each tilemap is copied to its

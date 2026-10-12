@@ -13,7 +13,7 @@ use crate::stdlib::inputs::select_all_keys;
 use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
 
-use super::config::{Palettes, RustBoyConfig};
+use super::config::{Palettes, RustBoyConfig, Window};
 use super::error::Error;
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
@@ -190,6 +190,28 @@ impl RustBoy {
     /// The tilemap the background shows (see [`RustBoy::set_background_tilemap`])
     pub fn background_tilemap(&self) -> TilemapArea {
         self.config.background_tilemap
+    }
+
+    /// Configure the startup window; `None` keeps it disabled.
+    pub fn set_window(&mut self, window: Option<Window>) -> &mut Self {
+        self.config.window = window;
+        self
+    }
+
+    /// Move the window to screen pixels. Emit in init or VBlank.
+    pub fn set_window_position(&self, x: u8, y: u8) -> Vec<Instr> {
+        crate::stdlib::graphics::window::set_position(x, y)
+    }
+
+    /// Show or hide the window, preserving the other LCDC bits. Emit in VBlank.
+    /// The background/window enable bit must also be set on DMG.
+    pub fn show_window(&self, shown: bool) -> Vec<Instr> {
+        crate::stdlib::graphics::window::set_enabled(shown)
+    }
+
+    /// Change the window map at runtime, preserving the background map. Emit in VBlank.
+    pub fn select_window_tilemap(&self, area: TilemapArea) -> Vec<Instr> {
+        crate::stdlib::graphics::window::select_tilemap(area == TilemapArea::Map9C00)
     }
 
     /// Define a constant value
@@ -762,6 +784,11 @@ impl RustBoy {
             .filter(|interrupt| self.has_handler(*interrupt))
             .collect();
         finish.emit_all(interrupts::set_enabled(&enabled));
+        if let Some(window) = self.config.window {
+            finish.emit_all(crate::stdlib::graphics::window::set_position_raw(
+                window.wx, window.wy,
+            ));
+        }
         finish.emit_all(self.init_code.clone());
         finish.emit_all(self.raw_chunk(Chunk::Init));
 
@@ -778,6 +805,12 @@ impl RustBoy {
         lcdc = lcdc | self.sprites.size().lcdc_flag();
         if self.config.background_tilemap != TilemapArea::Map9800 {
             lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
+        }
+        if let Some(window) = self.config.window {
+            lcdc = lcdc | hw::LCDCF_WINON;
+            if window.tilemap == TilemapArea::Map9C00 {
+                lcdc = lcdc | hw::LCDCF_WIN9C00;
+            }
         }
         finish.ld(R8::A, lcdc);
         finish.ld_addr_def_a(hw::LCDC);

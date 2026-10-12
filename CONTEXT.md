@@ -1046,7 +1046,8 @@ the two maps; `TileManager::add_tilemap_at(name, area, rows)` puts a tilemap at 
 start of its map, so one would replace the other), and so does a tilemap of more than 32 rows (it ran into the next map,
 or out of VRAM from `$9C00`). **`RustBoy::set_background_tilemap(area)`** chooses the map the background shows: `build()`
 adds `| LCDCF_BG9C00` to the LCD-on value for `Map9C00` (for `Map9800`, the default, the LCDC line is unchanged: the flag
-is 0). Not done: the window layer, which could show the other map (Phase 3), and `GetTileByPixel`, which still reads the
+is 0). Window support exists since `refactor-p3-window`: startup configuration and runtime positioning, map selection
+and show/hide operations. Still not done: `GetTileByPixel`, which reads the
 `$9800` map (documented on `set_background_tilemap`). No example changes. Tests: `test_a_second_tilemap_on_one_map_panics`
 and `test_a_tilemap_has_at_most_32_rows` (both failed before: no panic), `test_a_tilemap_at_9c00` (the start-up code with
 the real `Memcopy` on `gb_asm::test_cpu` copies each map to its address; the LCDC value; linked with RGBDS).
@@ -1336,8 +1337,8 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no scrolling (the shadow OAM and its DMA exist since `refactor-codex-p3-sprites`), no window layer, no palette API/fades, no
-  metasprites beyond 16×16, no text/numbers (a `$9C00` map exists since [B19](#b19), without a window layer).
+- **Graphics:** no scrolling (the shadow OAM and its DMA exist since `refactor-codex-p3-sprites`), window support since `refactor-p3-window` (independent map, WX/WY, show/hide; shares tiles/BGP), no palette API/fades, no
+  metasprites beyond 16×16, no text/numbers (a `$9C00` map exists since [B19](#b19), with independent background/window map selection).
 - **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).

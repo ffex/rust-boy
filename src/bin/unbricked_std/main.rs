@@ -7,7 +7,8 @@ use rust_boy::{
     stdlib::{
         flow::If,
         graphics::{
-            sprites::{Sprite, clear_objects_screen, draw_sprites, initialize_objects_screen},
+            oam::{OamTarget, init_oam_dma, oam_dma_section, run_oam_dma, shadow_oam_section},
+            sprites::{Sprite, clear_objects_screen, draw_sprites, initialize_oam},
             tile_ref::TileRef,
             utility::{
                 add_tilemap, add_tiles, cp_in_memory, get_tile_by_pixel, is_specific_tile, memcopy,
@@ -49,17 +50,22 @@ fn main() {
     asm.emit_all(cp_in_memory("Paddle", sprite_tile(0)));
     asm.emit_all(cp_in_memory("Tilemap", Expr::hex(hw::SCRN0.value)));
 
-    asm.emit_all(initialize_objects_screen());
+    // The sprites live in a shadow OAM in WRAM, which an OAM DMA copies to OAM at the start
+    // of each frame (B12): the DMA routine goes to HRAM, the shadow OAM is cleared
+    asm.call("InitOamDma");
+    asm.emit_all(initialize_oam(OamTarget::Shadow));
     asm.emit_all(clear_objects_screen(asm.labels()));
 
     // Sprites: the paddle in OAM entry 0 (tile 0), the ball in entry 1 (tile 1)
-    let mut paddle = Sprite::new(0, 16, 128, 0, 0);
-    let mut ball = Sprite::new(1, 32, 100, 1, 0);
+    let mut paddle = Sprite::new(0, 16, 128, 0, 0).in_shadow_oam();
+    let mut ball = Sprite::new(1, 32, 100, 1, 0).in_shadow_oam();
     asm.ld_a(1);
     asm.ld_addr_def_a("wBallMomentumX");
     asm.ld(R8::A, -1);
     asm.ld_addr_def_a("wBallMomentumY");
     asm.emit_all(draw_sprites([&paddle, &ball]));
+    // OAM shows them from the first frame
+    asm.emit_all(run_oam_dma());
 
     asm.emit_all(turn_on_screen());
     asm.ld_a(0b11100100);
@@ -77,6 +83,8 @@ fn main() {
     asm.label("Main");
     asm.call("WaitNotVBlank");
     asm.call("WaitVBlank");
+    // In VBlank: what the last frame wrote to the shadow OAM goes to OAM
+    asm.emit_all(run_oam_dma());
 
     // Ball movement
     asm.emit_all(ball.move_x_var("wBallMomentumX"));
@@ -208,6 +216,8 @@ fn main() {
     score_sec.add_data("wScore", "db");
 
     let mut variables = Block::new();
+    variables.emit_all(shadow_oam_section(None));
+    variables.emit_all(oam_dma_section(None));
     variables.emit_all(counter_sec.generate());
     variables.emit_all(input_vars_sec.generate());
     variables.emit_all(ball_data_sec.generate());
@@ -215,6 +225,7 @@ fn main() {
 
     // Function Management
     asm.emit_all(memcopy());
+    asm.emit_all(init_oam_dma());
     asm.emit_all(update_keys());
     asm.emit_all(wait_vblank());
     asm.emit_all(wait_not_vblank());

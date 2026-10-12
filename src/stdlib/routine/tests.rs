@@ -216,6 +216,39 @@ fn test_delay_convention() {
     check_convention(&delay(), &[&zero, &five]);
 }
 
+/// `InitOamDma` copies the 8 bytes of the OAM DMA routine to `hOAMDMA` in HRAM ($FFB8
+/// in a `RustBoy` program), through `ldh [c], a`
+#[test]
+fn test_init_oam_dma_convention() {
+    use crate::stdlib::graphics::oam::{init_oam_dma, oam_dma_size};
+    let setup = |cpu: &mut TestCpu| {
+        cpu.consts
+            .insert("OamDmaCodeEnd - OamDmaCode".to_string(), 8);
+        cpu.consts.insert("LOW(hOAMDMA)".to_string(), 0xB8);
+        for i in 0..8 {
+            cpu.mem.insert(format!("OamDmaCode+{}", i), 0x10 + i);
+        }
+        // The routine's first byte has the label's name
+        cpu.mem.insert("OamDmaCode".to_string(), 0x10);
+    };
+    check_convention(&init_oam_dma(), &[&setup]);
+    let mut cpu = TestCpu::default();
+    setup(&mut cpu);
+    cpu.run(&init_oam_dma().code_with_deps());
+    // $FFB8: the top 8 bytes of the 64 HRAM bytes a `RustBoy` program gives its variables
+    let routine = hw::HRAM.value + 0x38;
+    for i in 0..oam_dma_size() {
+        assert_eq!(
+            cpu.mem.get(&format!("${:04X}", routine + i)),
+            Some(&(0x10 + i as u8)),
+            "byte {} in HRAM",
+            i
+        );
+    }
+    let past = format!("${:04X}", routine + oam_dma_size());
+    assert_eq!(cpu.mem.get(&past), None, "nothing past the routine");
+}
+
 #[test]
 fn test_is_specific_tile_convention() {
     let tile = |value: u8| {

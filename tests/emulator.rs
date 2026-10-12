@@ -624,7 +624,8 @@ hReadFirstFree: ds 1
 // ----- The examples -----
 
 /// Every CPU write to OAM with the LCD on happened in VBlank and none was dropped: the
-/// main loop of the example fits in VBlank, so it does not run into [B12] today
+/// hand-written examples (`unbricked`, `basic_usage`) write OAM from a main loop that fits
+/// in VBlank, so they do not run into [B12]
 ///
 /// [B12]: ../CONTEXT.md#b12
 fn assert_oam_written_in_vblank(gb: &GameBoy) {
@@ -639,6 +640,46 @@ fn assert_oam_written_in_vblank(gb: &GameBoy) {
         outside.len(),
         outside.first()
     );
+    assert_eq!(
+        gb.blocked_accesses(),
+        (0, 0, 0),
+        "VRAM / OAM accesses the PPU blocked"
+    );
+}
+
+/// The sprites reach OAM only through OAM DMAs of the shadow OAM, in VBlank ([B12]): the
+/// CPU never writes OAM with the LCD on (the start-up clears the shadow OAM, not OAM),
+/// every OAM DMA with the LCD on copies `wShadowOAM` and starts and ends in VBlank, one a
+/// frame, and no access was blocked (no DMA conflict either: the DMA routine runs from HRAM)
+///
+/// [B12]: ../CONTEXT.md#b12
+fn assert_sprites_shown_by_dma_in_vblank(gb: &GameBoy) {
+    let written: Vec<_> = gb.oam_writes().iter().filter(|w| w.lcd_on).collect();
+    assert!(
+        written.is_empty(),
+        "{} CPU writes to OAM with the LCD on, the first: {:?}",
+        written.len(),
+        written.first()
+    );
+    let shadow = gb.symbol("wShadowOAM");
+    let dmas: Vec<_> = gb.oam_dmas().iter().filter(|dma| dma.lcd_on).collect();
+    let frames = gb.frame();
+    assert!(
+        dmas.len() as u64 + 3 >= frames,
+        "{} OAM DMAs with the LCD on in {} frames",
+        dmas.len(),
+        frames
+    );
+    for dma in &dmas {
+        assert_eq!(dma.source, shadow, "a DMA of the shadow OAM: {:?}", dma);
+        let in_vblank = |(ly, mode): (u8, Mode)| (144..=153).contains(&ly) && mode == Mode::VBlank;
+        assert!(
+            in_vblank(dma.first) && dma.last.is_some_and(in_vblank),
+            "a DMA outside VBlank: {:?}",
+            dma
+        );
+    }
+    assert_eq!(gb.dma_conflicts(), 0, "the CPU left HRAM during a DMA");
     assert_eq!(
         gb.blocked_accesses(),
         (0, 0, 0),
@@ -685,7 +726,6 @@ fn check_unbricked(bin: &str) -> GameBoy {
     let x = gb.oam_entry(0)[1];
     assert!((35..=36).contains(&x), "the paddle moved right: X {}", x);
     assert_eq!(gb.oam_entry(0)[0], 144, "the paddle stays on its row");
-    assert_oam_written_in_vblank(&gb);
     gb
 }
 
@@ -730,6 +770,7 @@ fn unbricked_ball_bounces_paddle_moves_bricks_break() {
         return;
     }
     let gb = check_unbricked("unbricked");
+    assert_oam_written_in_vblank(&gb);
     assert!(bricks(&gb) < 32, "bricks broke: {} left", bricks(&gb));
     assert!(gb.read_symbol("wScore") > 0, "the score went up");
 }
@@ -739,7 +780,8 @@ fn unbricked_std_ball_bounces_paddle_moves() {
     if !rgbds_enabled() {
         return;
     }
-    check_unbricked("unbricked_std");
+    let gb = check_unbricked("unbricked_std");
+    assert_sprites_shown_by_dma_in_vblank(&gb);
 }
 
 #[test]
@@ -748,6 +790,7 @@ fn unbricked_rustboy_ball_bounces_paddle_moves_bricks_break() {
         return;
     }
     let gb = check_unbricked("unbricked_rustboy");
+    assert_sprites_shown_by_dma_in_vblank(&gb);
     assert!(bricks(&gb) < 32, "bricks broke: {} left", bricks(&gb));
     // The momentum variables are what the bounces change
     let momentum_x = gb.read_symbol("wBallMomentumX");
@@ -806,7 +849,7 @@ fn fosdem_player_walks_as_one_block_with_its_animation() {
     assert_eq!(gb.oam_entry(1)[1], 9);
     gb.run_script(&[(100, &[Button::Up])]);
     assert_eq!(gb.oam_entry(0)[0], 1, "the top limit, 1");
-    assert_oam_written_in_vblank(&gb);
+    assert_sprites_shown_by_dma_in_vblank(&gb);
 }
 
 #[test]
@@ -853,7 +896,7 @@ fn coin_anim_a_starts_the_animation_b_stops_it() {
     let stopped = gb.oam_entry(0)[2];
     gb.run_frames(40);
     assert_eq!(gb.oam_entry(0)[2], stopped, "B stopped the animation");
-    assert_oam_written_in_vblank(&gb);
+    assert_sprites_shown_by_dma_in_vblank(&gb);
 }
 
 // ----- The engine's frame model and interrupts -----
@@ -1376,7 +1419,7 @@ fn engine_soft_reset() {
     assert!(gb.read_symbol("wFrames") < 10);
 }
 
-// ----- B12: OAM written outside VBlank -----
+// ----- B12: the shadow OAM and the OAM DMA -----
 
 /// A program whose main loop moves a sprite one pixel right every frame, after
 /// `delay` iterations of the `Delay` routine (about 7 M-cycles each)
@@ -1396,57 +1439,91 @@ fn moving_sprite_rom(delay: u16) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
 }
 
-/// [B12], today's behaviour: the engine moves a sprite by writing OAM from the main loop.
-/// While the main loop fits in VBlank the sprite moves one pixel a frame; once the code
-/// before the move outlasts VBlank (~1140 M-cycles), the move runs in the visible part of
-/// the frame, and what happens depends on where in the line it lands: in HBlank it works,
-/// in mode 2 or 3, while the PPU owns OAM, the read gives `$FF` and the write is dropped.
-/// With 1004 iterations of `Delay` (1002 to 1007 give the same) it lands in mode 3 of line
-/// 52 on every frame, so the sprite never moves. (It was 1008, 1006 to 1011, when the main
-/// loop polled `rLY` for VBlank: the frame's work now starts after the VBlank interrupt, its
-/// handler and `WaitFrame`'s return, about 28 M-cycles later.)
-///
-/// When shadow OAM + DMA lands (Phase 3, graphics), the delayed program must move its
-/// sprite like the other one: turn the second half of this test into that check.
+/// [B12], fixed: the engine moves a sprite in the shadow OAM, in WRAM, and the VBlank
+/// handler copies it to OAM with an OAM DMA, so the sprite moves one pixel a frame whatever
+/// the main loop does before the move. Before the fix the move wrote OAM itself: with 1004
+/// iterations of `Delay` (1002 to 1007 gave the same) it landed in mode 3 of line 52 on
+/// every frame, where the read gave `$FF` and the write was dropped, so the sprite never
+/// moved. Here the delays put the move in VBlank (0), in mode 3 of line 52 (1004), and at
+/// many other points of the frame, up to the end of its visible lines.
 ///
 /// [B12]: ../CONTEXT.md#b12
 #[test]
-fn b12_oam_written_outside_vblank_is_lost() {
+fn b12_sprite_moves_whatever_the_main_loop_delay() {
     if !rgbds_enabled() {
         return;
     }
-    // Within VBlank: the sprite (OAM X = 8 + 8) moves 1 pixel a frame
-    let mut gb = moving_sprite_rom(0).boot();
-    gb.run_frames(10);
-    let x = gb.oam_entry(0)[1];
-    gb.run_frames(60);
-    assert_eq!(gb.oam_entry(0)[1], x.wrapping_add(60));
-    assert_oam_written_in_vblank(&gb);
+    for delay in [0, 1, 300, 1004, 1005, 1500, 2000, 2300] {
+        let mut gb = moving_sprite_rom(delay).boot();
+        gb.run_frames(10);
+        let x = gb.oam_entry(0)[1];
+        let dmas = gb.oam_dmas().len();
+        gb.run_frames(60);
+        assert_eq!(
+            gb.oam_entry(0)[1],
+            x.wrapping_add(60),
+            "delay {}: the sprite moves one pixel a frame",
+            delay
+        );
+        assert_eq!(
+            gb.oam_dmas().len() - dmas,
+            60,
+            "delay {}: one OAM DMA a frame",
+            delay
+        );
+        assert_sprites_shown_by_dma_in_vblank(&gb);
+    }
+}
 
-    // After the delay the move runs mid-frame, in mode 3
-    let mut gb = moving_sprite_rom(1004).boot();
-    gb.run_frames(10);
-    let x = gb.oam_entry(0)[1];
-    let before = gb.oam_writes().len();
-    let blocked_reads = gb.blocked_accesses().2;
-    gb.run_frames(60);
-    let moves: Vec<_> = gb.oam_writes()[before..].to_vec();
-    assert_eq!(moves.len(), 60, "one OAM write a frame");
-    assert!(
-        moves
-            .iter()
-            .all(|write| write.lcd_on && write.mode == Mode::Drawing && write.dropped),
-        "every write lands in mode 3 and is dropped: {:?}",
-        moves.first()
-    );
-    assert_eq!(
-        gb.oam_entry(0)[1],
-        x,
-        "today (B12) the sprite does not move"
-    );
-    assert_eq!(
-        gb.blocked_accesses().2 - blocked_reads,
-        60,
-        "and each read of the sprite's X gave $FF"
-    );
+/// The VBlank handler of `rom` over 10 frames: the M-cycles from its first instruction to
+/// the end of its `reti`, and `LY` / the PPU mode there (the first `reti` the CPU reaches
+/// from `VBlankHandler`: the handler has one, at its end)
+fn vblank_handler_runs(rom: &Rom, frames: usize) -> Vec<(u64, u8, Mode)> {
+    let mut gb = rom.boot();
+    gb.run_frames(5);
+    let handler = gb.symbol("VBlankHandler");
+    let mut runs = Vec::new();
+    for _ in 0..frames {
+        assert!(gb.run_until_pc(handler, 2), "the VBlank handler runs");
+        let start = gb.cycles();
+        while gb.read(gb.registers().pc) != 0xD9 {
+            gb.step();
+        }
+        gb.step();
+        let (ly, mode) = gb.ly_mode();
+        runs.push((gb.cycles() - start, ly, mode));
+    }
+    runs
+}
+
+/// The VBlank handler's work fits in VBlank (1140 M-cycles from line 144): the OAM DMA of
+/// the shadow OAM (B12) takes about 180 M-cycles with its call, and the handler ends long
+/// before line 0, where OAM is the PPU's again
+#[test]
+fn engine_vblank_handler_fits_in_vblank() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for delay in [0, 1004] {
+        let runs = vblank_handler_runs(&moving_sprite_rom(delay), 10);
+        for &(cycles, ly, mode) in &runs {
+            assert!(
+                (144..=153).contains(&ly) && mode == Mode::VBlank,
+                "the handler ended on line {} ({:?}) after {} M-cycles",
+                ly,
+                mode,
+                cycles
+            );
+        }
+        let cycles = runs[0].0;
+        assert!(
+            runs.iter().all(|run| run.0 == cycles),
+            "the same work every frame: {:?}",
+            runs
+        );
+        // push af, the DMA (ld a, call, the 168 M-cycles of the routine), the frame flag,
+        // pop af, reti
+        assert!((180..=230).contains(&cycles), "{} M-cycles", cycles);
+        eprintln!("VBlank handler with the OAM DMA: {} M-cycles", cycles);
+    }
 }

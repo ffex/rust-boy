@@ -397,6 +397,22 @@ pub const OAM_X_OFFSET: u8 = 8;
 /// OAM Y of the screen's top edge: OAM Y = screen y + 16
 pub const OAM_Y_OFFSET: u8 = 16;
 
+/// An OAM DMA ([`DMA`]) copies a page: its source is `$XX00`, written as `XX` to `rDMA`, so
+/// a shadow OAM is aligned to 256 bytes (8 bits, `ALIGN[8]`)
+pub const OAM_DMA_SOURCE_ALIGN: u8 = 8;
+/// M-cycles an OAM DMA takes: one byte of [`OAM_SIZE`] per M-cycle. Meanwhile the CPU can
+/// reach only HRAM (and the I/O registers), so the code that starts it runs from HRAM and
+/// waits that long
+pub const OAM_DMA_MCYCLES: u16 = OAM_SIZE as u16;
+
+/// M-cycles in one line of the LCD: 456 dots
+pub const LINE_MCYCLES: u16 = 114;
+/// Lines of VBlank in a frame: `LY` from [`SCRN_Y`] (144) to 153
+pub const VBLANK_LINES: u16 = 10;
+/// M-cycles of VBlank (mode 1) in a frame: 10 lines of 114, the time OAM and VRAM are free
+/// for the CPU however long the visible lines' HBlanks are
+pub const VBLANK_MCYCLES: u16 = VBLANK_LINES * LINE_MCYCLES;
+
 /// End (exclusive) of HRAM: `rIE` is at `$FFFF`
 pub const HRAM_END: u16 = 0xFFFF;
 /// The stack pointer the DMG boot ROM leaves, `SP` = `$FFFE`: the stack grows down into

@@ -28,9 +28,10 @@
     ld hl, $9800
     ld bc, TilemapEnd - Tilemap
     call Memcopy
+    call InitOamDma
     ld a, 0
     ld b, 160
-    ld hl, _OAMRAM
+    ld hl, wShadowOAM
     .clear_oam_0:
     ld [hli], a
     dec b
@@ -39,7 +40,7 @@
     ld [wBallMomentumX], a
     ld a, -1
     ld [wBallMomentumY], a
-    ld hl, _OAMRAM
+    ld hl, wShadowOAM
     ld a, 144
     ld [hli], a
     ld a, 24
@@ -56,6 +57,8 @@
     ld [hli], a
     ld a, 0
     ld [hli], a
+    ld a, HIGH(wShadowOAM)
+    call hOAMDMA
     ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON
     ld [rLCDC], a
     ld a, 228
@@ -70,21 +73,23 @@
     Main:
     call WaitNotVBlank
     call WaitVBlank
+    ld a, HIGH(wShadowOAM)
+    call hOAMDMA
     ld a, [wBallMomentumX]
     ld b, a
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     add a, b
-    ld [_OAMRAM+5], a
+    ld [wShadowOAM+5], a
     ld a, [wBallMomentumY]
     ld b, a
-    ld a, [_OAMRAM+4]
+    ld a, [wShadowOAM+4]
     add a, b
-    ld [_OAMRAM+4], a
+    ld [wShadowOAM+4], a
     BounceOnTop:
-    ld a, [_OAMRAM+4]
+    ld a, [wShadowOAM+4]
     sub a, 17
     ld c, a
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     sub a, 8
     ld b, a
     call GetTileByPixel
@@ -94,10 +99,10 @@
     ld [wBallMomentumY], a
     BounceOnTopEnd:
     BounceOnRight:
-    ld a, [_OAMRAM+4]
+    ld a, [wShadowOAM+4]
     sub a, 16
     ld c, a
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     sub a, 7
     ld b, a
     call GetTileByPixel
@@ -107,10 +112,10 @@
     ld [wBallMomentumX], a
     BounceOnRightEnd:
     BounceOnLeft:
-    ld a, [_OAMRAM+4]
+    ld a, [wShadowOAM+4]
     sub a, 16
     ld c, a
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     sub a, 9
     ld b, a
     call GetTileByPixel
@@ -120,10 +125,10 @@
     ld [wBallMomentumX], a
     BounceOnLeftEnd:
     BounceOnBottom:
-    ld a, [_OAMRAM+4]
+    ld a, [wShadowOAM+4]
     sub a, 15
     ld c, a
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     sub a, 8
     ld b, a
     call GetTileByPixel
@@ -133,21 +138,21 @@
     ld [wBallMomentumY], a
     BounceOnBottomEnd:
     ; Paddle bounce check
-    ld a, [_OAMRAM+0]
+    ld a, [wShadowOAM+0]
     ld b, a
-    ld a, [_OAMRAM+4]
+    ld a, [wShadowOAM+4]
     add a, 5
     cp a, b
     jp nz, .end_if_1
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     ld b, a
-    ld a, [_OAMRAM+1]
+    ld a, [wShadowOAM+1]
     sub a, 8
     cp a, b
     jp nc, .end_if_2
-    ld a, [_OAMRAM+5]
+    ld a, [wShadowOAM+5]
     ld b, a
-    ld a, [_OAMRAM+1]
+    ld a, [wShadowOAM+1]
     add a, 16
     cp a, b
     jp c, .end_if_3
@@ -162,7 +167,7 @@
     ld a, [wCurKeys]
     and a, PADF_LEFT
     jp z, .check_left_end_6
-    ld a, [_OAMRAM+1]
+    ld a, [wShadowOAM+1]
     sub a, 16
     jp c, .sprite0_left_limit_end_4
     sub a, 1
@@ -170,14 +175,14 @@
     ld a, 0
     .sprite0_left_limit_store_4:
     add a, 16
-    ld [_OAMRAM+1], a
+    ld [wShadowOAM+1], a
     .sprite0_left_limit_end_4:
     .check_left_end_6:
     .check_right_7:
     ld a, [wCurKeys]
     and a, PADF_RIGHT
     jp z, .check_right_end_7
-    ld a, [_OAMRAM+1]
+    ld a, [wShadowOAM+1]
     sub a, 104
     jp nc, .sprite0_right_limit_end_5
     add a, 1
@@ -185,7 +190,7 @@
     ld a, 0
     .sprite0_right_limit_store_5:
     add a, 104
-    ld [_OAMRAM+1], a
+    ld [wShadowOAM+1], a
     .sprite0_right_limit_end_5:
     .check_right_end_7:
     jp Main
@@ -207,6 +212,27 @@
     or a, c
     jp nz, .copy
     ret
+    ; Copy the OAM DMA routine to HRAM: during a DMA the CPU reaches only HRAM
+    InitOamDma:
+    ld hl, OamDmaCode
+    ld b, OamDmaCodeEnd - OamDmaCode
+    ld c, LOW(hOAMDMA)
+    .copy:
+    ld a, [hli]
+    ldh [c], a
+    inc c
+    dec b
+    jr nz, .copy
+    ret
+    ; The OAM DMA routine (run from HRAM): a = the source page
+    OamDmaCode:
+    ldh [rDMA], a
+    ld a, 40
+    .wait:
+    dec a
+    jr nz, .wait
+    ret
+    OamDmaCodeEnd:
     UpdateKeys:
     ld a, P1F_GET_BTN
     call .onenibble
@@ -619,6 +645,12 @@
     db $04, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $07, $03, $03, $03, $03, $03, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     TilemapEnd:
 
+    SECTION "Shadow OAM", WRAM0, ALIGN[8]
+    wShadowOAM:
+    ds 160
+    SECTION "OAM DMA", HRAM
+    hOAMDMA:
+    ds 8
     SECTION "Counter", WRAM0
     wFrameCounter: db
     SECTION "Input Variables", WRAM0

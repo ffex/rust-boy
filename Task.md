@@ -242,7 +242,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `unbricked_std` uses. `b12_sprite_moves_whatever_the_main_loop_delay`: the sprite moves one pixel a frame after 0 to
       2300 `Delay` iterations (the old engine fails it); the 4 examples with sprites change by design, their tests pass,
       with every DMA in VBlank)
-- [ ] VRAM write queue flushed during VBlank (tilemap edits, score)
+- [x] VRAM write queue flushed during VBlank (tilemap edits, score)
+      (branch `refactor-codex-p3-vram-queue`: `RustBoy::queue_vram_write` and
+      `queue_vram_write_from_registers`, 12 pending byte writes in 41 WRAM bytes; carry reports rejection
+      on full/invalid runtime address. Single producer in init/main (`Error::MainLoopOnly` from a handler), cursor
+      published last, IME preserved;
+      flush after OAM DMA, before user VBlank code, late entries deferred. Emulator tests inject VBlank at every
+      enqueue instruction boundary and check delayed main-loop writes, late flush and the full queue plus DMA
+      handler (967 M-cycles, within 1140); standalone routines in `stdlib::graphics::vram_queue`)
 - [ ] Background scrolling (`SCX`/`SCY`), camera helpers
 - [ ] Window layer (`WX`/`WY`; a tilemap at `$9C00` can be added since [B19](CONTEXT.md#b19))
 - [ ] `GetTileByPixel` for the `$9C00` map: it reads only `$9800`, also when the background shows `$9C00`

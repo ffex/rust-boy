@@ -233,6 +233,29 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **VRAM write queue** (since `refactor-codex-p3-vram-queue`):
+  `stdlib::graphics::vram_queue` owns the `QueueVramWrite` and `FlushVramQueue` routines.
+  `RustBoy::queue_vram_write(address, value)` or `queue_vram_write_from_registers()` opts in:
+  a 13-slot ring holds at most 12 pending byte writes; each slot contains address low/high and value.
+  `wVramQueue` (39 bytes), `wVramQueueRead` and `wVramQueueWrite` (one byte each) are reserved
+  at the top of WRAM0, below shadow OAM when present, without moving user variables. Competing
+  definitions return `Error::NameConflict`; insufficient memory is `Error::MemoryFull`.
+  Startup clears the cursors before user init code. Enqueue takes `hl` and `a`, changes all
+  registers and flags, and preserves IME. Carry clear means accepted; carry set means full or
+  a runtime destination outside VRAM (constant errors panic at the API call). Rejection retains
+  queued entries; callers retry if necessary. There is one producer, in init/main, never in an
+  interrupt handler: `build()` returns `Error::MainLoopOnly` when a handler's code reaches
+  `QueueVramWrite`, directly or through user functions (`FunctionRegistry::reaches`; labels of `raw()`
+  code are not followed, and a main-loop call to `FlushVramQueue`, a second consumer, is not rejected:
+  both are documented limits). The write cursor is published after all bytes, so the consumer sees only
+  complete entries even when enqueue is interrupted. Flush consumes FIFO entries with interrupts
+  off, beginning writes only on lines 144–152 and retaining entries if late. Unit tests cover
+  wrapping, overflow, invalid destinations, FIFO order and routine conventions; emulator tests
+  cover delayed main-loop work, rejection/IME at init, full-queue timing alongside OAM DMA,
+  late deferral and VBlank injected at every enqueue instruction boundary. The interruption
+  regression fails when the cursor is published early. Programs not requesting the queue keep
+  their output: no example uses the queue, and no example snapshot changes.
+
 - **The frame model and interrupts** (since `refactor-p3-interrupts`; `src/stdlib/interrupts.rs`, `RustBoy::on_interrupt`
   and `build_layout` in `src/engine/rustboy.rs`). A `RustBoy` program runs once a frame, woken by the VBlank interrupt:
   - **Start-up**: `EntryPoint` turns interrupts off (`di`) and sets `SP` = `$FFFE` (`hw::STACK_TOP`; for a soft reset,
@@ -246,6 +269,12 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
     whatever the main loop does: with sprites, the OAM DMA of the shadow OAM goes first in it (since
     `refactor-codex-p3-sprites`, [B12](#b12)): 193 M-cycles of handler with nothing else, so the main loop's code starts
     about 220 M-cycles after line 144.
+    With the opt-in VRAM queue (`refactor-codex-p3-vram-queue`), `FlushVramQueue` runs after DMA
+    and before `on_vblank`; a full 12-entry queue plus DMA takes 967 M-cycles of handler work
+    (excluding arbitrary user handler code), within VBlank's 1140 M-cycles. It is VBlank the main
+    loop no longer has: with a sprite it starts with about 920 M-cycles of VBlank left, with 12 queued
+    writes about 150, so its direct VRAM accesses (`GetTileByPixel`, `TileRef::set_tile`) land while
+    the screen is drawn; the `on_vblank` code also starts up to about 770 M-cycles later.
   - **Main loop**: `Main:` `call WaitFrame` (set `IEF_VBLANK` in `rIE`, so code that wrote `rIE` without it does not
     stop the main loop; clear `wVBlankFlag`, then: `di`, check it, `halt` with interrupts off, `ei`,
     again; `halt` with interrupts off ends when an interrupt is pending, without taking it, so a VBlank that comes

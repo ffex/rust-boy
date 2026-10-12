@@ -50,6 +50,13 @@ together: every breaking change of the refactoring is in this release, so a prog
   constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
   With the builtin `InitOamDma`, so are the labels of the code it copies, `OamDmaCode` and `OamDmaCodeEnd`
   (`Definition::BuiltinLabel`).
+- **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
+  `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
+  handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
+  invalid runtime address). Enqueue preserves IME and tolerates VBlank interruptions; late flushes
+  retain entries for the next VBlank. Queue code belongs only in init/main: handler code that reaches
+  it makes `build()` return `Error::MainLoopOnly`. A full queue leaves the main loop little VBlank time
+  (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -90,6 +97,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | a program that created `wFrameCounter` (or `wCurKeys`, `wNewKeys`) itself got a second label (rgbasm: "already defined") | the program's variable is used; with another type than `u8`, `Err(Error::NameConflict { .., second: Definition::GeneratedVariable(VarType::U8) })` |
 | code or data in a RAM section, or a section name used twice: rgbasm failed | `Err(Error::Section(message))` |
 | variables past WRAM0 were not checked (rgblink failed, or the counter wrapped) | `build()` returns `Err(Error::MemoryFull { region, what, needed, available })` |
+| an interrupt handler could call the VRAM queue's `QueueVramWrite` (one write lost when it interrupted the main loop's) | `Err(Error::MainLoopOnly { routine, handler })` |
 | `gb.call("X")`, `call_args("X", ..)` panicked when `X` was not (yet) a function | `X` may be defined after the call; `build()` returns `Err(Error::UnknownFunction { name, available })` if it is still not one (`keep_function`, new, the same) |
 | `call` of an animation function worked only after a first `build()` | it works at any time; `function_exists` knows animation functions |
 | a variable, tile or section name that RGBDS rejects (`"a"`, `"LOW"`, `"my tiles"`, a `"` in a section name) failed in rgbasm | panics in `create_*` / `tiles.add_*` / `add_sprite` / `create_in_section` / `Routine::with_variable` |

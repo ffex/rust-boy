@@ -3,12 +3,12 @@
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
 [`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review,
-fixes and merges.
+fix requests and merges.
 
 ## How we work
 
 - Codex makes the first try of a task and opens its PR into `refactor`. Claude then has it reviewed by a
-  context-free agent, fixes the findings, has it reviewed again and merges it. Only the final
+  context-free agent, sends the findings to Codex as an `@codex fix-request` comment, has it reviewed again and merges it. Only the final
   `refactor` → `main` PR waits for the maintainer.
 - `refactor` is the integration branch (created from `main` at `4601a5c`).
 - Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,

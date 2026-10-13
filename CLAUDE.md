@@ -142,6 +142,8 @@ For each PR (or chain of stacked PRs), Codex's or Claude's own:
    round-trip would cost more. Either way: a fix that changes behaviour updates `Task.md`,
    `CONTEXT.md` and `CHANGELOG.md` in the same branch and comes with a test; the CI checks run before
    every push; snapshots are updated only for an intended asm change, never to make a test pass.
+   Claude finds Codex's reply by reading the PR's comments (`gh pr view N --comments`); if Codex
+   has not answered when nothing else is left to do, Claude tells the maintainer the PR number.
    Reviewer agents may run on a smaller model (Sonnet) to save tokens.
 3. **Re-review.** A review applies only to the commit ids it recorded: after fixes, start a new
    context-free review of the new head. Repeat 2–3 until the reviewer has no findings that block.

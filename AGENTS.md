@@ -12,8 +12,8 @@ Read both before starting a task, and keep them up to date in the same branch as
 
 Codex makes the **first try** of a task: implementation, tests, documentation, snapshots, a branch,
 commits and a PR into `refactor`. Then Codex hands the PR to Claude and stops working on it.
-Claude, following [`CLAUDE.md`](CLAUDE.md), has the PR reviewed, fixes the findings on the PR
-branch, and merges it into `refactor` when everything is OK. Only the final `refactor` → `main` PR
+Claude, following [`CLAUDE.md`](CLAUDE.md), has the PR reviewed, sends the findings back to
+Codex as fix-request comments (below), and merges it into `refactor` when everything is OK. Only the final `refactor` → `main` PR
 needs the maintainer. Do not treat a Codex self-review as Claude's independent review.
 
 ## Working style
@@ -109,7 +109,7 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`),
   and `cargo +1.85 test` too when Rust 1.85 is installed (CI's MSRV job).
 - Push the branch and open a **PR into `refactor`** (never straight into `main`), then hand it to Claude
-  (below). Claude reviews, fixes and merges it. When everything is done, `refactor` → `main` is the
+  (below). Claude reviews it, asks Codex for fixes and merges it. When everything is done, `refactor` → `main` is the
   final PR, which only the maintainer merges.
 - Never force-push, rewrite published history or delete branches without asking first.
 - Do not mention or link AI sessions in commit messages or PR descriptions.
@@ -120,7 +120,7 @@ When the PR is open and its CI checks pass locally (or the ones that could not r
 not run), hand it to Claude: give the maintainer the PR number, the branch and, for stacked PRs,
 the merge order, and leave the PR's *Independent review* section as "pending" (Claude also picks up
 open PRs marked so). Do not push to the branch after the handoff, unless a fix-request (below) or the
-maintainer asks you to. Questions go to the maintainer. If something
+maintainer asks you to: fix-request comments are Claude's only direct channel to you. Questions go to the maintainer. If something
 is unfinished or uncertain, say so in the PR's *Risks and follow-ups* section rather than in the
 handoff, so the reviewer reads it independently.
 Claude fills in the *Independent review* section.

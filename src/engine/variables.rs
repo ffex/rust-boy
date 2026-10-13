@@ -348,6 +348,10 @@ pub enum VarType {
 
 impl VarType {
     /// Get size in bytes
+    ///
+    /// # Panics
+    /// For an array whose byte size does not fit a `u16`.
+    #[track_caller]
     pub fn size(&self) -> u16 {
         match self {
             VarType::U8 | VarType::I8 => 1,

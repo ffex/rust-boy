@@ -692,9 +692,10 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), text and score printing (see
   [Text and scores](#text-and-scores-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
-  and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout, runtime sprite pools (see
-  [Sprite visibility and reusable OAM slots](#sprite-visibility-and-reusable-oam-slots)),
-  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want, and
+  and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
+  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), runtime sprite and
+  entity pools (see [Sprite visibility and reusable OAM slots](#sprite-visibility-and-reusable-oam-slots) and
+  [Entity pools](#entity-pools)), animations (looping, ping-pong or played once, each with its own period if you want, and
   completion events or callbacks; see [Per-animation timing](#per-animation-timing) and
   [Animation completion and replay](#animation-completion-and-replay)), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and

@@ -53,6 +53,10 @@ fn finish(mut code: Block, name: &str, reads: Regs, returns: Regs, clobbers: Reg
 /// Release clears every entry byte then frees it; hide writes Y=0 without freeing.
 /// Write takes B=screen X, C=screen Y, D=tile, E=flags, preserves BC/DE and writes Y
 /// last. X>247/Y>239 are rejected rather than wrapping. Release/write/hide change AF/HL.
+///
+/// # Panics
+/// If `count` is 0 or the range `first..first + count` goes past the 40 OAM entries.
+#[track_caller]
 pub fn routines(
     name: &str,
     first: u8,

@@ -342,9 +342,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 
 - **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
   a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
-  loads fonts through the background tile allocator (`load_font`) and reserves printer cursors and number buffers as
-  WRAM arrays. A print job queues until the queue is full and resumes at its cursor on the next main-loop call; carry
-  clear means queued, not yet shown; it never writes VRAM directly. Newlines and wrapping return to the first X
+  loads fonts through the background tile allocator (`load_font`) and reserves each printer's cursor (a `u16` variable)
+  and each score's digit buffer (a WRAM array). A print job queues until the queue is full and resumes at its cursor
+  on the next main-loop call; carry clear means queued, not yet shown; it never writes VRAM directly. Newlines and wrapping return to the first X
   column; unsupported glyphs and layouts past the map panic before anything is allocated. Decimal scores have five
   digits with leading zeros, BCD scores four; invalid BCD keeps the previous buffer and cursor. One main/init
   producer per job; handlers that reach `step` are rejected through the queue's dependency check. Replacing a number
@@ -1473,9 +1473,10 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, text and scores since `refactor-p3-text`. Background scrolling exists since
-  `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
-  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
+  entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`.
+  Background scrolling exists since `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and
+  palettes/fades since `refactor-p3-palettes` (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the

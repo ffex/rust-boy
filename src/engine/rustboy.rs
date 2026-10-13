@@ -13,7 +13,7 @@ use crate::stdlib::inputs::select_all_keys;
 use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
 
-use super::config::{Palettes, RustBoyConfig};
+use super::config::{Palettes, RustBoyConfig, Window};
 use super::error::Error;
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
@@ -83,6 +83,7 @@ pub struct RustBoy {
 
     /// Whether the program uses the bounded VRAM write queue.
     vram_queue: bool,
+    main_only_routines: Vec<String>,
 
     /// Optional pinned driver and imported songs.
     music: Option<MusicState>,
@@ -147,6 +148,7 @@ impl RustBoy {
             updates_keys: false,
             vram_queue: false,
             music: None,
+            main_only_routines: Vec::new(),
             config,
         }
     }
@@ -271,7 +273,8 @@ impl RustBoy {
     /// needs 8x16 mode.
     ///
     /// # Panics
-    /// If sprites were already added with another size: call it before adding sprites.
+    /// If sprites or sprite pools were already added with another size: call it before adding
+    /// them (a pool's Write routine checks 8x16 tiles when the pool is created).
     pub fn set_sprite_size(&mut self, size: SpriteSize) -> &mut Self {
         self.sprites.set_size(size);
         self.config.sprite_size = size;
@@ -329,6 +332,60 @@ impl RustBoy {
     /// The tilemap the background shows (see [`RustBoy::set_background_tilemap`])
     pub fn background_tilemap(&self) -> TilemapArea {
         self.config.background_tilemap
+    }
+
+    /// Configure the startup window; `None` keeps it disabled.
+    pub fn set_window(&mut self, window: Option<Window>) -> &mut Self {
+        self.config.window = window;
+        self
+    }
+
+    /// Move the window to screen pixels. Emit in init or VBlank.
+    ///
+    /// # Panics
+    /// If X is not 0..=158 or Y not 0..=143.
+    #[track_caller]
+    pub fn set_window_position(&self, x: u8, y: u8) -> Vec<Instr> {
+        crate::stdlib::graphics::window::set_position(x, y)
+    }
+
+    /// Show or hide the window, preserving the other LCDC bits. Emit in VBlank: in
+    /// [`RustBoy::init`] it has no effect, since `build()` writes the LCD-on LCDC value
+    /// (from [`RustBoyConfig::window`]) after init code.
+    /// The background/window enable bit must also be set on DMG. Showing it writes neither
+    /// its position nor its map: without a [`Window`] configured, set them first
+    /// ([`RustBoy::set_window_position`], [`RustBoy::select_window_tilemap`]), or it shows at
+    /// WX=0, WY=0 (the values after the boot ROM).
+    pub fn show_window(&self, shown: bool) -> Vec<Instr> {
+        crate::stdlib::graphics::window::set_enabled(shown)
+    }
+
+    /// Change the window map at runtime, preserving the background map. Emit in VBlank: in
+    /// [`RustBoy::init`] it has no effect (see [`RustBoy::show_window`]); choose the start-up
+    /// map with [`Window::new`].
+    pub fn select_window_tilemap(&self, area: TilemapArea) -> Vec<Instr> {
+        crate::stdlib::graphics::window::select_tilemap(area == TilemapArea::Map9C00)
+    }
+
+    /// Write a DMG palette at runtime. Emit in init or VBlank for stable frames.
+    /// Changes A only; startup palettes are configured separately with set_palettes.
+    pub fn set_palette(
+        &self,
+        register: crate::stdlib::graphics::palette::PaletteRegister,
+        palette: impl Into<crate::stdlib::graphics::palette::Palette>,
+    ) -> Vec<Instr> {
+        crate::stdlib::graphics::palette::set_palette(register, palette)
+    }
+
+    /// Apply a nonblocking palette fade using A as progress (0..=3; >=3 completes).
+    /// Emit in VBlank after loading your progress variable. Changes A and flags only:
+    /// A holds the palette byte afterwards, so load the progress again before the next fade.
+    pub fn fade_palette(
+        &self,
+        register: crate::stdlib::graphics::palette::PaletteRegister,
+        fade: crate::stdlib::graphics::palette::PaletteFade,
+    ) -> Vec<Instr> {
+        fade.emit(self.labels(), register)
     }
 
     /// Define a constant value
@@ -902,6 +959,11 @@ impl RustBoy {
             .filter(|interrupt| self.has_handler(*interrupt))
             .collect();
         finish.emit_all(interrupts::set_enabled(&enabled));
+        if let Some(window) = self.config.window {
+            finish.emit_all(crate::stdlib::graphics::window::set_position_raw(
+                window.wx, window.wy,
+            ));
+        }
         if let Some(music) = &self.music {
             finish.emit_all(crate::stdlib::audio::music::start(&music.songs[0]));
         }
@@ -921,6 +983,12 @@ impl RustBoy {
         lcdc = lcdc | self.sprites.size().lcdc_flag();
         if self.config.background_tilemap != TilemapArea::Map9800 {
             lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
+        }
+        if let Some(window) = self.config.window {
+            lcdc = lcdc | hw::LCDCF_WINON;
+            if window.tilemap == TilemapArea::Map9C00 {
+                lcdc = lcdc | hw::LCDCF_WIN9C00;
+            }
         }
         finish.ld(R8::A, lcdc);
         finish.ld_addr_def_a(hw::LCDC);
@@ -1057,14 +1125,41 @@ impl RustBoy {
         code.extend(handlers.iter().map(Routine::body));
         let mut generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
         generated.extend(handlers.iter().map(|handler| handler.name().to_string()));
+        for callback in self.sprites.animation_callback_names() {
+            if !self.function_exists(callback) && !self.functions.is_external_symbol(callback) {
+                return Err(Error::UnknownFunction {
+                    name: callback.to_string(),
+                    available: self.functions.available_functions(&generated),
+                });
+            }
+        }
         // The VRAM queue has one producer, the main loop: no handler may enqueue
         let enqueue = vram_queue::enqueue();
+        let event_functions = self.sprites.animation_event_function_names();
         for (interrupt, handler) in &self.handlers {
+            for routine in &event_functions {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
+            }
             if self.functions.reaches(&handler.code, enqueue.name()) {
                 return Err(Error::MainLoopOnly {
                     routine: enqueue.name().to_string(),
                     handler: interrupt.handler_label().to_string(),
                 });
+            }
+        }
+        for (interrupt, handler) in &self.handlers {
+            for routine in &self.main_only_routines {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
             }
         }
         if self.music.is_some() {
@@ -1265,7 +1360,7 @@ impl RustBoy {
 
         asm.chunk(Chunk::Init);
         asm.emit_all(startup);
-        asm.emit_all(vars.generate_init_code());
+        asm.emit_all(vars.generate_init_code(&labels));
         asm.emit_all(finish);
 
         asm.chunk(Chunk::Data);
@@ -1719,7 +1814,7 @@ impl RustBoy {
         tile_source: super::tiles::TileSource,
         x: u8,
         y: u8,
-        flags: u8,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::SpriteId {
         // The sprite name is checked before it names the tiles
         check_name("sprite", name);
@@ -1730,7 +1825,156 @@ impl RustBoy {
             first: self.tiles.sprite_tile_index(id),
             count: u16::try_from(count).unwrap_or(u16::MAX),
         };
-        self.sprites.add(name, tiles, x, y, flags)
+        self.sprites.add(name, tiles, x, y, flags.into().bits())
+    }
+
+    /// Create an arbitrary metasprite from hardware parts at offsets from screen (x, y).
+    /// Supports either configured sprite size and up to the available 40 OAM entries.
+    /// Parts take OAM entries in list order (on DMG overlapping objects draw by smaller X first,
+    /// OAM order breaks ties); each part gets `{name}_partN` tile/animation labels.
+    /// Composite movement preserves the layout and tests its leading part at limits.
+    ///
+    /// # Panics
+    /// If parts are empty, names collide, tiles/OAM are full, a part has no tiles or
+    /// violates 8x16 alignment, or an offset position is outside supported screen coordinates
+    /// (X 0..=247, Y 0..=239). Invalid layout/capacity is checked before registration.
+    #[track_caller]
+    pub fn add_metasprite(
+        &mut self,
+        name: &str,
+        x: u8,
+        y: u8,
+        parts: &[super::sprites::MetaspritePart],
+    ) -> super::sprites::CompositeSpriteId {
+        let names: Vec<_> = (0..parts.len())
+            .map(|index| format!("{name}_part{index}"))
+            .collect();
+        self.add_metasprite_named(name, x, y, parts, &names)
+    }
+
+    #[track_caller]
+    fn add_metasprite_named(
+        &mut self,
+        name: &str,
+        x: u8,
+        y: u8,
+        parts: &[super::sprites::MetaspritePart],
+        names: &[String],
+    ) -> super::sprites::CompositeSpriteId {
+        self.sprites.check_composite_parts(name, names);
+        let mut next_tile = usize::from(self.tiles.next_sprite_tile());
+        // A loop, not a closure: the asserts must report the caller's line (#[track_caller])
+        let mut positions = Vec::with_capacity(parts.len());
+        for part in parts {
+            let count = part.tiles.tile_count();
+            assert!(
+                count > 0,
+                "metasprite {name:?} part must have at least one tile"
+            );
+            if self.sprite_size() == SpriteSize::Size8x16 {
+                assert!(
+                    count % 2 == 0 && next_tile % 2 == 0,
+                    "metasprite {name:?} needs even tile counts and indices in 8x16 mode"
+                );
+            }
+            next_tile = next_tile
+                .checked_add(count)
+                .expect("metasprite tile count overflow");
+            assert!(
+                next_tile
+                    <= usize::from((hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE),
+                "metasprite {name:?} tiles do not fit in VRAM"
+            );
+            let mut position = [0u8; 2];
+            for (slot, anchor, offset, hardware_offset) in [
+                (0, x, part.x, hw::OAM_X_OFFSET),
+                (1, y, part.y, hw::OAM_Y_OFFSET),
+            ] {
+                let value = i32::from(anchor) + i32::from(offset);
+                assert!(
+                    (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
+                    "metasprite {name:?} part position is outside supported screen coordinates"
+                );
+                position[slot] = value as u8;
+            }
+            positions.push((position[0], position[1]));
+        }
+        let sprites = parts
+            .iter()
+            .zip(names)
+            .zip(positions)
+            .map(|((part, label), (x, y))| {
+                self.add_sprite(label, part.tiles.clone(), x, y, part.flags)
+            })
+            .collect();
+        self.sprites.create_composite(name, sprites)
+    }
+
+    /// Reserve OAM slots for runtime sprites. Pools and static sprites share 40 entries.
+    /// Tiles remain registered separately; pool writes take an existing hardware tile index.
+    /// All pool operations belong in init/main; handler use returns MainLoopOnly from build.
+    /// Create pools after [`RustBoy::set_sprite_size`]: the size is fixed from the first pool on.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, `count` is 0 or more than the free OAM entries, or the
+    /// pool's state or routine names are already used.
+    #[track_caller]
+    pub fn create_sprite_pool(&mut self, name: &str, count: u8) -> super::sprite_pool::SpritePool {
+        check_name("sprite pool", name);
+        let occupancy = format!("wPool{name}Used");
+        let routines = crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            0,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        );
+        assert!(
+            !self.vars.names().any(|(existing, _)| existing == occupancy),
+            "sprite pool state name already exists"
+        );
+        for routine in &routines {
+            assert!(
+                !self.function_exists(routine.name()),
+                "sprite pool routine name already exists"
+            );
+        }
+        let first = self.sprites.reserve_pool_slots(count);
+        self.vars.create_array(
+            &occupancy,
+            super::variables::ArrayElement::U8,
+            u16::from(count),
+            0,
+        );
+        for routine in crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            first,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        ) {
+            self.main_only_routines.push(routine.name().to_string());
+            self.define_routine(routine);
+        }
+        super::sprite_pool::SpritePool {
+            name: name.to_string(),
+            first,
+            count,
+        }
+    }
+
+    /// Create a pool for runtime entities, each represented by one hardware sprite.
+    /// Entities share OAM slots with static sprites and can be spawned, updated, hidden,
+    /// and despawned at runtime. The entity index is returned in A by `spawn`.
+    /// Operations belong in init/main; using them in a handler makes `build()` return
+    /// `Error::MainLoopOnly`. Create it after [`RustBoy::set_sprite_size`], as a sprite pool.
+    ///
+    /// # Panics
+    /// As [`RustBoy::create_sprite_pool`]: if `name` cannot be a label, `capacity` is 0 or more
+    /// than the free OAM entries, or the pool's names are already used.
+    #[track_caller]
+    pub fn create_entity_pool(&mut self, name: &str, capacity: u8) -> super::entities::EntityPool {
+        super::entities::EntityPool::new(self.create_sprite_pool(name, capacity))
     }
 
     /// Give sprite `sprite` more tiles, from another source: frames spread over several
@@ -1796,7 +2040,8 @@ impl RustBoy {
     /// * `right_tiles` - Tile source for the right 8x16 half
     /// * `x` - X position of the left edge
     /// * `y` - Y position
-    /// * `flags` - OAM flags for both sprites
+    /// * `flags` - OAM flags for both sprites (raw or [`SpriteFlags`](crate::stdlib::graphics::sprites::SpriteFlags)). An X flip mirrors
+    ///   each half in place: swap `left_tiles` and `right_tiles` to mirror the whole sprite
     ///
     /// # Returns
     /// A `CompositeSpriteId` that can be used with composite sprite methods
@@ -1815,8 +2060,9 @@ impl RustBoy {
         right_tiles: super::tiles::TileSource,
         x: u8,
         y: u8,
-        flags: u8,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::CompositeSpriteId {
+        let flags = flags.into().bits();
         check_name("composite sprite", name);
         if self.sprites.size() != SpriteSize::Size8x16 {
             panic!(
@@ -1840,16 +2086,17 @@ impl RustBoy {
                 )
             });
 
-        // Create the left sprite
-        let left_name = format!("{}_left", name);
-        let left_sprite = self.add_sprite(&left_name, left_tiles, x, y, flags);
-
-        // Create the right sprite
-        let right_name = format!("{}_right", name);
-        let right_sprite = self.add_sprite(&right_name, right_tiles, right_x, y, flags);
-        // Group them as a composite sprite
-        self.sprites
-            .create_composite(name, vec![left_sprite, right_sprite])
+        let parts = [
+            super::sprites::MetaspritePart::new(left_tiles, 0, 0, flags),
+            super::sprites::MetaspritePart::new(right_tiles, i16::from(right_x - x), 0, flags),
+        ];
+        self.add_metasprite_named(
+            name,
+            x,
+            y,
+            &parts,
+            &[format!("{name}_left"), format!("{name}_right")],
+        )
     }
 }
 
@@ -4063,6 +4310,37 @@ mod tests {
                 .build()
                 .unwrap();
         assert_eq!(lcdc_on(&out), "ld a, LCDCF_ON | LCDCF_OBJON | LCDCF_OBJ8");
+    }
+
+    #[test]
+    fn test_window_from_the_config_at_start_up() {
+        // The start-up code on the test CPU: WX/WY before user init, the window bits in the
+        // LCD-on value. LCDC writes of init code are replaced by that value (documented on
+        // `show_window`): a configured window hidden in init shows anyway.
+        for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
+            let mut gb =
+                RustBoy::with_config(RustBoyConfig::default().window(Window::new(map, 40, 112)));
+            gb.init(gb.show_window(false));
+            let (code, mut cpu) = startup(&mut gb);
+            cpu.stubs.insert("Memcopy".to_string());
+            cpu.consts.retain(|text, _| !text.contains('|'));
+            for flag in [
+                hw::LCDCF_ON,
+                hw::LCDCF_BGON,
+                hw::LCDCF_OBJON,
+                hw::LCDCF_OBJ8,
+                hw::LCDCF_WINON,
+                hw::LCDCF_WIN9C00,
+            ] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.consts
+                .insert("LOW(~LCDCF_WINON)".to_string(), !hw::LCDCF_WINON.value);
+            cpu.run(&code);
+            assert_mem(&cpu, "rWX", 47);
+            assert_mem(&cpu, "rWY", 112);
+            assert_mem(&cpu, "rLCDC", 0x83 | 0x20 | map_bit);
+        }
     }
 
     // ==================== Variable addresses and HRAM ====================

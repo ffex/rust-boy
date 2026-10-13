@@ -409,7 +409,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   both are documented limits). The write cursor is published after all bytes, so the consumer sees only
   complete entries even when enqueue is interrupted. Flush consumes FIFO entries with interrupts
   off, reading `rLY` with `ldh` (one M-cycle saved per entry), beginning writes only on lines
-  144–152 and retaining entries if late. Unit tests cover
+  144–152 and retaining entries if late. `hw::LY_LAST_LINE` names 153, derived from
+  `SCRN_Y` and `VBLANK_LINES`, and is used by STAT validation and the late-flush test.
+  Unit tests cover
   wrapping, overflow, invalid destinations, FIFO order and routine conventions; emulator tests
   cover delayed main-loop work, rejection/IME at init, full-queue timing alongside OAM DMA,
   late deferral and VBlank injected at every enqueue instruction boundary. The interruption

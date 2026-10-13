@@ -403,8 +403,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
       after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
       branch `refactor-p3-vram-queue-followups`.
-- [ ] Remaining shadow OAM and VRAM queue review follow-ups: an `hw` constant for `cp 153` in the late-flush
-      test; whether `build()` should reject raw producers and calls to `FlushVramQueue` outside the VBlank
+- [x] Use `hw::LY_LAST_LINE` for the late-flush test and STAT line validation
+      (branch `refactor-p3-last-ly-line`, stacked on the VRAM queue follow-ups).
+- [ ] Remaining shadow OAM and VRAM queue review follow-ups: whether `build()` should reject raw producers
+      and calls to `FlushVramQueue` outside the VBlank
       handler (current limits are documented); whether `hOAMDMA` should move away from the stack or DMA get
       an `rLY` guard.
 

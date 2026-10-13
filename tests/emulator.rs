@@ -1800,7 +1800,7 @@ fn engine_vram_queue_late_flush_leaves_entries_for_the_next_vblank() {
         .emit_all(game.queue_vram_write(hw::SCRN0, 42))
         .label("WaitLastVblankLine")
         .ld_a_addr_def(hw::LY)
-        .cp(153)
+        .cp(hw::LY_LAST_LINE)
         .jr_cond(Condition::NZ, "WaitLastVblankLine")
         .call("FlushVramQueue")
         .label("QueueDeferred")

@@ -422,6 +422,8 @@ pub const OAM_DMA_MCYCLES: u16 = OAM_SIZE as u16;
 pub const LINE_MCYCLES: u16 = 114;
 /// Lines of VBlank in a frame: `LY` from [`SCRN_Y`] (144) to 153
 pub const VBLANK_LINES: u16 = 10;
+/// Last `rLY` line in a frame (153): the LY counter wraps to zero on the next line
+pub const LY_LAST_LINE: u8 = SCRN_Y.value + VBLANK_LINES as u8 - 1;
 /// M-cycles of VBlank (mode 1) in a frame: 10 lines of 114, the time OAM and VRAM are free
 /// for the CPU however long the visible lines' HBlanks are
 pub const VBLANK_MCYCLES: u16 = VBLANK_LINES * LINE_MCYCLES;

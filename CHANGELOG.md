@@ -146,6 +146,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
   Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
   Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
+- **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
+  validation and the late-VBlank queue test.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

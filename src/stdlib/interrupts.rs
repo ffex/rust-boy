@@ -353,13 +353,14 @@ impl Stat {
     /// With `LY` = `LYC` on line `line` (`STATF_LYC`): at the start of that line
     ///
     /// # Panics
-    /// If `line` is above 153: `LY` goes from 0 to 153.
+    /// If `line` is above [`hw::LY_LAST_LINE`]: `LY` goes from 0 to that line.
     #[track_caller]
     pub fn line(mut self, line: u8) -> Stat {
         assert!(
-            line <= 153,
-            "LYC {} is never reached: LY goes from 0 to 153",
-            line
+            line <= hw::LY_LAST_LINE,
+            "LYC {} is never reached: LY goes from 0 to {}",
+            line,
+            hw::LY_LAST_LINE
         );
         self.lyc = Some(line);
         self

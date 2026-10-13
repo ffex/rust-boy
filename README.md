@@ -295,6 +295,28 @@ producers, polling and restart code belong in init/main, with one main-loop cons
 Handler calls to event-producing animation functions are rejected; raw RAM access and
 poll/restart snippets are caller contracts.
 
+## WRAM arrays (`RustBoy`)
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let scores = gb.vars.create_array("wScores", ArrayElement::U16, 300, 100);
+gb.init(scores.set(299, 65535)); // static index and value checked here
+let mut code = Block::new();
+code.ld(R16::BC, 256u16).ld(R16::DE, 1234u16)
+    .emit_all(scores.set_indexed(gb.labels()));
+gb.add_to_main_loop(code); // carry set if BC >= 300; nothing written on rejection
+# gb.build().unwrap();
+```
+
+Arrays occupy contiguous WRAM0 bytes and share the variable allocator. Initialization
+repeats the supplied value with a compact loop. Byte elements use `U8`/`I8`, words
+`U16`/`I16` and little-endian storage. Runtime getters return A for bytes or HL for words;
+setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` returns
+HL and carry status for custom operations; branch on carry before dereferencing it.
+Static operations panic on invalid indices/values; runtime bounds rejection sets carry.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:
@@ -587,7 +609,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
-  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
+  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
+  and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
   (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want, and
   completion events or callbacks; see [Per-animation timing](#per-animation-timing) and
   [Animation completion and replay](#animation-completion-and-replay)), joypad bindings, a main loop woken once a frame by
@@ -657,25 +680,3 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
-
-### WRAM arrays
-
-```rust
-use rust_boy::prelude::*;
-
-let mut gb = RustBoy::new();
-let scores = gb.vars.create_array("wScores", ArrayElement::U16, 300, 100);
-gb.init(scores.set(299, 65535)); // static index and value checked here
-let mut code = Block::new();
-code.ld(R16::BC, 256u16).ld(R16::DE, 1234u16)
-    .emit_all(scores.set_indexed(gb.labels()));
-gb.add_to_main_loop(code); // carry set if BC >= 300; nothing written on rejection
-# gb.build().unwrap();
-```
-
-Arrays occupy contiguous WRAM0 bytes and share the variable allocator. Initialization
-repeats the supplied value with a compact loop. Byte elements use `U8`/`I8`, words
-`U16`/`I16` and little-endian storage. Runtime getters return A for bytes or HL for words;
-setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` returns
-HL and carry status for custom operations; branch on carry before dereferencing it.
-Static operations panic on invalid indices/values; runtime bounds rejection sets carry.

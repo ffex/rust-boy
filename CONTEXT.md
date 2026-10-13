@@ -326,6 +326,15 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
   Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
 
+- **WRAM arrays** (since `refactor-p3-wram-arrays`): `ArrayElement` (signed or unsigned bytes and words), `WramArray`
+  and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0 variables, contiguous `ds`
+  bytes in the variable allocator's creation order, initialised by a compact local-label loop. Static
+  `get`/`set`/`address` panic on an index or value out of range; the BC-indexed `address_indexed`/`get_indexed`/
+  `set_indexed` set carry on an index >= len and then touch no memory (setters take E/DE and keep BC/DE). Words are
+  little-endian; getters return A or HL. The array's shape is part of its `VarType` (`VarType::Array`) and of the
+  name-conflict checks. Emulator tests: all four element types, page crossings, every initialised byte, guard bytes,
+  indices 300, 512 and 65535 on a 300-element array, a nearly full 4095-byte WRAM0 array.
+
 - **VRAM write queue** (since `refactor-codex-p3-vram-queue`):
   `stdlib::graphics::vram_queue` owns the `QueueVramWrite` and `FlushVramQueue` routines.
   `RustBoy::queue_vram_write(address, value)` or `queue_vram_write_from_registers()` opts in:
@@ -1439,7 +1448,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
-  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
+  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
+  `refactor-p3-wram-arrays`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.
@@ -1470,16 +1480,3 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
-
-### Phase 3 WRAM arrays
-
-`refactor-p3-wram-arrays` adds `ArrayElement` (signed/unsigned bytes/words), `WramArray`
-and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0
-variables reserved as contiguous `ds` bytes in the existing allocator/creation order, with uniform
-initialization through a compact local-label loop. Static get/set/address reject bounds or values
-outside the element range. BC-indexed address/get/set return carry on out-of-range indices and
-perform no memory access in that case; setters take E/DE and preserve BC/DE. Word values are
-little-endian; getters return A or HL. Array shape is part of VarType and name-conflict checks.
-Initialization labels use build()'s fork, retaining deterministic rebuilds and unchanged scalar output.
-Emulator coverage checks all four types, page crossings, every initialized byte, guard bytes,
-invalid indices 300/65535 and a nearly-full 4095-byte WRAM0 array with compact startup code.

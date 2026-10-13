@@ -103,6 +103,9 @@ together: every breaking change of the refactoring is in this release, so a prog
   configure timing and events first, then generate restart snippets. Flags describe the shadow OAM, visible at the
   next DMA; polling events survive callback delivery. Unknown callback names fail `build()`; event-producing animation
   calls from interrupt handlers are rejected. Programs without subscriptions, the examples too, are unchanged.
+- **Input bindings** (Phase 3): `InputManager::on_just_pressed` runs once on the frame a button transitions
+  to pressed; `on_held` names the existing every-frame held behavior of `on_press`. Multiple bindings for one
+  button remain supported, and existing `on_press` programs are unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

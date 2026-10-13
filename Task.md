@@ -313,7 +313,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Music: integrate a driver (e.g. hUGEDriver)
 
 ### Input
-- [ ] Just-pressed (`wNewKeys`), released, and held as separate bindings
+- [x] Just-pressed (`wNewKeys`) and held (`wCurKeys`) input bindings; `on_press` remains a
+      compatibility alias for held behavior; multiple bindings for one button remain supported
+- [ ] Released input bindings
 - [ ] Auto-repeat
 - [ ] Multiple bindings for the same button
 

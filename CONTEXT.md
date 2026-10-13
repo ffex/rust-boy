@@ -6,7 +6,8 @@ built, how the code is layered, what is broken and why. The actionable checklist
 [`AGENTS.md`](AGENTS.md), and Claude's review, fix and merge rules in [`CLAUDE.md`](CLAUDE.md).
 
 Codex makes the first try of a task and opens its PR into `refactor`; Claude has it reviewed by a
-context-free agent, fixes the findings and merges it. Only the `refactor` → `main` PR waits for the maintainer.
+context-free agent, sends the findings to Codex as an `@codex fix-request` comment (Codex fixes
+them) and merges it. Only the `refactor` → `main` PR waits for the maintainer.
 
 > Snapshot taken on branch `refactor` at commit `4601a5c` (October 2026). Line numbers refer to
 > that commit. Since `refactor-p2-engine-api-prelude` the layers are `asm`, `stdlib` and `engine`, in `src/asm/`,

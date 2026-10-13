@@ -147,6 +147,14 @@ impl RustBoy {
         self
     }
 
+    /// Include Rust source locations in comments before user-provided init, main-loop,
+    /// and interrupt-handler code. Disabled by default; see
+    /// [`RustBoyConfig::source_comments`].
+    pub fn set_source_comments(&mut self, enabled: bool) -> &mut Self {
+        self.config.source_comments = enabled;
+        self
+    }
+
     /// Set the palettes the start-up code writes to `rBGP`, `rOBP0` and `rOBP1` (by
     /// default `%11100100` each, see [`Palettes`])
     ///
@@ -350,7 +358,11 @@ impl RustBoy {
     /// On an instruction [`Instr::check`] rejects (code built by hand, `vec![Instr::..]`).
     #[track_caller]
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(self.asm.labels());
+        let caller = std::panic::Location::caller();
+        let mut instrs = code.emit(self.asm.labels());
+        if self.config.source_comments && !instrs.is_empty() {
+            instrs.insert(0, source_comment(caller));
+        }
         self.init_code.extend(checked(instrs));
         self
     }
@@ -1239,7 +1251,11 @@ impl RustBoy {
     /// On an instruction [`Instr::check`] rejects (code built by hand, `vec![Instr::..]`).
     #[track_caller]
     pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(self.asm.labels());
+        let caller = std::panic::Location::caller();
+        let mut instrs = code.emit(self.asm.labels());
+        if self.config.source_comments && !instrs.is_empty() {
+            instrs.insert(0, source_comment(caller));
+        }
         self.main_loop_code.extend(checked(instrs));
         self
     }
@@ -1331,7 +1347,12 @@ impl RustBoy {
     /// ```
     #[track_caller]
     pub fn on_interrupt(&mut self, interrupt: Interrupt, mut code: impl Emittable) -> &mut Self {
-        let code = checked(code.emit(self.asm.labels()));
+        let caller = std::panic::Location::caller();
+        let mut code = code.emit(self.asm.labels());
+        if self.config.source_comments && !code.is_empty() {
+            code.insert(0, source_comment(caller));
+        }
+        let code = checked(code);
         let saves = Regs::written_by(&code).unwrap_or(Regs::ALL);
         self.add_handler_code(interrupt, code, saves);
         self
@@ -1825,6 +1846,13 @@ impl RustBoy {
 /// # Panics
 /// On the first instruction `Instr::check` rejects.
 #[track_caller]
+fn source_comment(location: &'static std::panic::Location<'static>) -> Instr {
+    Instr::Comment {
+        text: format!("Rust source: {}:{}", location.file(), location.line()),
+    }
+}
+
+#[track_caller]
 fn checked(code: Vec<Instr>) -> Vec<Instr> {
     for instr in &code {
         if let Err(error) = instr.check() {
@@ -1870,6 +1898,31 @@ mod tests {
         let gb = RustBoy::new();
         assert!(gb.tiles.is_empty());
         assert!(gb.vars.is_empty());
+    }
+
+    #[test]
+    fn source_comments_are_opt_in_and_point_to_call_sites() {
+        let mut default = RustBoy::new();
+        default.init(vec![Instr::Nop]);
+        default.add_to_main_loop(vec![Instr::Nop]);
+        let plain = default.build().unwrap();
+        assert!(!plain.contains("Rust source:"));
+
+        let mut annotated = RustBoy::with_config(RustBoyConfig::default().source_comments(true));
+        let init_line = line!() + 1;
+        annotated.init(vec![Instr::Nop]);
+        let loop_line = line!() + 1;
+        annotated.add_to_main_loop(vec![Instr::Nop]);
+        let handler_line = line!() + 1;
+        annotated.on_interrupt(Interrupt::Serial, vec![Instr::Nop]);
+        let output = annotated.build().unwrap();
+        for source_line in [init_line, loop_line, handler_line] {
+            assert!(
+                output.contains(&format!("Rust source: {}:{}", file!(), source_line)),
+                "missing source line {source_line}:\n{output}"
+            );
+        }
+        assert_eq!(output.matches("; Rust source:").count(), 3, "{output}");
     }
 
     #[test]

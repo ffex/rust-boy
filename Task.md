@@ -376,7 +376,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `Rom::build` / `Rom::example` assemble and link with RGBDS, `GameBoy::run_script` runs frames with scripted input,
       then a test reads WRAM/HRAM/VRAM/OAM, the registers and every OAM write with its PPU mode. `tests/emulator.rs`:
       one test per example, and [B12](CONTEXT.md#b12)'s situation as it is today; run with `RGBDS_LINK_CHECK`, in CI)
-- [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
+- [x] Asm comments pointing back to the Rust source (`#[track_caller]`): opt-in
+      `RustBoyConfig::source_comments` / `RustBoy::set_source_comments` adds a file:line comment before each
+      non-empty `init`, main-loop, and interrupt-handler snippet; off by default, so snapshots and output stay unchanged
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
 - [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since

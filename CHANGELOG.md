@@ -103,6 +103,9 @@ together: every breaking change of the refactoring is in this release, so a prog
   configure timing and events first, then generate restart snippets. Flags describe the shadow OAM, visible at the
   next DMA; polling events survive callback delivery. Unknown callback names fail `build()`; event-producing animation
   calls from interrupt handlers are rejected. Programs without subscriptions, the examples too, are unchanged.
+- **Source comments** (Phase 3): opt-in `RustBoyConfig::source_comments(true)` or
+  `RustBoy::set_source_comments(true)` adds Rust file and line comments before non-empty init, main-loop, and
+  interrupt-handler snippets. It is off by default and does not change existing generated assembly.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

@@ -288,7 +288,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 
 - **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,
   `Shade` and `PaletteRegister` and stateless snippets, reused by `RustBoy::set_palette` and `fade_palette`. The
-  start-up `Palettes` keep taking hardware bytes. `PaletteFade` has four shade-saturating stages, fade-in from a
+  Startup `Palettes` accepts `Palette` or raw `u8`; writes reuse `set_palette`'s `ldh` form. `PaletteFade` has four shade-saturating stages, fade-in from a
   solid shade or fade-out to one; A selects the stage at runtime and values >= 3 stay complete. The game owns
   progress and timing: no hidden variables, waits or loops; emit in init or VBlank. Writes change A, fades A and
   flags (local labels from the allocator). BGP is shared by the background and the window; object colour 0 stays

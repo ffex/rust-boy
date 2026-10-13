@@ -896,6 +896,15 @@ impl GameBoy {
         }
     }
 
+    /// Write an I/O register as an external test driver, without advancing time.
+    pub fn write_io(&mut self, address: u16, value: u8) {
+        assert!(
+            (0xFF00..=0xFF7F).contains(&address),
+            "${address:04X} is not an I/O register"
+        );
+        self.bus.write_io(address, value);
+    }
+
     /// Request interrupt sources without advancing time, for tests that inject an
     /// interrupt at a particular instruction boundary (`IF` bits 0–4).
     pub fn request_interrupt(&mut self, mask: u8) {

@@ -2614,6 +2614,32 @@ fn engine_audio_power_and_mixer_are_configured_before_user_init() {
 }
 
 #[test]
+fn engine_audio_configuration_is_reapplied_on_soft_reset() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mixer = Mixer::new(2, 4, hw::AUDTERM_2_LEFT.value);
+    let game = RustBoy::with_config(
+        RustBoyConfig::default()
+            .audio(AudioConfig::On(mixer))
+            .soft_reset(true),
+    );
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_eq!(gb.read(hw::NR52.value) & hw::AUDENA_ON.value, 0x80);
+    assert_eq!(gb.read(hw::NR50.value), 0x24);
+    assert_eq!(gb.read(hw::NR51.value), hw::AUDTERM_2_LEFT.value);
+
+    gb.write_io(hw::NR50.value, 0);
+    assert_eq!(gb.read(hw::NR50.value), 0);
+    gb.run_script(&[(3, &[Button::A, Button::B, Button::Select, Button::Start])]);
+
+    assert_eq!(gb.read(hw::NR52.value) & hw::AUDENA_ON.value, 0x80);
+    assert_eq!(gb.read(hw::NR50.value), 0x24);
+    assert_eq!(gb.read(hw::NR51.value), hw::AUDTERM_2_LEFT.value);
+}
+
+#[test]
 fn background_tile_animation_sequences_pause_and_restart() {
     if !rgbds_enabled() {
         return;

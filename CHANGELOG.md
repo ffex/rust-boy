@@ -6,14 +6,6 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
-### Audio initialization (Phase 3)
-
-- `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or powered-on
-  audio before user initialization, including soft resets. Inherit preserves old output.
-- `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume
-  and keeps VIN disconnected. Power-on resets channels, without triggering sound or
-  changing wave RAM. `hw` exports NR registers, wave RAM, routing and audio flags.
-
 ### Highlights
 
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
@@ -52,6 +44,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
   conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
+- **Audio initialization** (Phase 3): `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or
+  powered-on audio before user initialization, including soft resets. Inherit preserves old output.
+  `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.
+  Power-on resets channels without triggering sound or changing wave RAM. `hw` exports NR registers, wave RAM,
+  routing and audio flags.
 - **Sprites** (Phase 3): every sprite of a `RustBoy` program lives in a shadow OAM in WRAM, which the VBlank handler
   copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
   The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,

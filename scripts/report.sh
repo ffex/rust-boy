@@ -21,4 +21,4 @@ if (($# == 1)); then
 fi
 
 export RGBDS_LINK_CHECK=1
-cargo test --quiet --test report rom_size_and_cycle_budget -- --ignored --nocapture
+cargo test --quiet --test report rom_size_and_cycle_budget -- --nocapture

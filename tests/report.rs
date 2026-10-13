@@ -1,7 +1,7 @@
 //! On-demand ROM size and frame-budget report.
 //!
-//! Run through `scripts/report.sh`; this is ignored by the normal test suite because it
-//! requires RGBDS and prints measurements rather than asserting game behaviour.
+//! Run through `scripts/report.sh`. Without `RGBDS_LINK_CHECK` the live report returns
+//! early, like the emulator tests; CI sets it in the RGBDS job.
 
 mod support;
 
@@ -107,7 +107,6 @@ fn report(bin: &str) {
 }
 
 #[test]
-#[ignore = "on-demand report; run scripts/report.sh with RGBDS installed"]
 fn rom_size_and_cycle_budget() {
     if !rgbds_enabled() {
         return;

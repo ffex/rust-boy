@@ -8,6 +8,8 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Build report** (Phase 3): `scripts/report.sh [bin]` reports linked ROM occupancy and observed main-loop and
+  VBlank-handler cycle budgets.
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.

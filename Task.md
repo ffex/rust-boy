@@ -387,7 +387,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       then a test reads WRAM/HRAM/VRAM/OAM, the registers and every OAM write with its PPU mode. `tests/emulator.rs`:
       one test per example, and [B12](CONTEXT.md#b12)'s situation as it is today; run with `RGBDS_LINK_CHECK`, in CI)
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
-- [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
+- [x] ROM-size and cycle-budget report (branch `refactor-p3-build-report`):
+      `scripts/report.sh [bin]` reports linked ROM occupancy and dynamically observed main-loop and VBlank-handler
+      M-cycle ranges against their hardware budgets, using the headless emulator over ten frames.
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
 - [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
       [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites

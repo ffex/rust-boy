@@ -173,6 +173,128 @@ calls or pushes deep overwrites the DMA routine; and the DMA runs when the VBlan
 (`on_stat`, `on_timer`) that delays it past VBlank makes it run during the next frame's drawing, where it fails for
 that frame.
 
+### Typed sprite attributes
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let flags = SpriteFlags::new().flip_x(true)
+    .palette(ObjectPalette::Palette1)
+    .priority(SpritePriority::BehindBackground);
+let sprite = gb.add_sprite("Player", TileSource::from_raw(&[["$ff"; 8]]), 24, 32, flags);
+gb.add_to_main_loop(gb.sprites.set_flags(sprite, flags.flip_x(false).flip_y(true)));
+# gb.build().unwrap();
+```
+
+Runtime attributes live in shadow OAM and appear after the next DMA; they leave
+position and tile indices intact. Raw `u8` flag values remain accepted. Behind-background
+priority hides the sprite behind nonzero background/window colour indices; colour 0
+stays behind the sprite. These flips affect individual hardware sprites, not the
+arrangement of a whole composite: a 16x16 composite flipped in X mirrors each
+half in place, so swap the halves' tiles too. Change a composite's attributes per member sprite
+(`get_composite_sprites`).
+
+### Arbitrary metasprites
+
+A metasprite is a list of hardware parts relative to a screen anchor. Parts may have
+negative offsets and independent tile data/attributes. They take OAM entries in list order.
+On DMG, where two parts overlap, the one with the smaller X draws on top and the list order only breaks ties; at most 10 parts show on one line, the first ones in list order.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new(); // 8x8 hardware parts; 8x16 is also supported
+let tiles = TileSource::from_raw(&[["$ff"; 8]]);
+let parts = [
+    MetaspritePart::new(tiles.clone(), -8, 0, 0u8),
+    MetaspritePart::new(tiles.clone(), 0, 0, 0u8),
+    MetaspritePart::new(tiles.clone(), 8, 0, 0u8),
+    MetaspritePart::new(tiles, 0, 8, 0u8),
+];
+let actor = gb.add_metasprite("Actor", 80, 72, &parts);
+gb.add_to_main_loop(gb.sprites.move_composite_left_limit(actor, 3, hw::OAM_X_OFFSET));
+# gb.build().unwrap();
+```
+
+The leading part stops at the included OAM limit and the others keep their offsets.
+Every initial part position must fit the existing screen coordinate range (X 0..=247,
+Y 0..=239); the constructor checks layout and capacity before registration. Hardware
+parts share the configured size, and each 8x16 frame requires two aligned tiles.
+The older `add_sprite_16x16` helper keeps its existing labels and output.
+
+### Per-animation timing
+
+The global animation period is eight game frames by default. Override a particular
+animation while leaving other sprites on that shared clock:
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+let actor = gb.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 4]), 40, 40, 0);
+let walk = gb.sprites.add_animation(actor, "Walk", 0, 3, AnimationType::PingPong);
+gb.sprites.set_animation_delay(actor, walk, 3);
+gb.sprites.set_initial_animation(actor, walk);
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Periods are 1..=255 frames. A sprite with any override uses its own clock; animations
+on that sprite without an override use the global period through that clock. Switching
+selection resets the clock when the dispatcher observes it. Repeated enable calls for
+the selected animation keep its progress; a disabled frame stops/resets it. Existing
+frame stepping is unchanged, so selecting an animation does not immediately replace
+the displayed tile. Direct calls to animation functions bypass dispatcher timing.
+
+Use `set_composite_animation_delay(composite, index, frames)` to synchronize all
+metasprite parts. Clear overrides with `clear_animation_delay` or
+`clear_composite_animation_delay`. These are generation-time settings, with two WRAM
+bytes per independently timed sprite. Programs without overrides retain global timing.
+
+### Animation completion and replay
+
+Subscribe to a polling flag, a named callback, or both. Callbacks run in the main loop
+after all sprites have stepped, before other game logic; BC/DE/HL are preserved.
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+let actor = gb.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 4]), 40, 40, 0);
+let attack = gb.sprites.add_animation(actor, "Attack", 0, 2, AnimationType::Once);
+let idle = gb.sprites.add_animation(actor, "Idle", 3, 3, AnimationType::Loop);
+gb.sprites.set_animation_delay(actor, attack, 2);
+gb.sprites.set_animation_callback(actor, attack, "AttackDone");
+gb.sprites.set_initial_animation(actor, attack);
+// Configure subscriptions/timing before generating restart snippets.
+gb.define_function_from("AttackDone", gb.sprites.restart_animation(actor, idle));
+let observed = gb.vars.create_u8("wAttackObserved", 0);
+gb.add_to_main_loop(gb.sprites.take_animation_event(actor, attack));
+gb.add_to_main_loop(IfA::eq(1, observed.set(1)));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`Once` emits once when it reaches its last frame, including a first update that is
+already on that frame. Changing selection away and back rearms it, but preserves the
+existing tile/replay rules. `Loop` emits on last→first wrap; `PingPong` on returning to
+the first frame. Single-frame loops/ping-pong emit every update after the first (entering one
+from another tile is not a completion); single-frame Once
+emits once. Events describe shadow OAM, which becomes visible at the following DMA.
+
+`enable_animation_events` enables polling without a callback. `take_animation_event`
+returns A = 0/1 and Z for no event, then clears the flag; multiple pending completions
+coalesce. Callbacks do not clear that polling flag. Callback functions can be defined
+after binding, or declared external. Use the composite versions of these methods for
+one event/callback per logical metasprite.
+
+`restart_animation` and `restart_composite_animation` immediately show the first frame
+and clear that animation's pending event/callback and Once latch. Direction and any
+independent timer reset; shared-clock sprites advance on the next global tick. Repeated
+enable calls keep their existing behavior and do not replay a finished Once. Event
+producers, polling and restart code belong in init/main, with one main-loop consumer.
+Handler calls to event-producing animation functions are rejected; raw RAM access and
+poll/restart snippets are caller contracts.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:
@@ -211,6 +333,34 @@ that fills the queue should send all its VRAM writes through it: the `on_vblank`
 no more VBlank left than the main loop.
 `stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
 Programs that never request the queue emit no queue code or storage.
+
+## Palettes and fades (`RustBoy`)
+
+DMG palettes map four colour indices to shades. The background and window share BGP;
+object index 0 stays transparent. Startup `Palettes` still accepts hardware bytes.
+Use typed palettes for runtime writes and `PaletteFade` for nonblocking fade-in/out:
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let step = gb.vars.create_u8("wFadeProgress", 0);
+let fade = PaletteFade::fade_in(Palette::default(), Shade::White);
+let mut apply = Block::new();
+apply.emit_all(step.get())
+    .emit_all(gb.fade_palette(PaletteRegister::Background, fade));
+gb.on_vblank(apply);
+// Advance wFadeProgress from 0 to 3 at your chosen frame interval.
+// Values >=3 keep the final palette; reset to 0 to restart.
+# gb.build().unwrap();
+```
+
+`PaletteFade::fade_out(palette, Shade::Black)` fades to black; either direction also
+supports white or grey. Runtime snippets change A and flags only; a direct
+`gb.set_palette(register, palette)` write preserves flags. Emit in init or VBlank
+for a stable whole-frame palette. Each colour moves at most one shade per stage.
+A fade leaves the palette byte in A, not the progress: to fade several registers,
+load the progress again before each `fade_palette`.
 
 ## Low level (`asm`)
 
@@ -434,17 +584,20 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), WRAM and HRAM
-  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, 16×16 composite sprites
-  (in 8×16 mode), animations (looping, ping-pong or played once), joypad bindings, a main loop woken once a frame by
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
+  palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
+  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
+  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
+  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want, and
+  completion events or callbacks; see [Per-animation timing](#per-animation-timing) and
+  [Animation completion and replay](#animation-completion-and-replay)), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and
   the timer, a soft reset (see [Frames and interrupts](#frames-and-interrupts-rustboy)), and routines (the builtins and
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too
   many tiles or sprites (40) panic with a clear message where they are added, as do unknown sprite ids and animation
   names; variables that do not fit in WRAM0 or HRAM make `build()` return `Error::MemoryFull` (a problem of the whole program,
   like a name defined twice: `build()` returns an `Error` for those, and a wrong call panics where it is made). The output is deterministic: things appear in the order you created them.
-- **Known limits:** the only composite sprite is 16×16 (two 8×16 sprites), all animations share one speed,
-  there is no sound yet, and the engine puts everything in one ROM bank (`asm` programs can open `ROMX` sections, but
+- **Known limits:** there is no sound yet, and the engine puts everything in one ROM bank (`asm` programs can open `ROMX` sections, but
   nothing switches banks yet). The full list, with fixes planned, is in
   [CONTEXT.md](CONTEXT.md).
 

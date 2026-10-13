@@ -3,12 +3,12 @@
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
 [`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review,
-fixes and merges.
+fix requests and merges.
 
 ## How we work
 
 - Codex makes the first try of a task and opens its PR into `refactor`. Claude then has it reviewed by a
-  context-free agent, fixes the findings, has it reviewed again and merges it. Only the final
+  context-free agent, sends the findings to Codex as an `@codex fix-request` comment, has it reviewed again and merges it. Only the final
   `refactor` → `main` PR waits for the maintainer.
 - `refactor` is the integration branch (created from `main` at `4601a5c`).
 - Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
@@ -273,9 +273,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out (branch `refactor-p3-palettes`):
       typed `Palette`/`Shade`/`PaletteRegister`, runtime writes, four-stage nonblocking `PaletteFade`;
       progress supplied in A, clamps at 3, supports fades from/to white or black (or either grey).
-- [ ] Follow-ups of the palettes (from the review of #48, maintainer decisions): whether the start-up `Palettes` should
-      take `impl Into<Palette>` (today raw bytes, `Palette::byte()` converts), and whether the start-up palette write
-      should reuse `stdlib::graphics::palette::set_palette` (`ldh` instead of `ld [rBGP], a`: changes every example's asm)
+- [x] Follow-ups of the palettes (from the review of #48): startup `Palettes` accepts `impl Into<Palette>` while
+      retaining raw `u8` support, and startup writes reuse `stdlib::graphics::palette::set_palette` (`ldh`).
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
@@ -286,10 +285,16 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
 - [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
       off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
-- [ ] Sprite show / hide, OAM slot allocation
-- [ ] Text: font loading, print string, print number / BCD score
-- [ ] Background tile animation
-- [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
+- [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
+      static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
+      with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
+      operations with carry. Pools have a single init/main producer and handler use is rejected.
+- [x] Text: font loading, print string, print number / BCD score (`refactor-p3-text`, stacked on
+      WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
+- [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
+      loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
+- [x] PNG → 2bpp conversion in Rust (tile count derived from file size): `refactor-p3-png-assets`,
+      owned PNG/binary loaders, palette/transparency rules and 8×16 tile ordering; FOSDEM/coin migrated
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
@@ -333,9 +338,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
 - [ ] Scenes / game states
-- [ ] Entities: spawn / despawn
+- [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
+      reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
+      `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
-- [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
+- [x] WRAM arrays (branch `refactor-p3-wram-arrays`; HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`,
+      `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
+      compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
+      Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
@@ -347,7 +357,13 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 
 ### Platform
 - [ ] MBC1/MBC5 ROM banking (> 32 KB)
+  - [x] Low-level `stdlib::banking` bank selectors for MBC1 (7-bit, skipping forbidden banks)
+        and MBC5 (9-bit); `Section::romx(...).bank(n)` places data explicitly.
+  - [ ] Engine-managed mapper headers and banked asset access.
 - [ ] SRAM save games
+  - [x] Low-level MBC1/MBC5 RAM enable/disable and MBC5 RAM-bank selection
+        (`stdlib::sram`, stacked on #76).
+  - [ ] Persistent save API, mapper/header configuration and MBC1 RAM banking mode.
 - [ ] *(optional)* Game Boy Color: palettes, VRAM bank 1, double speed
 
 ### Tooling

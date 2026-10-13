@@ -2508,6 +2508,67 @@ fn get_tile_by_pixel_follows_active_background_map() {
         }
     }
 }
+#[test]
+fn png_and_binary_tile_sources_load_exact_bytes_into_vram() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    let source = TileSource::from_png(
+        support::examples::root().join("tests/fixtures/png/adam7-rgb.png"),
+        &PngOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(source.tile_count(), 1);
+    let background = game.tiles.add_background("PngBackground", source);
+    let binary =
+        TileSource::from_2bpp(support::examples::root().join("examples/coin-anim/coin.2bpp"))
+            .unwrap();
+    assert_eq!(binary.tile_count(), 7);
+    let binary_id = game.tiles.add_background("BinaryBackground", binary);
+    let player = game.add_sprite(
+        "PngSprite",
+        TileSource::from_png(
+            support::examples::root().join("examples/fosdem/char-dx.png"),
+            &PngOptions::new([[255; 3], [207; 3], [104; 3], [0, 0, 1]])
+                .tile_order(TileOrder::Sprite8x16),
+        )
+        .unwrap(),
+        80,
+        72,
+        0,
+    );
+    let base = game.tiles.get_address(background).unwrap();
+    let binary_base = game.tiles.get_address(binary_id).unwrap();
+    let asm = game.build().unwrap();
+    assert_eq!(asm, game.build().unwrap());
+    assert!(!asm.contains("INCBIN"));
+    let rom = Rom::build(&asm, &[]);
+    let mut gb = rom.boot();
+    gb.run_frames(15);
+    let expected = [
+        0x55, 0x33, 0xaa, 0x66, 0x55, 0xcc, 0xaa, 0x99, 0x55, 0x33, 0xaa, 0x66, 0x55, 0xcc, 0xaa,
+        0x99,
+    ];
+    for (i, byte) in expected.into_iter().enumerate() {
+        assert_eq!(gb.read(base + i as u16), byte);
+    }
+    for (i, &byte) in include_bytes!("../examples/coin-anim/coin.2bpp")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(gb.read(binary_base + i as u16), byte);
+    }
+    for (i, &byte) in include_bytes!("../examples/fosdem/char-dx.2bpp")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(gb.read(hw::VRAM_OBJ_TILES + i as u16), byte);
+    }
+    assert_eq!(gb.oam_entry(0), [88, 88, 0, 0]);
+    let _ = player;
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
 
 #[test]
 fn background_tile_animation_sequences_pause_and_restart() {

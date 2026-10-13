@@ -2716,6 +2716,104 @@ fn runtime_oam_pools_allocate_hide_release_and_reuse_disjoint_slots() {
 }
 
 #[test]
+fn composites_hide_and_show_at_keep_every_part_and_offset() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let tile = || TileSource::from_raw(&[["$ff"; 8]]);
+    let parts = [
+        MetaspritePart::new(tile(), 0, 0, 0x10u8),
+        MetaspritePart::new(tile(), 8, 0, 0x20u8),
+        MetaspritePart::new(tile(), -8, 8, 0x40u8),
+    ];
+    let actor = game.add_metasprite("Actor", 40, 40, &parts);
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    let initial: Vec<_> = (0..3).map(|entry| gb.oam_entry(entry)).collect();
+    game.init(game.sprites.hide_composite(actor));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    for (entry, before) in initial.iter().enumerate() {
+        let hidden = gb.oam_entry(entry);
+        assert_eq!(hidden[0], 0, "part {entry} hidden by Y=0");
+        assert_eq!(
+            &hidden[1..],
+            &before[1..],
+            "part {entry} keeps X, tile and flags"
+        );
+    }
+    // Shown again elsewhere: the first part at (60, 50), the others at their offsets
+    game.init(game.sprites.show_composite_at(actor, 60, 50));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    for (entry, (before, part)) in initial.iter().zip(&parts).enumerate() {
+        let shown = gb.oam_entry(entry);
+        let x = (60 + part.x + i16::from(hw::OAM_X_OFFSET)) as u8;
+        let y = (50 + part.y + i16::from(hw::OAM_Y_OFFSET)) as u8;
+        assert_eq!((shown[0], shown[1]), (y, x), "part {entry}");
+        assert_eq!(
+            &shown[2..],
+            &before[2..],
+            "part {entry} keeps tile and flags"
+        );
+    }
+}
+
+#[test]
+fn pool_allocation_returns_its_cleared_hidden_entry_in_hl() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.add_sprite("Static", TileSource::from_raw(&[["$ff"; 8]]), 8, 8, 0);
+    let pool = game.create_sprite_pool("Actors", 3);
+    let entries = game.vars.create_u16("wPoolEntries", 0);
+    let second = game.vars.create_u16("wPoolSecondEntry", 0);
+    let mut init = Block::new();
+    // Fill slot 0 with nonzero bytes, release it, then allocate twice: slot 0 comes back
+    // cleared, slot 1 is fresh
+    init.emit_all(pool.allocate())
+        .ld_b(20)
+        .ld_c(30)
+        .ld_d(4)
+        .ld_e(0x30)
+        .emit_all(pool.write())
+        .ld_a(0)
+        .emit_all(pool.release())
+        .emit_all(pool.allocate())
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a(entries.name())
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a(Expr::sym(entries.name()) + 1)
+        .emit_all(pool.allocate())
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a(second.name())
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a(Expr::sym(second.name()) + 1);
+    game.init(init);
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    let shadow = gb.symbol("wShadowOAM");
+    let word = |name: &str| {
+        let address = gb.symbol(name);
+        u16::from_le_bytes([gb.read(address), gb.read(address + 1)])
+    };
+    let first_slot = u16::from(pool.first_slot());
+    for (name, slot) in [("wPoolEntries", 0), ("wPoolSecondEntry", 1)] {
+        let entry = shadow + 4 * (first_slot + slot);
+        assert_eq!(
+            word(name),
+            entry,
+            "{name}: HL is the slot's shadow OAM entry"
+        );
+        for byte in 0..4 {
+            assert_eq!(gb.read(entry + byte), 0, "{name}: byte {byte} cleared");
+        }
+    }
+}
+
+#[test]
 fn sprite_pool_rejects_free_invalid_and_unrepresentable_writes_without_mutation() {
     if !rgbds_enabled() {
         return;

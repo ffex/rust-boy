@@ -48,3 +48,30 @@ fn pool_mutation_is_rejected_in_handlers_directly_and_transitively() {
         }
     }
 }
+
+#[test]
+fn the_sprite_size_cannot_change_after_a_pool() {
+    // A pool's Write routine checks 8x16 tiles when the pool is created: switching to 8x16
+    // afterwards would leave it accepting odd tiles
+    for size in [SpriteSize::Size8x16, SpriteSize::Size8x8] {
+        let other = if size == SpriteSize::Size8x16 {
+            SpriteSize::Size8x8
+        } else {
+            SpriteSize::Size8x16
+        };
+        let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(size));
+        game.create_sprite_pool("Actors", 2);
+        assert!(!game.sprites.is_empty(), "a pool reserves OAM");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            game.set_sprite_size(other);
+        }));
+        let message = result.unwrap_err();
+        let message = message
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(message.contains("sprite pool"), "{message}");
+        game.set_sprite_size(size);
+        game.build().unwrap();
+    }
+}

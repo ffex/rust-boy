@@ -689,7 +689,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
-  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
+  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), text and score printing (see
+  [Text and scores](#text-and-scores-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
   and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout, runtime sprite pools (see
   [Sprite visibility and reusable OAM slots](#sprite-visibility-and-reusable-oam-slots)),

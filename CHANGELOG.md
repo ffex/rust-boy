@@ -60,6 +60,16 @@ together: every breaking change of the refactoring is in this release, so a prog
   constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
   With the builtin `InitOamDma`, so are the labels of the code it copies, `OamDmaCode` and `OamDmaCodeEnd`
   (`Definition::BuiltinLabel`).
+- **Runtime entities** (Phase 3): `RustBoy::create_entity_pool` reserves reusable OAM slots;
+  `EntityPool::spawn` claims a hidden slot, `set_sprite` shows or updates it, `hide` keeps it
+  alive, and `despawn` clears and frees it. Each entity is one hardware sprite, and its index
+  is a runtime value in `A`.
+- **Text and scores** (Phase 3): `load_font` loads a contiguous ASCII tile font; `create_text_printer` prints a
+  string, with newlines and wrapping, on either map; `TextPrinter::step` resumes when the VBlank queue is full (carry
+  clear: every glyph is queued); `reset` prints it again. `create_number_printer` shows a five-digit unsigned decimal
+  or four-digit packed-BCD score with leading zeros; `NumberPrinter::set_value(labels)` reads DE and restarts the job,
+  and invalid BCD returns carry without changing the buffer. Fonts use the background tile capacity; each printer adds
+  a WRAM cursor word, a score four or five bytes. Example output is unchanged.
 - **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
   `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
   handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
@@ -71,9 +81,60 @@ together: every breaking change of the refactoring is in this release, so a prog
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
   keeps the scroll: set it in init.
+- **Window** (Phase 3): optional `RustBoyConfig::window(Window::new(map, x, y))` or `RustBoy::set_window`,
+  `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
+  `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded because
+  WX=166 glitches on DMG. Raw coordinates are available for clipping/off-screen placement. Window
+  and background share tiles/BGP and require LCDC bit 0 on DMG. `show_window(true)` writes no
+  position: without a configured window, set one first. Existing output is unchanged.
 - **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
   LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
   or `$9C00`; map-pixel coordinates and the calling convention are unchanged.
+- **Runtime tilemaps** (Phase 3): `tiles.add_tilemap_rom` keeps multiple levels/screens
+  in ROM without startup copies or VRAM reservations; `tiles.copy_tilemap(id, area)`
+  loads a map into either VRAM destination using Memcopy. Copy full maps with the LCD
+  off; partial maps leave trailing rows intact. Existing startup tilemap behavior is unchanged.
+  `stdlib::graphics::utility::lcd_off`/`lcd_on` turn the LCD off and on keeping the other LCDC bits
+  (maps, sprite size, window), unlike `turn_off_screen`/`turn_on_screen`, which write fixed values.
+- **Palettes and fades** (Phase 3): typed `Palette`, `Shade`, `PaletteRegister`,
+  runtime `RustBoy::set_palette`, and four-stage `PaletteFade` through `fade_palette`.
+  Load progress into A and apply in VBlank; the game controls speed, and progress >=3
+  holds the final stage. Fade from/to a solid shade without blocking the main loop.
+  Existing startup `Palettes` bytes and example output remain compatible. `Shade` is ordered from white to black.
+  A fade leaves the palette byte in A: load the progress again before each fade.
+- **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
+  `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
+  existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
+  runtime, preserving coordinates and tile indices. Default/example output is unchanged.
+- **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
+  any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
+  per-part tiles/flags and OAM entries in creation order. Composite movement and animation
+  apply to the whole group. Existing 16x16 calls retain names and generated output.
+- **Per-animation timing** (Phase 3): `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's
+  period (1..=255). Sprites with overrides get their own clock; their other animations use the global period.
+  Selection changes reset the clock, repeated enable calls keep it, disabled frames stop it. The composite setters
+  configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
+  preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
+  global default.
+- **Animation completion** (Phase 3): `enable_animation_events` / `take_animation_event` give coalescing completion
+  flags (Once reaches its last frame, Loop wraps, PingPong returns to its first frame); `set_animation_callback` binds
+  a named function called after all sprite parts stepped, with BC/DE/HL preserved; the composite APIs give one
+  notification per group. `restart_animation` shows the first frame and resets completion, direction and timing state:
+  configure timing and events first, then generate restart snippets. Flags describe the shadow OAM, visible at the
+  next DMA; polling events survive callback delivery. Unknown callback names fail `build()`; event-producing animation
+  calls from interrupt handlers are rejected. Programs without subscriptions, the examples too, are unchanged.
+- **WRAM arrays** (Phase 3): `vars.create_array` with `ArrayElement` and `WramArray`
+  supports contiguous signed/unsigned bytes and words. Static access checks indices and values;
+  runtime BC-indexed access sets carry on bounds failure and performs no array access.
+  Arrays share WRAM0 allocation, initialize through compact loops and keep little-endian words.
+  `VarType` gains an `Array` variant; exhaustive downstream matches must handle it.
+- **Visibility and OAM pools** (Phase 3): sprite/composite hide and show-at snippets;
+  `create_sprite_pool` reserves reusable runtime slots alongside static sprites. Pool allocation,
+  release, hide and register-driven writes report carry on rejection and preserve IME.
+  `set_sprite_size` panics after the first pool as after the first sprite (a pool's Write routine checks 8x16
+  tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
+  Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
+  Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -103,7 +164,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 
@@ -124,6 +185,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `SECTION "Variables", WRAM0` (floating) | `SECTION "Variables", WRAM0[$C000]`: each variable section is at its address. A `raw()` section fixed where the variables are now overlaps them; let it float |
 | `get_address`: creation order across sections | section by section, in first-use order: the address the variable has when linked, once the program's variables are created (`build()` puts its own at the end of the last section) |
 | no HRAM variables | `gb.vars.create_hram_u8("hSpeed", 0)` (also `u16`, `i8`, `i16`): `Var::set` / `get` use `ldh`; HRAM gives variables $FF80-$FFBF, and the stack keeps the rest |
+| `VarType` matched exhaustively | it has `Array { element, len }` (WRAM arrays, `create_array`): add its arm |
 | `MemoryRegion` matched exhaustively | `MemoryRegion` is `#[non_exhaustive]`, and it has `SpriteTiles`, `BackgroundTiles`, `Wram0`, `Hram`: add a `_` arm |
 
 ### 3. Engine behaviour (Phase 1 fixes that change what a program does)
@@ -197,7 +259,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `asm.get_chunk(chunk)`, `asm.get_main_instrs()` | `layout.get_chunk(chunk)`; `asm.instrs()` |
 | a fresh `Asm` used as a scratch buffer | `Block` (the same builder methods), `block.into_instrs()` |
 | the `If` counter (`.end_if_N`), and fixed labels for the snippets | every generated label comes from the program's `asm::LabelAllocator`, `asm.labels()` / `gb.labels()` (B7) |
-| generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`, `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
+| generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N` (with per-animation periods or events: `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`, `.anim_callback_end_N`), `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
 | a `jr` out of range (or to an external symbol) failed in rgbasm | it is printed as `jp`, one byte longer. Code of fixed size or timing must write jumps that reach. A target `Label + 2`, or `@` used elsewhere than `ds N - @`, leaves the program unrelaxed |
 
 ### 6. Frames and interrupts (Phase 3, `refactor-p3-interrupts`)
@@ -233,6 +295,8 @@ of each VBlank (B12; see [CONTEXT.md](CONTEXT.md#b12)).
 | `BuiltinFunction::ALL: [BuiltinFunction; 8]` | `InitOamDma` is a builtin (it copies the DMA routine to HRAM): an exhaustive `match` needs its arm |
 | `Definition` had 6 variants | `Definition::GeneratedBuffer`: a variable named `wShadowOAM` or `hOAMDMA` in a program with sprites is `Error::NameConflict`; `Definition::BuiltinLabel`: so is a label or variable `OamDmaCode` or `OamDmaCodeEnd` |
 | `stdlib` `Sprite { id, x, y, tile, flags }` (a struct literal) | it has a field `oam: OamTarget` (`OamTarget::Oam`, as `Sprite::new` sets it, or `OamTarget::Shadow`): add it, or use `Sprite::new(..)` and `.in_shadow_oam()` |
+| `flags: u8` in `Sprite::new`, `RustBoy::add_sprite`, `add_sprite_16x16` | `flags: impl Into<SpriteFlags>`: `u8` values and literals still work; an argument typed only by inference (`x.into()`, `Default::default()`) is ambiguous now: write `0u8` or `SpriteFlags::new()` |
+| (new) | `SpriteFlags`, `ObjectPalette`, `SpritePriority` (also in the prelude); `Sprite::set_flags` and `SpriteManager::set_flags` (`gb.sprites.set_flags(id, flags)`, shadow OAM) change a sprite's attributes at runtime |
 | (new) | `stdlib::graphics::oam`: `OamTarget`, `SHADOW_OAM`, `OAM_DMA`, `init_oam_dma`, `run_oam_dma`, `shadow_oam_section`, `oam_dma_section`, `oam_dma_size`; `stdlib::graphics::sprites::initialize_oam(target)`; `hw::OAM_DMA_SOURCE_ALIGN`, `OAM_DMA_MCYCLES`, `LINE_MCYCLES`, `VBLANK_LINES`, `VBLANK_MCYCLES` |
 
 ### For users of the `refactor` branch

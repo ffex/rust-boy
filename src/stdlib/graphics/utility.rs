@@ -99,6 +99,8 @@ pub fn memcopy() -> Routine {
         .with_returns(Regs::BC | Regs::DE | Regs::HL)
         .with_clobbers(Regs::A | Regs::F)
 }
+/// Turn the LCD off by writing `LCDCF_OFF`: every other LCDC setting is cleared too.
+/// Emit only in VBlank. To keep the program's LCDC settings, use [`lcd_off`].
 pub fn turn_off_screen() -> Vec<Instr> {
     let mut asm = Block::new();
     // Turn off LCD
@@ -106,12 +108,35 @@ pub fn turn_off_screen() -> Vec<Instr> {
     asm.into_instrs()
 }
 
+/// Turn the LCD on by writing `LCDCF_ON | LCDCF_BGON | LCDCF_OBJON`: the `$9800` background map,
+/// 8x8 sprites and no window, whatever the program configured. To keep them, use [`lcd_on`].
 pub fn turn_on_screen() -> Vec<Instr> {
     let mut asm = Block::new();
     // Turn on LCD
     let on = Expr::from(hw::LCDCF_ON) | hw::LCDCF_BGON | hw::LCDCF_OBJON;
     asm.ld(R8::A, on).ld_addr_def_a(hw::LCDC);
     asm.into_instrs()
+}
+
+/// Turn the LCD off (LCDC bit 7), preserving every other LCDC bit: the maps, sprite size and
+/// window settings come back with [`lcd_on`]. Emit only in VBlank: turning the LCD off
+/// outside it can damage a DMG. Changes A and flags only.
+pub fn lcd_off() -> Vec<Instr> {
+    let mut code = Block::new();
+    code.ldh(R8::A, Mem::addr(hw::LCDC))
+        .and(Expr::low(!Expr::from(hw::LCDCF_ON)))
+        .ldh(Mem::addr(hw::LCDC), R8::A);
+    code.into_instrs()
+}
+
+/// Turn the LCD on (LCDC bit 7), preserving every other LCDC bit, e.g. after [`lcd_off`] and a
+/// runtime tilemap copy. Changes A and flags only.
+pub fn lcd_on() -> Vec<Instr> {
+    let mut code = Block::new();
+    code.ldh(R8::A, Mem::addr(hw::LCDC))
+        .or(hw::LCDCF_ON)
+        .ldh(Mem::addr(hw::LCDC), R8::A);
+    code.into_instrs()
 }
 
 /// The `WaitVBlank` routine: wait until the LCD is in VBlank (`rLY` from 144 to 153)
@@ -269,6 +294,26 @@ mod tests {
             cpu.mem.insert(format!("${:04X}", addr), tile_at(addr));
         }
         cpu
+    }
+
+    #[test]
+    fn lcd_off_and_on_flip_only_bit_7() {
+        for code in [lcd_off(), lcd_on()] {
+            assert_eq!(Regs::written_by(&code).unwrap() | Regs::AF, Regs::AF);
+        }
+        // Every other bit set or clear (BG map $9C00, 8x16 sprites, window on its $9C00 map)
+        for others in [0x7F, 0x00, 0x6E] {
+            let mut cpu = cpu_with_lcdc(others | hw::LCDCF_ON.value);
+            cpu.consts
+                .insert(hw::LCDCF_ON.name.to_string(), hw::LCDCF_ON.value);
+            cpu.run(&lcd_off());
+            assert_eq!(cpu.mem.get(hw::LCDC.name), Some(&others));
+            cpu.run(&lcd_on());
+            assert_eq!(
+                cpu.mem.get(hw::LCDC.name),
+                Some(&(others | hw::LCDCF_ON.value))
+            );
+        }
     }
 
     #[test]

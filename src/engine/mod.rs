@@ -10,27 +10,34 @@
 mod animations;
 mod background_animation;
 mod config;
+mod entities;
 mod error;
 mod functions;
 mod inputs;
 mod layout;
 mod memory;
 mod rustboy;
+mod sprite_pool;
 mod sprites;
+mod text;
+pub use sprite_pool::SpritePool;
 mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
-pub use config::{Lcdc, Palettes, RustBoyConfig};
+pub use config::{Lcdc, Palettes, RustBoyConfig, Window};
+pub use entities::EntityPool;
 pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};
 pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
 pub use rustboy::RustBoy;
-pub use sprites::{ANIM_DISABLED, CompositeSpriteId, SpriteId, SpriteManager, SpriteSize};
+pub use sprites::{
+    ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
+};
 pub use tiles::{TileId, TileManager, TileSource, TilemapArea};
-pub use variables::{Var, VarId, VarType, VariableManager};
+pub use variables::{ArrayElement, Var, VarId, VarType, VariableManager, WramArray};
 
 /// The message `f` panics with, for tests that check several panics in one go;
 /// panics if `f` returns
@@ -46,3 +53,4 @@ pub(crate) fn panic_message<R>(f: impl FnOnce() -> R) -> String {
 }
 
 pub use background_animation::{BackgroundAnimation, BackgroundAnimationConfig};
+pub use text::{Font, NumberFormat, NumberPrinter, TextPrinter};

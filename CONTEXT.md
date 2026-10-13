@@ -1510,7 +1510,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.
-- **Platform:** single ROM0 bank, no SRAM saves, no GBC.
+- **Platform:** generated engine programs still use ROM0 and do not select a cartridge mapper;
+  `stdlib::banking` has low-level MBC1/MBC5 ROM bank selectors (`refactor-p3-mbc-banking`), but
+  mapper headers and engine-managed banked asset access remain; no SRAM saves or GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
   one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and

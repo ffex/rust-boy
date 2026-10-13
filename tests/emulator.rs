@@ -12,7 +12,9 @@ use std::collections::BTreeSet;
 
 use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
+use rust_boy::stdlib::banking;
 use rust_boy::stdlib::graphics::vram_queue;
+use rust_boy::stdlib::sram;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
 
@@ -921,6 +923,68 @@ fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
 }
 
+#[test]
+fn sram_control_routines_assemble_and_return() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wSramBankHigh", 0);
+    game.vars.create_u8("wSramBankLow", 0);
+    let enable = game.call_routine(&sram::enable());
+    let select = game.call_routine(&sram::select_mbc5_bank());
+    let disable = game.call_routine(&sram::disable());
+    let mut init = Block::new();
+    init.emit_all(enable)
+        .ld_hl(0xABCD)
+        .emit_all(select)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wSramBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wSramBankLow")
+        .emit_all(disable);
+    game.init(init);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wSramBankHigh"), 0xAB);
+    assert_eq!(gb.read_symbol("wSramBankLow"), 0xCD);
+}
+
+#[test]
+fn mbc_bank_selectors_assemble_and_return_to_the_caller() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    for name in ["wBankHigh", "wBankLow"] {
+        game.vars.create_u8(name, 0);
+    }
+    let mbc1 = game.call_routine(&banking::set_mbc1_rom_bank());
+    let mbc5 = game.call_routine(&banking::set_mbc5_rom_bank());
+    let mut init = Block::new();
+    init.ld_hl(0x0041)
+        .emit_all(mbc1)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wBankLow")
+        .ld_hl(0x01FF)
+        .emit_all(mbc5)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wBankLow");
+    game.init(init);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wBankHigh"), 1);
+    assert_eq!(gb.read_symbol("wBankLow"), 0xFF);
+}
+
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a
 /// `halt`
 fn halted_share(gb: &mut GameBoy, frames: u64, samples: u64) -> f64 {
@@ -1736,7 +1800,7 @@ fn engine_vram_queue_late_flush_leaves_entries_for_the_next_vblank() {
         .emit_all(game.queue_vram_write(hw::SCRN0, 42))
         .label("WaitLastVblankLine")
         .ld_a_addr_def(hw::LY)
-        .cp(153)
+        .cp(hw::LY_LAST_LINE)
         .jr_cond(Condition::NZ, "WaitLastVblankLine")
         .call("FlushVramQueue")
         .label("QueueDeferred")
@@ -2507,6 +2571,67 @@ fn get_tile_by_pixel_follows_active_background_map() {
             assert_eq!(gb.blocked_accesses().0, 0);
         }
     }
+}
+#[test]
+fn png_and_binary_tile_sources_load_exact_bytes_into_vram() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    let source = TileSource::from_png(
+        support::examples::root().join("tests/fixtures/png/adam7-rgb.png"),
+        &PngOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(source.tile_count(), 1);
+    let background = game.tiles.add_background("PngBackground", source);
+    let binary =
+        TileSource::from_2bpp(support::examples::root().join("examples/coin-anim/coin.2bpp"))
+            .unwrap();
+    assert_eq!(binary.tile_count(), 7);
+    let binary_id = game.tiles.add_background("BinaryBackground", binary);
+    let player = game.add_sprite(
+        "PngSprite",
+        TileSource::from_png(
+            support::examples::root().join("examples/fosdem/char-dx.png"),
+            &PngOptions::new([[255; 3], [207; 3], [104; 3], [0, 0, 1]])
+                .tile_order(TileOrder::Sprite8x16),
+        )
+        .unwrap(),
+        80,
+        72,
+        0,
+    );
+    let base = game.tiles.get_address(background).unwrap();
+    let binary_base = game.tiles.get_address(binary_id).unwrap();
+    let asm = game.build().unwrap();
+    assert_eq!(asm, game.build().unwrap());
+    assert!(!asm.contains("INCBIN"));
+    let rom = Rom::build(&asm, &[]);
+    let mut gb = rom.boot();
+    gb.run_frames(15);
+    let expected = [
+        0x55, 0x33, 0xaa, 0x66, 0x55, 0xcc, 0xaa, 0x99, 0x55, 0x33, 0xaa, 0x66, 0x55, 0xcc, 0xaa,
+        0x99,
+    ];
+    for (i, byte) in expected.into_iter().enumerate() {
+        assert_eq!(gb.read(base + i as u16), byte);
+    }
+    for (i, &byte) in include_bytes!("../examples/coin-anim/coin.2bpp")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(gb.read(binary_base + i as u16), byte);
+    }
+    for (i, &byte) in include_bytes!("../examples/fosdem/char-dx.2bpp")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(gb.read(hw::VRAM_OBJ_TILES + i as u16), byte);
+    }
+    assert_eq!(gb.oam_entry(0), [88, 88, 0, 0]);
+    let _ = player;
+    assert_eq!(gb.blocked_accesses().0, 0);
 }
 
 #[test]

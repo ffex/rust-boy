@@ -363,6 +363,19 @@ pub const ROM_HEADER: u16 = 0x0100;
 /// from `$150` on (`ds $150 - @, 0` pads the header)
 pub const ROM_HEADER_END: u16 = 0x0150;
 
+/// MBC1 ROM bank low bits, selected by a write in `$2000..=$3FFF`.
+pub const MBC1_ROM_BANK_LOW: u16 = 0x2000;
+/// MBC1 ROM bank high bits, selected by a write in `$4000..=$5FFF`.
+pub const MBC1_ROM_BANK_HIGH: u16 = 0x4000;
+/// MBC5 ROM bank low eight bits, selected by a write in `$2000..=$2FFF`.
+pub const MBC5_ROM_BANK_LOW: u16 = 0x2000;
+/// MBC5 ROM bank high bit, selected by a write in `$3000..=$3FFF`.
+pub const MBC5_ROM_BANK_HIGH: u16 = 0x3000;
+/// Cartridge RAM gate for MBC1/MBC5: write `$0A` to enable and `$00` to disable.
+pub const CARTRIDGE_RAM_GATE: u16 = 0x0000;
+/// MBC5 cartridge RAM bank selector (bits 0–3), selected by writes at `$4000..=$5FFF`.
+pub const MBC5_RAM_BANK: u16 = 0x4000;
+
 /// Bytes in one 8x8 tile (2 bits per pixel)
 pub const TILE_SIZE: u16 = 16;
 /// Pixels in one row of a tile: a sprite is one tile wide
@@ -409,6 +422,8 @@ pub const OAM_DMA_MCYCLES: u16 = OAM_SIZE as u16;
 pub const LINE_MCYCLES: u16 = 114;
 /// Lines of VBlank in a frame: `LY` from [`SCRN_Y`] (144) to 153
 pub const VBLANK_LINES: u16 = 10;
+/// Last `rLY` line in a frame (153): the LY counter wraps to zero on the next line
+pub const LY_LAST_LINE: u8 = SCRN_Y.value + VBLANK_LINES as u8 - 1;
 /// M-cycles of VBlank (mode 1) in a frame: 10 lines of 114, the time OAM and VRAM are free
 /// for the CPU however long the visible lines' HBlanks are
 pub const VBLANK_MCYCLES: u16 = VBLANK_LINES * LINE_MCYCLES;

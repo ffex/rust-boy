@@ -43,11 +43,13 @@ impl EntityPool {
 
     /// Set/show entity A at screen position B,C with tile D and OAM flags E.
     /// Carry reports an invalid, unallocated index or invalid position/tile.
+    /// Changes AF/HL; preserves BC/DE and IME.
     pub fn set_sprite(&self) -> Vec<Instr> {
         self.0.write()
     }
 
-    /// Hide entity A while keeping it alive; `set_sprite` shows it again.
+    /// Hide entity A while keeping it alive; `set_sprite` shows it again. Carry reports an
+    /// invalid or unallocated index. Changes AF/HL; preserves BC/DE and IME.
     pub fn hide(&self) -> Vec<Instr> {
         self.0.hide()
     }

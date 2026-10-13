@@ -313,10 +313,11 @@ impl SpriteManager {
     /// # Panics
     /// If sprites were already added with another size: their tile indices depend on it.
     pub(crate) fn set_size(&mut self, size: SpriteSize) {
-        if size != self.size && !self.sprites.is_empty() {
+        // Sprite pools count too: their Write routine checks 8x16 tiles when it is created
+        if size != self.size && !self.is_empty() {
             panic!(
-                "set_sprite_size({:?}) must be called before the first sprite is added \
-                 (the sprites already added use {:?})",
+                "set_sprite_size({:?}) must be called before the first sprite or sprite pool is \
+                 added (those already added use {:?})",
                 size, self.size
             );
         }
@@ -1200,6 +1201,9 @@ impl SpriteManager {
 
     /// Hide this sprite by setting shadow OAM Y=0. Tile/flags/X are kept.
     /// Show it again with show_at; moving its Y can make it visible again.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager.
     pub fn hide(&self, id: SpriteId) -> Vec<Instr> {
         let sprite = self.sprite(id);
         Sprite::new(
@@ -1214,7 +1218,9 @@ impl SpriteManager {
     }
 
     /// Show/place this sprite at screen pixels, keeping tile/flags. Changes A only.
-    /// Panics for an unknown id or a position outside X 0..=247/Y 0..=239.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or the position is outside X 0..=247 / Y 0..=239.
     pub fn show_at(&self, id: SpriteId, x: u8, y: u8) -> Vec<Instr> {
         let sprite = self.sprite(id);
         Sprite::new(
@@ -1229,6 +1235,9 @@ impl SpriteManager {
     }
 
     /// Hide all composite parts by setting their shadow OAM Y to zero.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager.
     pub fn hide_composite(&self, id: CompositeSpriteId) -> Vec<Instr> {
         self.composite(id)
             .sprites
@@ -1239,6 +1248,10 @@ impl SpriteManager {
 
     /// Show/place a composite with its first registered part at screen (x, y), preserving
     /// the original offsets and every tile/attribute. Changes A only.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part would be outside
+    /// X 0..=247 / Y 0..=239.
     pub fn show_composite_at(&self, id: CompositeSpriteId, x: u8, y: u8) -> Vec<Instr> {
         let members = &self.composite(id).sprites;
         let first = self.sprite(members[0]);
@@ -1259,6 +1272,7 @@ impl SpriteManager {
             .collect()
     }
 
+    #[track_caller]
     pub(crate) fn reserve_pool_slots(&mut self, count: u8) -> u8 {
         assert!(
             count > 0 && count <= hw::OAM_COUNT.value,
@@ -1383,7 +1397,8 @@ impl SpriteManager {
         asm.into_instrs()
     }
 
-    /// Check if any sprites have been added
+    /// Whether no OAM entry is reserved: no static sprite and no sprite pool (a program with
+    /// only a pool is not empty)
     pub fn is_empty(&self) -> bool {
         self.oam.current_address() == hw::OAMRAM.value
     }

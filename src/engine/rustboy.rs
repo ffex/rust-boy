@@ -166,7 +166,8 @@ impl RustBoy {
     /// needs 8x16 mode.
     ///
     /// # Panics
-    /// If sprites were already added with another size: call it before adding sprites.
+    /// If sprites or sprite pools were already added with another size: call it before adding
+    /// them (a pool's Write routine checks 8x16 tiles when the pool is created).
     pub fn set_sprite_size(&mut self, size: SpriteSize) -> &mut Self {
         self.sprites.set_size(size);
         self.config.sprite_size = size;
@@ -1708,7 +1709,12 @@ impl RustBoy {
     /// Reserve OAM slots for runtime sprites. Pools and static sprites share 40 entries.
     /// Tiles remain registered separately; pool writes take an existing hardware tile index.
     /// All pool operations belong in init/main; handler use returns MainLoopOnly from build.
-    /// Panics for zero/full capacity or a reused pool state/routine name.
+    /// Create pools after [`RustBoy::set_sprite_size`]: the size is fixed from the first pool on.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, `count` is 0 or more than the free OAM entries, or the
+    /// pool's state or routine names are already used.
+    #[track_caller]
     pub fn create_sprite_pool(&mut self, name: &str, count: u8) -> super::sprite_pool::SpritePool {
         check_name("sprite pool", name);
         let occupancy = format!("wPool{name}Used");
@@ -1757,7 +1763,12 @@ impl RustBoy {
     /// Entities share OAM slots with static sprites and can be spawned, updated, hidden,
     /// and despawned at runtime. The entity index is returned in A by `spawn`.
     /// Operations belong in init/main; using them in a handler makes `build()` return
-    /// `Error::MainLoopOnly`. Panics for zero/full capacity or a conflicting pool name.
+    /// `Error::MainLoopOnly`. Create it after [`RustBoy::set_sprite_size`], as a sprite pool.
+    ///
+    /// # Panics
+    /// As [`RustBoy::create_sprite_pool`]: if `name` cannot be a label, `capacity` is 0 or more
+    /// than the free OAM entries, or the pool's names are already used.
+    #[track_caller]
     pub fn create_entity_pool(&mut self, name: &str, capacity: u8) -> super::entities::EntityPool {
         super::entities::EntityPool::new(self.create_sprite_pool(name, capacity))
     }

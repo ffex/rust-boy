@@ -27,7 +27,8 @@ into a ROM:
 your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ──rgblink──▶ main.gb ──rgbfix──▶ playable ROM
 ```
 
-- Zero Rust dependencies, edition 2024.
+- Edition 2024. The snapshot had zero Rust dependencies; `refactor-p3-png-assets` adds the pure-Rust
+  `png` decoder (0.18.1, declared MSRV 1.73) for host-side asset conversion.
 - The project is built with RGBDS 1.0 (the `.o` files once committed were object format `RGB9`). Generated code uses `0x05`-style
   constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
@@ -325,6 +326,18 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   flags, and leave sprites in screen coordinates. `follow_background_point` keeps the world pixel (B, C) at a screen
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
   Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
+
+- **PNG and binary tile assets** (since `refactor-p3-png-assets`): `engine::assets::png_to_2bpp` converts a static PNG
+  to tile bytes with the `png` crate (decompression, sample expansion, interlacing, checksums). Palette slots map
+  colours to pixel indices, exactly by default or by nearest RGB distance (deterministic ties); fully transparent
+  pixels map to an index (0 by default) and partial alpha is rejected; 16-bit samples use their high byte; no gamma,
+  dithering, deduplication, cropping or padding. Tiles are row-major, or in 8x16 top/bottom pairs; animated PNGs are
+  rejected; output is limited to 64 MiB before allocating. `TileSource::from_png`, `from_2bpp` and `from_2bpp_bytes`
+  derive the tile count, own their bytes and return `AssetError`; they reuse the raw source as little-endian `dw`
+  pairs (no new enum variant), so no INCBIN include path is needed; paths resolve in the generating process. The old
+  `from_file(path, count)` still defers INCBIN to RGBDS with a manual count. FOSDEM loads its right half from its PNG
+  (byte-for-byte equal to the committed 2bpp, tested) and its left half and the coin with derived counts; their
+  snapshots inline the tile data as `dw`, the rest of their output is unchanged.
 
 - **Sprite visibility and runtime OAM pools** (since `refactor-p3-sprite-pools`): `Sprite`/`SpriteManager::hide` sets
   Y=0 and keeps X, tile and flags; `show_at` takes screen coordinates and writes Y last; `hide_composite` /
@@ -1164,7 +1177,8 @@ screen are identical on every frame, and every frame of every animation is shown
 `test_variables_must_fit_in_wram0`, `test_animation_frames_must_be_the_sprite_tiles`,
 `test_loop_animation_ending_on_the_last_sprite_tile` (runs the animation on `gb_asm::test_cpu` in 8x8 and 8x16; it
 overflowed before), `test_allocation_stops_at_the_end_of_the_region`, `test_regions`; all the new ones failed before.
-Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (its size is only known when
+Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (since `refactor-p3-png-assets`,
+`from_2bpp` derives the count from the file instead; for `from_file` its size is only known when
 assembled).
 
 #### B18
@@ -1474,7 +1488,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20) (it panics since). |
 | 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
-| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |
+| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size): `TileSource::from_2bpp` / `from_png` since `refactor-p3-png-assets`. |
 
 ---
 
@@ -1498,7 +1512,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
-  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`).
+  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and
+  `.2bpp` files with a derived tile count exist since `refactor-p3-png-assets` (see §2).
 
 ---
 

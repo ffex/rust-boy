@@ -294,7 +294,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
 - [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
       loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
-- [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
+- [x] PNG → 2bpp conversion in Rust (tile count derived from file size): `refactor-p3-png-assets`,
+      owned PNG/binary loaders, palette/transparency rules and 8×16 tile ordering; FOSDEM/coin migrated
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)

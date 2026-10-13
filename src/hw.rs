@@ -550,5 +550,8 @@ pub fn oam_offset(index: u8, byte: Symbol<u8>) -> u16 {
     u16::from(index) * u16::from(OAM_ENTRY_SIZE.value) + u16::from(byte.value)
 }
 
+/// Hardware WX offset from the window screen X coordinate.
+pub const WINDOW_X_OFFSET: u8 = 7;
+
 /// Wave RAM holds sixteen bytes (32 four-bit samples).
 pub const WAVE_RAM_BYTES: usize = 16;

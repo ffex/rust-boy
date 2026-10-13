@@ -48,6 +48,8 @@ pub struct RustBoyConfig {
     pub background_tilemap: TilemapArea,
     /// The palettes the start-up code writes to `rBGP`, `rOBP0` and `rOBP1`
     pub palettes: Palettes,
+    /// Optional window configuration; disabled by default.
+    pub window: Option<Window>,
     /// The other LCDC flags the start-up code sets when it turns the LCD on
     pub lcdc: Lcdc,
     /// Builtins emitted even if no code calls them (what
@@ -77,6 +79,7 @@ impl Default for RustBoyConfig {
             sprite_size: SpriteSize::default(),
             background_tilemap: TilemapArea::default(),
             palettes: Palettes::default(),
+            window: None,
             lcdc: Lcdc::default(),
             builtins: BTreeSet::new(),
             animation_delay: 8,
@@ -109,6 +112,12 @@ impl RustBoyConfig {
     /// With the background showing the tilemap at `area`
     pub fn background_tilemap(mut self, area: TilemapArea) -> Self {
         self.background_tilemap = area;
+        self
+    }
+
+    /// Show a window at startup. Position writes precede user init code.
+    pub fn window(mut self, window: Window) -> Self {
+        self.window = Some(window);
         self
     }
 
@@ -215,12 +224,11 @@ impl Default for Palettes {
 /// besides the sprite size and the background tilemap, which have their own settings
 ///
 /// The tile data the background uses is not a setting: `RustBoy` puts the background
-/// tiles at `$9000` (`LCDCF_BG8800`, LCDC bit 4 clear). The window has no setting yet
-/// (Phase 3): it stays off.
+/// tiles at `$9000` (`LCDCF_BG8800`, LCDC bit 4 clear). The window shares this tile data mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Lcdc {
-    /// Show the background (`LCDCF_BGON`, LCDC bit 0); on by default
+    /// Show the background and window on DMG (`LCDCF_BGON`, LCDC bit 0); on by default
     pub background: bool,
     /// Show the sprites (`LCDCF_OBJON`, LCDC bit 1); on by default
     pub objects: bool,
@@ -246,5 +254,57 @@ impl Lcdc {
     pub fn objects(mut self, on: bool) -> Self {
         self.objects = on;
         self
+    }
+}
+
+/// Startup window settings. Uses the background tiles and palette.
+/// Populate its map with `tiles.add_tilemap_at`; the two layers may share a map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Window {
+    /// Window map, independent of the background map.
+    pub tilemap: TilemapArea,
+    /// Raw hardware X coordinate (screen X + 7).
+    pub wx: u8,
+    /// Raw hardware Y coordinate.
+    pub wy: u8,
+}
+
+impl Window {
+    /// Visible window at screen `(x, y)`. X must be 0..=158, Y 0..=143
+    /// (see [`crate::stdlib::graphics::window::screen_to_raw`]).
+    ///
+    /// # Panics
+    /// If X is not 0..=158 or Y not 0..=143.
+    ///
+    /// ```
+    /// use rust_boy::prelude::*;
+    /// let mut gb = RustBoy::with_config(RustBoyConfig::default()
+    ///     .window(Window::new(TilemapArea::Map9C00, 0, 112)));
+    /// gb.tiles.add_tilemap_at("Status", TilemapArea::Map9C00, &[[0; 32]]);
+    /// // It starts at Y 112; VBlank code moves it to Y 120 and switches its map
+    /// let mut frame = gb.set_window_position(0, 120);
+    /// frame.extend(gb.select_window_tilemap(TilemapArea::Map9800));
+    /// gb.on_vblank(frame);
+    /// # gb.build().unwrap();
+    /// ```
+    #[track_caller]
+    pub fn new(tilemap: TilemapArea, x: u8, y: u8) -> Self {
+        let (wx, wy) = crate::stdlib::graphics::window::screen_to_raw(x, y);
+        Self { tilemap, wx, wy }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_new_converts_and_checks_screen_coordinates() {
+        let window = Window::new(TilemapArea::Map9C00, 158, 143);
+        assert_eq!((window.wx, window.wy), (165, 143));
+        assert_eq!(Window::new(TilemapArea::Map9800, 0, 0).wx, 7);
+        for (x, y) in [(159, 0), (0, 144)] {
+            assert!(std::panic::catch_unwind(|| Window::new(TilemapArea::Map9800, x, y)).is_err());
+        }
     }
 }

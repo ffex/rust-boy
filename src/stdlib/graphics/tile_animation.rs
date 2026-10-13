@@ -58,7 +58,8 @@ pub fn animate(
     delay: u8,
     playback: TilePlayback,
 ) -> Routine {
-    assert!(cells > 0 && cells <= 1024, "invalid cell count");
+    let map_cells = u16::from(crate::hw::SCRN_VX_B.value) * u16::from(crate::hw::SCRN_VY_B.value);
+    assert!(cells > 0 && cells <= map_cells, "invalid cell count");
     assert!(
         (1..=256).contains(&count) && delay > 0,
         "invalid animation timing"

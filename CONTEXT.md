@@ -333,7 +333,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `wVramQueue` (39 bytes), `wVramQueueRead` and `wVramQueueWrite` (one byte each) are reserved
   at the top of WRAM0, below shadow OAM when present, without moving user variables. Competing
   definitions return `Error::NameConflict`; insufficient memory is `Error::MemoryFull`.
-  Startup clears the cursors before user init code. Enqueue takes `hl` and `a`, changes all
+  Startup clears the cursors before user init code. Accepted writes queued while the LCD is off
+  remain pending until a VBlank after the LCD turns on; the queue does not poll or flush during
+  initialization. Enqueue takes `hl` and `a`, changes all
   registers and flags, and preserves IME. Carry clear means accepted; carry set means full or
   a runtime destination outside VRAM (constant errors panic at the API call). Rejection retains
   queued entries; callers retry if necessary. There is one producer, in init/main, never in an
@@ -342,7 +344,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   code are not followed, and a main-loop call to `FlushVramQueue`, a second consumer, is not rejected:
   both are documented limits). The write cursor is published after all bytes, so the consumer sees only
   complete entries even when enqueue is interrupted. Flush consumes FIFO entries with interrupts
-  off, beginning writes only on lines 144–152 and retaining entries if late. Unit tests cover
+  off, reading `rLY` with `ldh` (one M-cycle saved per entry), beginning writes only on lines
+  144–152 and retaining entries if late. Unit tests cover
   wrapping, overflow, invalid destinations, FIFO order and routine conventions; emulator tests
   cover delayed main-loop work, rejection/IME at init, full-queue timing alongside OAM DMA,
   late deferral and VBlank injected at every enqueue instruction boundary. The interruption

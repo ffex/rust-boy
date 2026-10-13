@@ -1759,6 +1759,20 @@ impl RustBoy {
         }
     }
 
+    /// Create a pool for runtime entities, each represented by one hardware sprite.
+    /// Entities share OAM slots with static sprites and can be spawned, updated, hidden,
+    /// and despawned at runtime. The entity index is returned in A by `spawn`.
+    /// Operations belong in init/main; using them in a handler makes `build()` return
+    /// `Error::MainLoopOnly`. Create it after [`RustBoy::set_sprite_size`], as a sprite pool.
+    ///
+    /// # Panics
+    /// As [`RustBoy::create_sprite_pool`]: if `name` cannot be a label, `capacity` is 0 or more
+    /// than the free OAM entries, or the pool's names are already used.
+    #[track_caller]
+    pub fn create_entity_pool(&mut self, name: &str, capacity: u8) -> super::entities::EntityPool {
+        super::entities::EntityPool::new(self.create_sprite_pool(name, capacity))
+    }
+
     /// Give sprite `sprite` more tiles, from another source: frames spread over several
     /// `.2bpp` files, for example
     ///

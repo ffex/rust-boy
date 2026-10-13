@@ -340,6 +340,12 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   Emulator tests: static sprites with pools, two pools, both sizes, exhaustion, reuse, every rejection, static
   visibility; unit tests: capacity and handler reachability.
 
+- **Entity pools** (since `refactor-p3-entities`): `RustBoy::create_entity_pool` wraps a sprite pool in entity words:
+  `spawn` allocates a hidden slot (A = the entity's relative index, carry when full), `set_sprite` writes and shows it
+  (A = index, B/C = position, D/E = tile/flags), `hide` keeps it alive, `despawn` clears and frees it. One hardware
+  sprite per entity; the game keeps any per-entity state, and entity composition is not part of this API. Same
+  registers, carry results and init/main-only rule as the pool routines it calls.
+
 - **WRAM arrays** (since `refactor-p3-wram-arrays`): `ArrayElement` (signed or unsigned bytes and words), `WramArray`
   and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0 variables, contiguous `ds`
   bytes in the variable allocator's creation order, initialised by a compact local-label loop. Static

@@ -325,6 +325,29 @@ All pool operations belong in init/main, with one producer; build rejects handle
 calls. Allocation changes AF/BC/HL, other pool operations AF/HL; DE and IME are kept.
 Pool writes publish Y last but aren't atomic to DMA: use VBlank for coherent updates.
 
+### Entity pools
+
+`create_entity_pool` gives a sprite pool entity names: one hardware sprite per entity, its
+index in A, the game keeping any other state.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let enemies = gb.create_entity_pool("Enemies", 4);
+let mut spawn = Block::new();
+let full = gb.labels().local("no_enemy");
+spawn.emit_all(enemies.spawn()).jr_cond(Condition::C, &full) // A = the new entity
+    .ld_b(80).ld_c(40).ld_d(0).ld_e(0)
+    .emit_all(enemies.set_sprite()).label(&full);
+gb.init(spawn);
+# gb.build().unwrap();
+```
+
+`spawn` returns a hidden entity (carry when the pool is full), `set_sprite` writes and shows
+it (A = entity, B/C = position, D/E = tile/flags), `hide` keeps it alive and `despawn` frees it.
+Registers, carry results and the init/main-only rule are the pool's (above).
+
 ## WRAM arrays (`RustBoy`)
 
 ```rust

@@ -52,7 +52,10 @@ impl PngOptions {
         self
     }
     /// Map fully transparent pixels to an index, or reject them with `None`.
-    /// Panics if the supplied index is greater than three.
+    ///
+    /// # Panics
+    /// If the index is greater than 3.
+    #[track_caller]
     pub fn transparent_index(mut self, index: Option<u8>) -> Self {
         assert!(
             index.is_none_or(|index| index < 4),
@@ -61,6 +64,7 @@ impl PngOptions {
         self.transparent = index;
         self
     }
+    /// Row-major tiles (the default), or the two tiles of each 8x16 sprite one after the other.
     pub fn tile_order(mut self, order: TileOrder) -> Self {
         self.order = order;
         self

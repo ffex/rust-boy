@@ -632,10 +632,8 @@ mod binary_asset_tests {
     }
     #[test]
     fn file_sources_own_their_bytes_and_return_path_errors() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!("asset-{}.2bpp", std::process::id()));
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // The system's temporary directory: the source tree may be read-only
+        let path = std::env::temp_dir().join(format!("rust-boy-asset-{}.2bpp", std::process::id()));
         std::fs::write(&path, [0x55, 0x33].repeat(8)).unwrap();
         let source = TileSource::from_2bpp(&path).unwrap();
         std::fs::write(&path, [0; 32]).unwrap();

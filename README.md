@@ -27,7 +27,8 @@ The [changelog](CHANGELOG.md) lists every breaking change of the refactoring, wi
 
 ## Requirements
 
-- Rust 1.85 or newer (edition 2024). No other Rust dependencies.
+- Rust 1.85 or newer (edition 2024). One Rust dependency: the pure-Rust [`png`](https://crates.io/crates/png)
+  decoder, for `TileSource::from_png` (it runs in the generating program, not on the Game Boy).
 - [RGBDS](https://rgbds.gbdev.io/) 0.9 or newer to build ROMs (CI uses 1.0.4).
 
 To use it in your own project:

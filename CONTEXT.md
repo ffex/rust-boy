@@ -1177,7 +1177,8 @@ screen are identical on every frame, and every frame of every animation is shown
 `test_variables_must_fit_in_wram0`, `test_animation_frames_must_be_the_sprite_tiles`,
 `test_loop_animation_ending_on_the_last_sprite_tile` (runs the animation on `gb_asm::test_cpu` in 8x8 and 8x16; it
 overflowed before), `test_allocation_stops_at_the_end_of_the_region`, `test_regions`; all the new ones failed before.
-Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (its size is only known when
+Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (since `refactor-p3-png-assets`,
+`from_2bpp` derives the count from the file instead; for `from_file` its size is only known when
 assembled).
 
 #### B18
@@ -1487,7 +1488,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20) (it panics since). |
 | 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
-| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |
+| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size): `TileSource::from_2bpp` / `from_png` since `refactor-p3-png-assets`. |
 
 ---
 
@@ -1511,7 +1512,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
-  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`).
+  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and
+  `.2bpp` files with a derived tile count exist since `refactor-p3-png-assets` (see §2).
 
 ---
 

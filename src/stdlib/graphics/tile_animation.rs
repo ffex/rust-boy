@@ -45,7 +45,10 @@ impl TileAnimationState {
 /// queue full; clear means idle or complete. Changes all registers, preserves IME.
 /// Pausing preserves progress; `finished` becomes one after Once's final frame queues.
 /// The queue flush is asynchronous: multi-cell frames may become visible in pieces.
-/// Panics for zero targets/delay or frame count outside 1..=256.
+///
+/// # Panics
+/// If `cells` is not 1..=1024, `count` not 1..=256, or `delay` is 0.
+#[track_caller]
 pub fn animate(
     name: &str,
     targets: &str,

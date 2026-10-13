@@ -158,6 +158,42 @@ assert!(out.contains("TimerHandler:\n    push af\n    ld a, [wTicks]"));
 as at power-on: every variable is set to its initial value, the `init()` code runs again; it happens once per press
 (holding the four buttons does not reset the game again and again).
 
+## PNG and binary tile assets (`RustBoy`)
+
+Use `TileSource::from_png(path, &options)` to load tile artwork directly. Palette slots
+are pixel indices 0..=3; default colors are `[255,255,255]`, `[170,170,170]`, `[85,85,85]`,
+and black. Exact matching rejects unknown colors; nearest RGB matching is explicit.
+Fully transparent pixels map to index zero by default, and partial alpha is rejected.
+
+```no_run
+use rust_boy::prelude::*;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = PngOptions::default()
+        .mapping(PngColorMapping::Nearest)
+        .tile_order(TileOrder::Sprite8x16);
+    let artwork = TileSource::from_png("player.png", &options)?;
+    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    gb.add_sprite("Player", artwork, 80, 72, 0);
+    println!("{}", gb.build()?);
+    Ok(())
+}
+```
+
+PNG dimensions must be multiples of eight; 8×16 ordering additionally requires a
+height divisible by sixteen and emits each vertical pair consecutively. Indexed,
+grayscale, RGB, alpha, and interlaced static PNGs are supported. Packed samples expand
+to 8 bits; 16-bit samples use their high byte. Mapping does not apply gamma correction,
+dithering, deduplication, padding or cropping. Animated PNGs are rejected.
+
+`png_to_2bpp(&png_bytes, &options)` returns binary bytes that you can write as a `.2bpp`
+file. `TileSource::from_2bpp(path)` reads a nonempty multiple of sixteen bytes and derives
+the count; `from_2bpp_bytes(&bytes)` does the same for memory. Loaded sources own their
+data and emit DW pairs, so no asset INCBIN include path is needed. Paths resolve relative
+to the generating program's current directory; use `CARGO_MANIFEST_DIR` for crate assets.
+All loaders return `AssetError`; allocation limits remain the tile manager's existing
+128 background / 256 sprite tiles. The legacy `from_file(path,count)` remains available
+for deferred RGBDS INCBIN, where you supply the correct count and include directory.
+
 ## Sprites and the shadow OAM (`RustBoy`)
 
 The PPU reads OAM, the sprite table, during most of each visible line: a CPU write to OAM then is lost. So a `RustBoy`
@@ -437,6 +473,32 @@ BCD four. Invalid BCD keeps the old score and returns carry. Set numbers only wh
 change; resetting/replacing retains pending writes, so partial values can briefly display.
 Printer steps belong in init/main code; interrupt handlers cannot produce queue entries.
 
+## Background tile animation (`RustBoy`)
+
+Preload tile artwork, then animate its IDs at fixed cells on either background/window map.
+Each frame supplies one tile per cell, in cell order. Call `step` once per game frame:
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+gb.tiles.add_background("WaterTiles", TileSource::from_raw(&[["$00"; 8]; 3]));
+let config = BackgroundAnimationConfig::new(
+    TilemapArea::Map9800, &[(2, 3), (3, 3)],
+    &[vec![0, 1], vec![1, 2], vec![2, 0]],
+).delay(8).playback(AnimationType::PingPong);
+let water = gb.create_background_animation("Water", config);
+gb.add_to_main_loop(water.step());
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Loop/ping-pong/once support 1..=256 frames. Holds are 1..=255 calls after a frame is
+fully queued (default 1). A full VBlank queue pauses advancement, preserving the current
+frame's cursor. Carry set means queue full. Cells can become visible in pieces as the
+queue drains. Pause/resume retain progress; restart replays frame zero and keeps pending
+writes. `finished()` loads A with 1 once Once's final frame is queued, otherwise 0.
+The selected layer must be enabled separately; tile patterns are loaded beforehand.
+
 ## Palettes and fades (`RustBoy`)
 
 DMG palettes map four colour indices to shades. The background and window share BGP;
@@ -687,10 +749,12 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), tiles
+  converted from PNG or read from `.2bpp` files in Rust (see [PNG and binary tile assets](#png-and-binary-tile-assets-rustboy)), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), text and score printing (see
-  [Text and scores](#text-and-scores-rustboy)), WRAM and HRAM
+  [Text and scores](#text-and-scores-rustboy)), background tile animation (see
+  [Background tile animation](#background-tile-animation-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
   and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
   (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), runtime sprite and
@@ -764,65 +828,3 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
-
-### Background tile animation
-
-Preload tile artwork, then animate its IDs at fixed cells on either background/window map.
-Each frame supplies one tile per cell, in cell order. Call `step` once per game frame:
-
-```rust
-use rust_boy::prelude::*;
-let mut gb = RustBoy::new();
-gb.tiles.add_background("WaterTiles", TileSource::from_raw(&[["$00"; 8]; 3]));
-let config = BackgroundAnimationConfig::new(
-    TilemapArea::Map9800, &[(2, 3), (3, 3)],
-    &[vec![0, 1], vec![1, 2], vec![2, 0]],
-).delay(8).playback(AnimationType::PingPong);
-let water = gb.create_background_animation("Water", config);
-gb.add_to_main_loop(water.step());
-let asm = gb.build()?;
-# Ok::<(), rust_boy::engine::Error>(())
-```
-
-Loop/ping-pong/once support 1..=256 frames. Holds are 1..=255 calls after a frame is
-fully queued (default 1). A full VBlank queue pauses advancement, preserving the current
-frame's cursor. Carry set means queue full. Cells can become visible in pieces as the
-queue drains. Pause/resume retain progress; restart replays frame zero and keeps pending
-writes. `finished()` loads A with 1 once Once's final frame is queued, otherwise 0.
-The selected layer must be enabled separately; tile patterns are loaded beforehand.
-
-### PNG and binary tile assets
-
-Use `TileSource::from_png(path, &options)` to load tile artwork directly. Palette slots
-are pixel indices 0..=3; default colors are `[255,255,255]`, `[170,170,170]`, `[85,85,85]`,
-and black. Exact matching rejects unknown colors; nearest RGB matching is explicit.
-Fully transparent pixels map to index zero by default, and partial alpha is rejected.
-
-```no_run
-use rust_boy::prelude::*;
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let options = PngOptions::default()
-        .mapping(PngColorMapping::Nearest)
-        .tile_order(TileOrder::Sprite8x16);
-    let artwork = TileSource::from_png("player.png", &options)?;
-    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
-    gb.add_sprite("Player", artwork, 80, 72, 0);
-    println!("{}", gb.build()?);
-    Ok(())
-}
-```
-
-PNG dimensions must be multiples of eight; 8×16 ordering additionally requires a
-height divisible by sixteen and emits each vertical pair consecutively. Indexed,
-grayscale, RGB, alpha, and interlaced static PNGs are supported. Packed samples expand
-to 8 bits; 16-bit samples use their high byte. Mapping does not apply gamma correction,
-dithering, deduplication, padding or cropping. Animated PNGs are rejected.
-
-`png_to_2bpp(&png_bytes, &options)` returns binary bytes that you can write as a `.2bpp`
-file. `TileSource::from_2bpp(path)` reads a nonempty multiple of sixteen bytes and derives
-the count; `from_2bpp_bytes(&bytes)` does the same for memory. Loaded sources own their
-data and emit DW pairs, so no asset INCBIN include path is needed. Paths resolve relative
-to the generating program's current directory; use `CARGO_MANIFEST_DIR` for crate assets.
-All loaders return `AssetError`; allocation limits remain the tile manager's existing
-128 background / 256 sprite tiles. The legacy `from_file(path,count)` remains available
-for deferred RGBDS INCBIN, where you supply the correct count and include directory.

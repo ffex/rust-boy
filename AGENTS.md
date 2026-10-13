@@ -119,11 +119,30 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 When the PR is open and its CI checks pass locally (or the ones that could not run are listed as
 not run), hand it to Claude: give the maintainer the PR number, the branch and, for stacked PRs,
 the merge order, and leave the PR's *Independent review* section as "pending" (Claude also picks up
-open PRs marked so). Do not push to the branch after the handoff, unless the maintainer asks you to
-(Claude's requests reach you through the maintainer). Questions go to the maintainer. If something
+open PRs marked so). Do not push to the branch after the handoff, unless a fix-request (below) or the
+maintainer asks you to. Questions go to the maintainer. If something
 is unfinished or uncertain, say so in the PR's *Risks and follow-ups* section rather than in the
 handoff, so the reviewer reads it independently.
 Claude fills in the *Independent review* section.
+
+### Fix requests
+
+After its review, Claude posts the findings on the PR as one comment that mentions `@codex`:
+
+```
+@codex fix-request (review of <head-sha>)
+F1 [blocking] path/file.rs:120 — <defect>. Scenario: <…>. Expected: <…>. Test: <what to add>.
+F2 [minor] …
+```
+
+Then, on that PR branch only:
+- Fix each finding, or explain why it should not be fixed. A behaviour fix comes with a test and
+  updates `Task.md`, `CONTEXT.md` and `CHANGELOG.md`; snapshots change only for an intended asm change.
+- If the branch is behind `refactor`, merge `refactor` into it (never rebase or force-push).
+- Run the CI checks listed above, push, and reply on the PR:
+  `@claude fixed <new-head-sha>` with one line per finding: `F1 fixed in <sha>` or
+  `F1 not fixed: <reason>`, plus the checks run and their results (and the ones that could not run).
+- Do not edit the PR's *Independent review* section, and do not merge.
 
 In *How it was verified*, list each command you ran and its result. Never describe a skipped check as
 passing: name the checks that did not run and why.

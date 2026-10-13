@@ -14,8 +14,9 @@ as the change.
 
 - **Codex** makes the first implementation of a task: code, tests, docs, snapshots and a PR into
   `refactor`, following [`AGENTS.md`](AGENTS.md). After that first try, Codex hands the PR over.
-- **Claude** owns the PR from then on: it has the PR reviewed, fixes the findings on the PR branch,
-  has the new head reviewed again, and merges the PR into `refactor` when everything is OK.
+- **Claude** owns the PR from then on: it has the PR reviewed, has Codex fix the findings on the PR
+  branch (through a fix-request comment, below), has the new head reviewed again, and merges the PR
+  into `refactor` when everything is OK.
 - **The maintainer** is asked only for the final PR `refactor` → `main`, which Claude never merges,
   and for questions Claude cannot answer itself (see "Questions" below). The maintainer may also pass
   Codex's handoffs (a PR number) along; that is not a question.
@@ -133,11 +134,15 @@ For each PR (or chain of stacked PRs), Codex's or Claude's own:
    5. Check that `Task.md`, `CONTEXT.md` and, where relevant, `CHANGELOG.md` agree with the code, and
       that intentional generated-asm changes have matching snapshots that still assemble.
    6. Return the reviewed commit ids, conflicts, findings, checks and results, and open questions.
-2. **Fix.** Claude fixes every finding on the PR branch (merge `refactor` into it when it is behind;
-   never rebase a published branch), or writes in the PR why a finding is not fixed. A fix that
-   changes behaviour updates `Task.md`, `CONTEXT.md` and `CHANGELOG.md` in the same branch, and
-   comes with a test. Run the CI checks before every push. Snapshots are updated only for an
-   intended asm change, never to make a test pass.
+2. **Fix.** Claude posts the findings as one *fix-request* comment on the PR (format in
+   [`AGENTS.md`](AGENTS.md#fix-requests)); the `@codex` mention starts Codex through its GitHub
+   integration. Codex fixes every finding on the PR branch (merging `refactor` into it when it is
+   behind; never rebasing a published branch), or writes why a finding is not fixed, and replies with
+   the new head SHA. Claude fixes a trivial finding (a one-line or docs-only change) itself when a
+   round-trip would cost more. Either way: a fix that changes behaviour updates `Task.md`,
+   `CONTEXT.md` and `CHANGELOG.md` in the same branch and comes with a test; the CI checks run before
+   every push; snapshots are updated only for an intended asm change, never to make a test pass.
+   Reviewer agents may run on a smaller model (Sonnet) to save tokens.
 3. **Re-review.** A review applies only to the commit ids it recorded: after fixes, start a new
    context-free review of the new head. Repeat 2–3 until the reviewer has no findings that block.
 4. **Merge.** Merge only when CI is green on the reviewed head, there are no conflicts and no
@@ -153,8 +158,8 @@ For each PR (or chain of stacked PRs), Codex's or Claude's own:
    moved only by those merges since the review; otherwise merge `refactor` in and go back to step 3.
    After the last merge, check that the tree of `refactor` is the reviewed one
    (`git diff <simulated merge commit> refactor` is empty).
-   **Asking Codex.** Claude does not ask Codex for pushes: it fixes findings itself. When Codex
-   should redo a task, Claude says so to the maintainer.
+   **Asking Codex.** Claude asks Codex for fixes only through fix-request comments on the PR. When
+   Codex should redo a whole task, Claude says so to the maintainer.
 5. **Release PR.** `refactor` → `main` is never merged by Claude: when it is ready, tell the
    maintainer and wait.
 

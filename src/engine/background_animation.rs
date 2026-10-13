@@ -17,8 +17,9 @@ impl BackgroundAnimationConfig {
     ///
     /// The cell targets and the frames are ROM tables in the single ROM0 bank
     /// (2 bytes per cell, 2 per frame, plus one byte per cell per frame): tables that do not
-    /// fit with the rest of the program make rgblink fail (`Section "Header" is bigger
-    /// than the max size for that type`).
+    /// fit with the rest of the program fail to build: rgblink rejects a section past $4000 bytes
+    /// (`Section "Header" is bigger than the max size for that type`), and rgbasm already
+    /// rejects one past $8000 (`Section "Header" grew too big`).
     ///
     /// # Panics
     /// If `cells` is empty or has a duplicate or a cell outside the 32×32 map, or `frames`
@@ -122,8 +123,9 @@ impl RustBoy {
     /// # Panics
     /// If `name` cannot be a label, a function or another background animation already has the
     /// routine name `UpdateBgAnim{name}`, or a variable has one of its state names
-    /// (`wBgAnim{name}…`). A *variable* named like the routine is caught by `build()`, which
-    /// returns [`Error::NameConflict`](super::Error::NameConflict).
+    /// (`wBgAnim{name}…`), or a user function has the name of a VRAM-queue routine
+    /// (`QueueVramWrite`, `FlushVramQueue`). A *variable* named like the routine is caught by
+    /// `build()`, which returns [`Error::NameConflict`](super::Error::NameConflict).
     #[track_caller]
     pub fn create_background_animation(
         &mut self,

@@ -348,7 +348,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   ping-pong or once, 1 to 256 frames, a hold of 1..=255 calls per frame. Pause keeps the cursor and timer; restart
   replays from frame 0 and keeps writes already queued. Once's finished flag means its last frame is queued, not
   flushed. Frames of several cells are not atomic: the queue can flush part of one. Handler steps are rejected through
-  the queue dependency check. The target and frame tables go to the single ROM0 bank; too large ones make rgblink fail.
+  the queue dependency check. The target and frame tables go to the single ROM0 bank; too large ones make rgblink fail (past $4000
+  bytes), or rgbasm already (past $8000).
 
 - **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
   a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine

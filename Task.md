@@ -294,6 +294,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
 - [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
       loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
+- [ ] Follow-up of the background tile animation (from the review of #88): a variable named like an animation's ROM
+      tables (`BgAnim{name}Targets`, `…Frames`, `…Frame{i}`) passes `build()` and fails in rgbasm ("already defined"); the
+      name-conflict check should cover these raw labels, as it does for functions
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
 
 ### Animation

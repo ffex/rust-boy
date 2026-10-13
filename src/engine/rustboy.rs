@@ -1538,6 +1538,9 @@ impl RustBoy {
     /// before user VBlank code. Writes appear at the next flush. On return, carry is
     /// clear if accepted, set if full or outside VRAM; rejected writes must be retried
     /// by the caller if required. Changes all registers and flags, preserving IME.
+    /// If called with the LCD off (for example from `init()`), accepted entries stay
+    /// queued until a VBlank after the LCD is on; the queue does not poll or flush them
+    /// during initialization.
     ///
     /// Do not call the generated code from interrupt handlers: the queue has one
     /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it

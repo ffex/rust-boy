@@ -111,7 +111,7 @@ pub fn flush() -> Routine {
     let mut code = Block::new();
     code.label("FlushVramQueue")
         .label(".next")
-        .ld_a_addr_def(hw::LY)
+        .ldh(R8::A, Mem::addr(hw::LY))
         .cp(hw::SCRN_Y.value)
         .ret_cond(Condition::C)
         .cp(hw::SCRN_Y.value + hw::VBLANK_LINES as u8 - 1)
@@ -211,5 +211,14 @@ mod tests {
         cpu.run(flush().body());
         assert_eq!(cpu.mem[READ], cpu.mem[WRITE]);
         assert_eq!(cpu.mem[&format!("${:04X}", hw::SCRN0.value)], 42);
+    }
+
+    #[test]
+    fn flush_reads_ly_from_the_high_io_page() {
+        let routine = flush();
+        let body = routine.body();
+        let lines: Vec<_> = body.iter().map(ToString::to_string).collect();
+        assert!(lines.iter().any(|line| line == "ldh a, [rLY]"));
+        assert!(!lines.iter().any(|line| line == "ld a, [rLY]"));
     }
 }

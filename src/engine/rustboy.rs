@@ -991,9 +991,26 @@ impl RustBoy {
         code.extend(handlers.iter().map(Routine::body));
         let mut generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
         generated.extend(handlers.iter().map(|handler| handler.name().to_string()));
+        for callback in self.sprites.animation_callback_names() {
+            if !self.function_exists(callback) && !self.functions.is_external_symbol(callback) {
+                return Err(Error::UnknownFunction {
+                    name: callback.to_string(),
+                    available: self.functions.available_functions(&generated),
+                });
+            }
+        }
         // The VRAM queue has one producer, the main loop: no handler may enqueue
         let enqueue = vram_queue::enqueue();
+        let event_functions = self.sprites.animation_event_function_names();
         for (interrupt, handler) in &self.handlers {
+            for routine in &event_functions {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
+            }
             if self.functions.reaches(&handler.code, enqueue.name()) {
                 return Err(Error::MainLoopOnly {
                     routine: enqueue.name().to_string(),

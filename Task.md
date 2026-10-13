@@ -298,7 +298,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Follow-up of the per-animation speed (from the review of the #50 chain, maintainer decision): the name
       `SpriteManager::set_animation_delay(sprite, index, frames)` is the global `RustBoy::set_animation_delay(frames)`'s,
       with another meaning; `set_animation_period` would tell them apart (an API rename)
-- [ ] End-of-animation events / callbacks
+- [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
+      coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
+- [ ] Follow-up of the animation events (from the review of the #50 chain, maintainer decision): re-enabling a finished
+      Once (switching away and back, or disable then enable) re-arms its event without replaying the frames, so the event
+      or callback fires again one period later; should re-arming need `restart_animation` instead? (documented today)
+- [ ] Follow-up of the animation events (from review 2 of the #50 chain): `build()` could reject restart snippets
+      generated before the sprite's timing or events changed (today documented: configure first; a cleared period
+      leaves an undefined `wAnim_{name}_Timer` for rgbasm)
 
 ### Audio *(nothing exists today)*
 - [ ] APU init (sound on/off at boot), register constants in `hw`

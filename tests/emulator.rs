@@ -2023,6 +2023,133 @@ fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
 }
 
 #[test]
+fn animation_callbacks_run_once_after_all_metasprite_parts_and_can_chain() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(
+            RustBoyConfig::default()
+                .sprite_size(size)
+                .animation_delay(1),
+        );
+        let stride = size.tiles_per_sprite();
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(stride) * 2]);
+        let parts: Vec<_> = (0..3)
+            .map(|i| MetaspritePart::new(tiles.clone(), i * 8, 0, 0u8))
+            .collect();
+        let meta = game.add_metasprite("Actor", 40, 40, &parts);
+        let once = game
+            .sprites
+            .add_composite_animation(meta, "Once", 0, 1, AnimationType::Once);
+        let idle = game
+            .sprites
+            .add_composite_animation(meta, "Idle", 0, 1, AnimationType::Loop);
+        game.sprites.set_composite_initial_animation(meta, once);
+        game.sprites.set_composite_animation_delay(meta, once, 2);
+        game.sprites
+            .set_composite_animation_callback(meta, once, "AnimationDone");
+        let calls = game.vars.create_u8("wCalls", 0);
+        let coherent = game.vars.create_u8("wCoherent", 0);
+        let events = game.vars.create_u8("wEvents", 0);
+        let regs: Vec<_> = ["wB", "wC", "wD", "wE", "wH", "wL"]
+            .iter()
+            .map(|name| game.vars.create_u8(name, 0))
+            .collect();
+        let mut callback = Block::new();
+        callback
+            .ld_a_addr_def(calls.name())
+            .inc(R8::A)
+            .ld_addr_def_a(calls.name());
+        for part in 0..3u8 {
+            callback
+                .ld_a_addr_def(
+                    Expr::sym("wShadowOAM")
+                        + i32::from(part * hw::OAM_ENTRY_SIZE.value + hw::OAMA_TILEID.value),
+                )
+                .cp(stride * (part * 2 + 1))
+                .jr_cond(Condition::NZ, ".bad");
+        }
+        callback
+            .ld_a(1)
+            .ld_addr_def_a(coherent.name())
+            .label(".bad")
+            .ld(R16::BC, 0xdead)
+            .ld(R16::DE, 0xbeef)
+            .ld(R16::HL, 0x1234)
+            .emit_all(game.sprites.restart_composite_animation(meta, idle));
+        game.define_function_from("AnimationDone", callback);
+        let mut init = Block::new();
+        init.ld(R16::BC, 0x1122)
+            .ld(R16::DE, 0x3344)
+            .ld(R16::HL, 0x5566);
+        game.init(init);
+        let mut logic = Block::new();
+        for (register, var) in [R8::B, R8::C, R8::D, R8::E, R8::H, R8::L].iter().zip(&regs) {
+            logic.ld(R8::A, *register).ld_addr_def_a(var.name());
+        }
+        logic
+            .push(R16Stack::BC)
+            .emit_all(game.sprites.take_composite_animation_event(meta, once))
+            .ld(R8::B, R8::A)
+            .ld_a_addr_def(events.name())
+            .add(R8::B)
+            .ld_addr_def_a(events.name())
+            .pop(R16Stack::BC);
+        game.add_to_main_loop(logic);
+        let rom = engine_rom(&game);
+        let mut gb = rom.boot();
+        gb.run_frames(20);
+        assert_eq!(gb.read_symbol(calls.name()), 1);
+        assert_eq!(gb.read_symbol(coherent.name()), 1);
+        assert_eq!(gb.read_symbol(events.name()), 1);
+        for (var, value) in regs.iter().zip([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]) {
+            assert_eq!(gb.read_symbol(var.name()), value);
+        }
+        let relative = gb.oam_entry(0)[2];
+        for part in 0..3 {
+            assert_eq!(gb.oam_entry(part)[2], stride * 2 * part as u8 + relative);
+        }
+        assert_eq!(gb.blocked_accesses(), (0, 0, 0));
+        assert_eq!(gb.dma_conflicts(), 0);
+    }
+}
+
+#[test]
+fn a_once_callback_can_restart_itself_without_duplicate_terminal_notifications() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(RustBoyConfig::default().animation_delay(1));
+    let sprite = game.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 3]), 8, 8, 0);
+    let once = game
+        .sprites
+        .add_animation(sprite, "Once", 0, 2, AnimationType::Once);
+    game.sprites.set_animation_delay(sprite, once, 3);
+    game.sprites.set_initial_animation(sprite, once);
+    game.sprites
+        .set_animation_callback(sprite, once, "RestartOnce");
+    let calls = game.vars.create_u8("wCalls", 0);
+    let mut callback = Block::new();
+    callback
+        .ld_a_addr_def(calls.name())
+        .inc(R8::A)
+        .ld_addr_def_a(calls.name())
+        .cp(2)
+        .jr_cond(Condition::NC, ".end")
+        .emit_all(game.sprites.restart_animation(sprite, once))
+        .label(".end");
+    game.define_function_from("RestartOnce", callback);
+    let rom = engine_rom(&game);
+    let mut gb = rom.boot();
+    gb.run_frames(40);
+    assert_eq!(gb.read_symbol(calls.name()), 2);
+    assert_eq!(gb.oam_entry(0)[2], 2);
+    gb.run_frames(10);
+    assert_eq!(gb.read_symbol(calls.name()), 2);
+}
+
+#[test]
 fn typed_sprite_flags_reach_oam_and_runtime_changes_preserve_position() {
     if !rgbds_enabled() {
         return;

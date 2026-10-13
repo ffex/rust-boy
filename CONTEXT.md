@@ -107,8 +107,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `.check_left_N`, `.check_left_end_N`; a limited move → `.sprite0_left_limit_store_N`, `…_end_N`;
   `clear_objects_screen` → `.clear_oam_N` (was the global `ClearOam`); the animation dispatcher →
   `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`; when an animation
-  has a period of its own, the per-sprite dispatcher (since `refactor-p3-animation-speed`) →
-  `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`. The code
+  has a period of its own or completion events, the per-sprite dispatcher (since `refactor-p3-animation-speed`) →
+  `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`, and with
+  callbacks `.anim_callback_end_N` (an event wrapper's fixed `.event_*` labels stay inside its function's global scope). The code
   `build()` generates (start-up, dispatcher) uses a fork of the allocator (`LabelAllocator::fork`: the same
   sequence from where it is, not shared), so two builds print the same labels ([B14](#b14)). Local labels never
   change the RGBDS scope, so they can go inside an `If` body. Global labels are left to routines and functions,
@@ -255,6 +256,24 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   before. Composite setters (`set_composite_animation_delay`) configure every part and check all indices first;
   `clear_animation_delay` / `clear_composite_animation_delay` remove overrides. Direct calls of an animation function
   step at once, outside the dispatcher's timing.
+
+- **Animation completion events** (since `refactor-p3-animation-callbacks`): `enable_animation_events` gives an
+  animation a coalescing flag; `take_animation_event` loads A with 0/1 (Z when none) and clears it. Once emits when its
+  last frame is reached, once per observed activation or restart; Loop on the last-to-first wrap; PingPong on returning
+  to its first frame; single-frame Loop/PingPong every update after the one that enters them (entering any animation from a tile
+  outside its frames is not a completion), a single-frame Once once. The frame step is emitted once,
+  as a local subroutine of an event wrapper, so its early returns stay valid; the wrapper saves BC (AF changes only).
+  Callbacks (`set_animation_callback`, named functions) run after **all** sprites stepped, in sprite and animation
+  creation order, with BC/DE/HL saved, so a callback can switch or restart a whole metasprite. The composite APIs attach
+  one notification to the last member. Callbacks do not consume polling flags; unknown callback functions fail
+  `build()` (declare external ones with `external_symbol`), and functions reached through callbacks are included.
+  `restart_animation` / `restart_composite_animation` show the first frame at once and clear the animation's event,
+  Once latch and pending callback, the direction and an independent timer; the state they write is chosen at
+  generation time, so configure timing, events and callbacks first. Re-enabling a finished Once (switching away and
+  back, or disable then enable) re-arms its event without replaying the frames, as the B10 Once logic does: its event
+  fires again one period later. Handlers that reach event-producing animation functions are rejected. Costs, opt-in
+  only: a previous-selection byte per tracked sprite, an event byte per subscribed animation, a latch per subscribed
+  Once, a pending byte per callback. Example output is unchanged.
 
 - **Typed sprite attributes** (since `refactor-p3-sprite-flags`): `SpriteFlags`, `ObjectPalette` and `SpritePriority`
   in `stdlib::graphics::sprites` (prelude exports). `Sprite::new`, `RustBoy::add_sprite` and `add_sprite_16x16` take
@@ -1417,7 +1436,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, no text/numbers. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
-- **Animation:** per-animation periods since `refactor-p3-animation-speed`; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
+- **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
+  `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,

@@ -96,6 +96,13 @@ together: every breaking change of the refactoring is in this release, so a prog
   configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
   preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
   global default.
+- **Animation completion** (Phase 3): `enable_animation_events` / `take_animation_event` give coalescing completion
+  flags (Once reaches its last frame, Loop wraps, PingPong returns to its first frame); `set_animation_callback` binds
+  a named function called after all sprite parts stepped, with BC/DE/HL preserved; the composite APIs give one
+  notification per group. `restart_animation` shows the first frame and resets completion, direction and timing state:
+  configure timing and events first, then generate restart snippets. Flags describe the shadow OAM, visible at the
+  next DMA; polling events survive callback delivery. Unknown callback names fail `build()`; event-producing animation
+  calls from interrupt handlers are rejected. Programs without subscriptions, the examples too, are unchanged.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -219,7 +226,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `asm.get_chunk(chunk)`, `asm.get_main_instrs()` | `layout.get_chunk(chunk)`; `asm.instrs()` |
 | a fresh `Asm` used as a scratch buffer | `Block` (the same builder methods), `block.into_instrs()` |
 | the `If` counter (`.end_if_N`), and fixed labels for the snippets | every generated label comes from the program's `asm::LabelAllocator`, `asm.labels()` / `gb.labels()` (B7) |
-| generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N` (with per-animation periods: `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`), `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
+| generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N` (with per-animation periods or events: `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`, `.anim_callback_end_N`), `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
 | a `jr` out of range (or to an external symbol) failed in rgbasm | it is printed as `jp`, one byte longer. Code of fixed size or timing must write jumps that reach. A target `Label + 2`, or `@` used elsewhere than `ds N - @`, leaves the program unrelaxed |
 
 ### 6. Frames and interrupts (Phase 3, `refactor-p3-interrupts`)

@@ -3,11 +3,12 @@
 //! It brings the engine ([`RustBoy`], its settings, its errors with what they hold
 //! (`Definition`, `MemoryRegion`), sprites, tiles, variables, inputs), the control flow
 //! and routines of [`stdlib`](crate::stdlib) (`If`, `IfA`, `IfConst`, `IfCall`, `Call`,
-//! `Routine`, `Regs`, `PadButton`, and the interrupts: `Interrupt`, `Stat`, `Timer`,
-//! `TimerClock`), the building blocks of [`asm`](crate::asm) for code
-//! written by hand (`Block`, `Expr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and
-//! `Emittable` with the `LabelAllocator` its `emit` takes), and the [`hw`]
-//! module itself (`hw::LCDC`, ...).
+//! `Routine`, `Regs`, `PadButton`, the interrupts: `Interrupt`, `Stat`, `Timer`,
+//! `TimerClock`, the palettes: `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, and the
+//! sprite attributes: `SpriteFlags`, `ObjectPalette`, `SpritePriority`),
+//! the building blocks of [`asm`](crate::asm) for code written by hand (`Block`, `Expr`,
+//! `R8`, `R16`, `Mem`, `Condition`, `Section`, and `Emittable` with the `LabelAllocator`
+//! its `emit` takes), and the [`hw`] module itself (`hw::LCDC`, ...).
 //! Everything else is in its layer: [`asm`](crate::asm), [`stdlib`](crate::stdlib),
 //! [`engine`](crate::engine).
 //!
@@ -38,16 +39,21 @@ pub use crate::asm::{
     Asm, Block, Condition, Emittable, Expr, Instr, LabelAllocator, Mem, R8, R16, Section,
 };
 pub use crate::engine::{
-    ANIM_DISABLED, AnimationType, BuiltinFunction, Chunk, CompositeSpriteId, Definition, Error,
-    InputManager, Layout, Lcdc, MemoryRegion, Palettes, RustBoy, RustBoyConfig, SpriteId,
-    SpriteSize, TileSource, TilemapArea, Var, VarType,
+    ANIM_DISABLED, AnimationType, ArrayElement, BackgroundAnimation, BackgroundAnimationConfig,
+    BuiltinFunction, Chunk, CompositeSpriteId, Definition, EntityPool, Error, Font, InputManager,
+    Layout, Lcdc, MemoryRegion, MetaspritePart, NumberFormat, NumberPrinter, Palettes, RustBoy,
+    RustBoyConfig, SpriteId, SpriteSize, TextPrinter, TileSource, TilemapArea, Var, VarType,
+    Window, WramArray,
 };
 pub use crate::hw;
 pub use crate::stdlib::flow::{Call, If, IfA, IfCall, IfConst};
+pub use crate::stdlib::graphics::palette::{Palette, PaletteFade, PaletteRegister, Shade};
+pub use crate::stdlib::graphics::sprites::{ObjectPalette, SpriteFlags, SpritePriority};
 pub use crate::stdlib::inputs::PadButton;
 pub use crate::stdlib::interrupts::{Interrupt, Stat, Timer, TimerClock};
 pub use crate::stdlib::routine::{Regs, Routine};
 
+pub use crate::engine::SpritePool;
 pub use crate::stdlib::audio::{
     AudioConfig, Channel, Duty, Envelope, EnvelopeDirection, Mixer, NoiseEffect, NoiseWidth,
     PulseEffect, Sfx, Sweep, SweepDirection, WaveEffect, WaveLevel, WavePattern,

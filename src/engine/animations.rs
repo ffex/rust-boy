@@ -1,4 +1,4 @@
-use crate::asm::{Block, Condition, Expr, Instr, R8};
+use crate::asm::{Block, Condition, Expr, Instr, R8, R16Stack};
 use crate::hw;
 use crate::stdlib::graphics::oam::OamTarget;
 
@@ -31,10 +31,88 @@ pub struct Animation {
     pub(crate) end_frame: u8,   // Relative end frame (e.g., 6)
     pub(crate) anim_type: AnimationType,
     pub(crate) index: u8, // Index of this animation within the sprite (0, 1, 2, ...)
+    /// Optional period in game frames; otherwise use the engine default.
+    pub(crate) delay: Option<u8>,
+    pub(crate) events: bool,
+    pub(crate) callback: Option<String>,
     pub(crate) frame_step: u8, // Tile increment per frame (1 for 8x8, 2 for 8x16)
 }
 
 impl Animation {
+    pub(crate) fn event_var(&self, sprite: &str) -> String {
+        format!("wAnim_{sprite}_{}_Event", self.name)
+    }
+    pub(crate) fn done_var(&self, sprite: &str) -> String {
+        format!("wAnim_{sprite}_{}_Done", self.name)
+    }
+    pub(crate) fn pending_var(&self, sprite: &str) -> String {
+        format!("wAnim_{sprite}_{}_Pending", self.name)
+    }
+
+    // Keep stepping in one local subroutine: Once's early return remains valid, and
+    // completion detection reads the resulting tile without duplicating its routine.
+    pub(crate) fn generate_event_func(&self, sprite: &str, direction: &str) -> Vec<Instr> {
+        let mut code = Block::new();
+        let (first, last) = self.abs_frames();
+        code.push(R16Stack::BC)
+            .ld_a_addr_def(self.oam_tile_addr())
+            .ld(R8::B, R8::A)
+            .call(".event_step");
+        match self.anim_type {
+            AnimationType::Once => {
+                code.ld_a_addr_def(self.oam_tile_addr())
+                    .cp(last)
+                    .jr_cond(Condition::Z, ".event_terminal")
+                    .xor(R8::A)
+                    .ld_addr_def_a(self.done_var(sprite))
+                    .jr(".event_end")
+                    .label(".event_terminal")
+                    .ld_a_addr_def(self.done_var(sprite))
+                    .and(R8::A)
+                    .jr_cond(Condition::NZ, ".event_end")
+                    .ld_a(1)
+                    .ld_addr_def_a(self.done_var(sprite));
+            }
+            AnimationType::Loop => {
+                code.ld(R8::A, R8::B)
+                    .cp(last)
+                    .jr_cond(Condition::NZ, ".event_end")
+                    .ld_a_addr_def(self.oam_tile_addr())
+                    .cp(first)
+                    .jr_cond(Condition::NZ, ".event_end");
+            }
+            AnimationType::PingPong if first != last => {
+                code.ld(R8::A, R8::B)
+                    .cp(first)
+                    .jr_cond(Condition::C, ".event_end")
+                    .cp(last)
+                    .jr_cond(Condition::C, ".event_valid")
+                    .jr_cond(Condition::NZ, ".event_end")
+                    .label(".event_valid")
+                    .ld_a_addr_def(self.oam_tile_addr())
+                    .cp(first)
+                    .jr_cond(Condition::NZ, ".event_end");
+            }
+            // One frame: every update completes a cycle, except entering it from another tile
+            AnimationType::PingPong => {
+                code.ld(R8::A, R8::B)
+                    .cp(first)
+                    .jr_cond(Condition::NZ, ".event_end");
+            }
+        }
+        code.ld_a(1).ld_addr_def_a(self.event_var(sprite));
+        if self.callback.is_some() {
+            code.ld_addr_def_a(self.pending_var(sprite));
+        }
+        code.label(".event_end")
+            .pop(R16Stack::BC)
+            .ret()
+            .label(".event_step")
+            .emit_all(self.generate_func(direction))
+            .ret();
+        code.into_instrs()
+    }
+
     /// Whether this animation needs the sprite's direction variable: a `PingPong` of
     /// two frames or more (one frame has nowhere to go, so its code does not read it)
     pub(crate) fn needs_direction(&self) -> bool {

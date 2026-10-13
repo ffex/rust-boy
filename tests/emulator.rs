@@ -2508,3 +2508,121 @@ fn get_tile_by_pixel_follows_active_background_map() {
         }
     }
 }
+
+#[test]
+fn wram_arrays_initialize_and_check_runtime_indices_across_pages() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for element in [
+        ArrayElement::U8,
+        ArrayElement::I8,
+        ArrayElement::U16,
+        ArrayElement::I16,
+    ] {
+        let word = matches!(element, ArrayElement::U16 | ArrayElement::I16);
+        let mut game = RustBoy::new();
+        let initial = match element {
+            ArrayElement::U8 => 126,
+            ArrayElement::I8 => -5,
+            ArrayElement::U16 => 0x1234,
+            ArrayElement::I16 => -300,
+        };
+        let before = game.vars.create_u8("wArrayBefore", 0x5a);
+        let array = game.vars.create_array("wArray", element, 300, initial);
+        let after = game.vars.create_u8("wArrayAfter", 0xa5);
+        let mut code = Block::new();
+        // 512: high byte above 300's, low byte below it (only the high-byte compare rejects it)
+        for (case, index) in [0u16, 1, 255, 256, 299, 300, 512, 65535]
+            .into_iter()
+            .enumerate()
+        {
+            let result = game.vars.create_u16(&format!("wArrayResult{case}"), 0);
+            let status = game.vars.create_u8(&format!("wArrayStatus{case}"), 0);
+            let valid = index < 300;
+            let end = game.labels().local("array_test_end");
+            code.ld(R16::BC, index)
+                .ld(R16::DE, 0xbeefu16)
+                .emit_all(array.set_indexed(game.labels()))
+                .ld_a(0)
+                .adc(0)
+                .ld_addr_def_a(status.name())
+                .emit_all(array.get_indexed(game.labels()))
+                .jr_cond(Condition::C, &end);
+            if word {
+                code.ld(R8::A, R8::L)
+                    .ld_addr_def_a(result.name())
+                    .ld(R8::A, R8::H)
+                    .ld(Mem::addr(Expr::sym(result.name()) + 1), R8::A);
+            } else {
+                code.ld_addr_def_a(result.name());
+            }
+            code.label(&end);
+            assert_eq!(valid, case < 5);
+        }
+        // Also exercise statically addressed signed/unsigned values.
+        code.emit_all(array.set(42, initial))
+            .emit_all(array.get(42));
+        game.init(code);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 20));
+        let base = gb.symbol("wArray");
+        assert_eq!(gb.read_symbol(before.name()), 0x5a);
+        assert_eq!(gb.read_symbol(after.name()), 0xa5);
+        let stride = if word { 2 } else { 1 };
+        assert_eq!(base, game.vars.get_address(array.id()).unwrap());
+        for index in 0..300u16 {
+            let touched = [0, 1, 255, 256, 299].contains(&index);
+            let value = if touched { 0xbeef } else { initial as u16 };
+            assert_eq!(gb.read(base + index * stride), value as u8);
+            if word {
+                assert_eq!(gb.read(base + index * stride + 1), (value >> 8) as u8);
+            }
+        }
+        for case in 0..7 {
+            assert_eq!(
+                gb.read_symbol(&format!("wArrayStatus{case}")),
+                u8::from(case >= 5)
+            );
+            let result = gb.symbol(&format!("wArrayResult{case}"));
+            let expected = if case >= 5 {
+                0
+            } else if word {
+                0xbeef
+            } else {
+                0xef
+            };
+            assert_eq!(
+                u16::from_le_bytes([gb.read(result), gb.read(result + 1)]),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn a_nearly_full_wram_array_uses_compact_startup_code() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.vars
+        .create_array("wWholeWram", ArrayElement::U8, 4095, 0x5a);
+    let output = game.build().unwrap();
+    let init = output
+        .split("EntryPoint:")
+        .nth(1)
+        .unwrap()
+        .split("Main:")
+        .next()
+        .unwrap();
+    assert!(
+        init.lines().count() < 100,
+        "array initialization should be a loop"
+    );
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 20));
+    for offset in 0..4095 {
+        assert_eq!(gb.read(hw::RAM.value + offset), 0x5a);
+    }
+}

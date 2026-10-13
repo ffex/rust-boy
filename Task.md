@@ -335,7 +335,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Scenes / game states
 - [ ] Entities: spawn / despawn
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
-- [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
+- [x] WRAM arrays (branch `refactor-p3-wram-arrays`; HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`,
+      `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
+      compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
+      Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)

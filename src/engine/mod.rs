@@ -31,7 +31,7 @@ pub use sprites::{
     ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
 };
 pub use tiles::{TileId, TileManager, TileSource, TilemapArea};
-pub use variables::{Var, VarId, VarType, VariableManager};
+pub use variables::{ArrayElement, Var, VarId, VarType, VariableManager, WramArray};
 
 /// The message `f` panics with, for tests that check several panics in one go;
 /// panics if `f` returns

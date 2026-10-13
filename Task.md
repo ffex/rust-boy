@@ -279,8 +279,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
-- [ ] Follow-up of the sprite attributes (from the review of #49): a composite-level `set_flags`, and an X flip of a
-      16x16 composite that also swaps its halves (today per member sprite; documented)
+- [x] Composite-level `set_composite_flags` updates each member's shadow-OAM attributes
+- [ ] X flip of a 16x16 composite that also swaps its halves (today per member sprite; documented)
 - [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
       lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.

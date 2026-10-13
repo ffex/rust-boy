@@ -86,6 +86,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
   existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
   runtime, preserving coordinates and tile indices. Default/example output is unchanged.
+- **Composite sprite flags** (Phase 3): `SpriteManager::set_composite_flags` applies the same typed or raw OAM
+  attributes to every member of a composite, writing shadow OAM so the change appears at the next DMA.
 - **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
   per-part tiles/flags and OAM entries in creation order. Composite movement and animation

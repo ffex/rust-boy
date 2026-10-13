@@ -977,6 +977,25 @@ impl SpriteManager {
         self.composite_sprites.get(&id).map(|c| &c.sprites)
     }
 
+    /// Set the same runtime attributes on every hardware sprite in a composite.
+    /// The writes target shadow OAM and become visible at the next OAM DMA.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager.
+    pub fn set_composite_flags(
+        &self,
+        id: CompositeSpriteId,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Vec<Instr> {
+        let flags = flags.into();
+        let composite = self.composite(id);
+        let mut code = Vec::new();
+        for sprite in &composite.sprites {
+            code.extend(self.set_flags(*sprite, flags));
+        }
+        code
+    }
+
     /// Add an animation to all sprites in a composite
     /// Each sprite gets an animation called `name`, played by `Anim_{sprite name}_{name}`
     /// (e.g. `Anim_player_left_Walk` and `Anim_player_right_Walk`)
@@ -1670,6 +1689,28 @@ mod tests {
             1,
             "only the attribute byte is written"
         );
+    }
+
+    #[test]
+    fn composite_flags_update_each_member_attribute_only() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let left = sm.add_for_test("Player_left", 16, 32, 0, 1);
+        let right = sm.add_for_test("Player_right", 24, 32, 1, 1);
+        let player = sm.create_composite("Player", vec![left, right]);
+        let code = sm.set_composite_flags(
+            player,
+            crate::stdlib::graphics::sprites::SpriteFlags::new().flip_x(true),
+        );
+        let mut cpu = cpu_with_oam(&sm);
+        cpu.run(&code);
+        for flags in ["wShadowOAM+3", "wShadowOAM+7"] {
+            assert_eq!(cpu.mem[flags], hw::OAMF_XFLIP.value);
+        }
+        assert_eq!(cpu.mem["wShadowOAM+0"], 48);
+        assert_eq!(cpu.mem["wShadowOAM+1"], 24);
+        assert_eq!(cpu.mem["wShadowOAM+4"], 48);
+        assert_eq!(cpu.mem["wShadowOAM+5"], 32);
+        assert_eq!(cpu.mem.keys().count(), 6, "two flags plus four coordinates");
     }
 
     type LimitMove = fn(&SpriteManager, SpriteId, u8, u8) -> Vec<Instr>;

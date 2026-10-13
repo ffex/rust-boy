@@ -3,12 +3,12 @@
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
 [`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review,
-fixes and merges.
+fix requests and merges.
 
 ## How we work
 
 - Codex makes the first try of a task and opens its PR into `refactor`. Claude then has it reviewed by a
-  context-free agent, fixes the findings, has it reviewed again and merges it. Only the final
+  context-free agent, sends the findings to Codex as an `@codex fix-request` comment, has it reviewed again and merges it. Only the final
   `refactor` → `main` PR waits for the maintainer.
 - `refactor` is the integration branch (created from `main` at `4601a5c`).
 - Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
@@ -281,16 +281,37 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       with raw u8 compatibility and no changes to default/example output.
 - [ ] Follow-up of the sprite attributes (from the review of #49): a composite-level `set_flags`, and an X flip of a
       16x16 composite that also swaps its halves (today per member sprite; documented)
-- [ ] Metasprites of any size (generalise 16×16); the choice of 8×8 or 8×16 sprites is done ([B4](CONTEXT.md#b4))
-- [ ] Sprite show / hide, OAM slot allocation
-- [ ] Text: font loading, print string, print number / BCD score
-- [ ] Background tile animation
-- [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
+- [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
+      lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
+      `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
+- [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
+      off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
+- [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
+      static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
+      with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
+      operations with carry. Pools have a single init/main producer and handler use is rejected.
+- [x] Text: font loading, print string, print number / BCD score (`refactor-p3-text`, stacked on
+      WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
+- [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
+      loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
+- [x] PNG → 2bpp conversion in Rust (tile count derived from file size): `refactor-p3-png-assets`,
+      owned PNG/binary loaders, palette/transparency rules and 8×16 tile ordering; FOSDEM/coin migrated
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
-- [ ] Per-animation speed (today only a global delay)
-- [ ] End-of-animation events / callbacks
+- [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
+      overrides, independent selection clocks, default/global fallback, composite setters)
+- [ ] Follow-up of the per-animation speed (from the review of the #50 chain, maintainer decision): the name
+      `SpriteManager::set_animation_delay(sprite, index, frames)` is the global `RustBoy::set_animation_delay(frames)`'s,
+      with another meaning; `set_animation_period` would tell them apart (an API rename)
+- [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
+      coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
+- [ ] Follow-up of the animation events (from the review of the #50 chain, maintainer decision): re-enabling a finished
+      Once (switching away and back, or disable then enable) re-arms its event without replaying the frames, so the event
+      or callback fires again one period later; should re-arming need `restart_animation` instead? (documented today)
+- [ ] Follow-up of the animation events (from review 2 of the #50 chain): `build()` could reject restart snippets
+      generated before the sprite's timing or events changed (today documented: configure first; a cleared period
+      leaves an undefined `wAnim_{name}_Timer` for rgbasm)
 
 ### Audio *(nothing exists today)*
 - [ ] APU init (sound on/off at boot), register constants in `hw`
@@ -321,9 +342,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
 - [ ] Scenes / game states
-- [ ] Entities: spawn / despawn
+- [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
+      reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
+      `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
-- [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
+- [x] WRAM arrays (branch `refactor-p3-wram-arrays`; HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`,
+      `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
+      compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
+      Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)

@@ -1,20 +1,27 @@
 use rust_boy::{
     engine::{
-        ANIM_DISABLED, AnimationType, Error, InputManager, RustBoy, RustBoyConfig, SpriteSize,
-        TileSource,
+        ANIM_DISABLED, AnimationType, InputManager, PngOptions, RustBoy, RustBoyConfig, SpriteSize,
+        TileOrder, TileSource,
     },
     stdlib::inputs::PadButton,
 };
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The 16x16 character is made of 8x16 sprites (the default is 8x8)
     let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
 
     // Add 16x16 composite sprite (two 8x16 sprites side by side)
     let player = gb.add_sprite_16x16(
         "player",
-        TileSource::from_file("char.2bpp", 64),
-        TileSource::from_file("char-dx.2bpp", 64),
+        TileSource::from_2bpp(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/fosdem/char.2bpp"
+        ))?,
+        TileSource::from_png(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/examples/fosdem/char-dx.png"),
+            &PngOptions::new([[255; 3], [207; 3], [104; 3], [0, 0, 1]])
+                .tile_order(TileOrder::Sprite8x16),
+        )?,
         80,
         72,
         0,

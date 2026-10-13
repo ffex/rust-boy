@@ -6,7 +6,8 @@ built, how the code is layered, what is broken and why. The actionable checklist
 [`AGENTS.md`](AGENTS.md), and Claude's review, fix and merge rules in [`CLAUDE.md`](CLAUDE.md).
 
 Codex makes the first try of a task and opens its PR into `refactor`; Claude has it reviewed by a
-context-free agent, fixes the findings and merges it. Only the `refactor` → `main` PR waits for the maintainer.
+context-free agent, sends the findings to Codex as an `@codex fix-request` comment (Codex fixes
+them) and merges it. Only the `refactor` → `main` PR waits for the maintainer.
 
 > Snapshot taken on branch `refactor` at commit `4601a5c` (October 2026). Line numbers refer to
 > that commit. Since `refactor-p2-engine-api-prelude` the layers are `asm`, `stdlib` and `engine`, in `src/asm/`,
@@ -27,7 +28,8 @@ into a ROM:
 your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ──rgblink──▶ main.gb ──rgbfix──▶ playable ROM
 ```
 
-- Zero Rust dependencies, edition 2024.
+- Edition 2024. The snapshot had zero Rust dependencies; `refactor-p3-png-assets` adds the pure-Rust
+  `png` decoder (0.18.1, declared MSRV 1.73) for host-side asset conversion.
 - The project is built with RGBDS 1.0 (the `.o` files once committed were object format `RGB9`). Generated code uses `0x05`-style
   constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
@@ -106,7 +108,10 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   the whole program by construction: `If*` → `.end_if_N`, `.else_N`, `.then_N`; `check_key` →
   `.check_left_N`, `.check_left_end_N`; a limited move → `.sprite0_left_limit_store_N`, `…_end_N`;
   `clear_objects_screen` → `.clear_oam_N` (was the global `ClearOam`); the animation dispatcher →
-  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`. The code
+  `.anim_end_N` (was the global `AnimEnd`), `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N`; when an animation
+  has a period of its own or completion events, the per-sprite dispatcher (since `refactor-p3-animation-speed`) →
+  `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`, and with
+  callbacks `.anim_callback_end_N` (an event wrapper's fixed `.event_*` labels stay inside its function's global scope). The code
   `build()` generates (start-up, dispatcher) uses a fork of the allocator (`LabelAllocator::fork`: the same
   sequence from where it is, not shared), so two builds print the same labels ([B14](#b14)). Local labels never
   change the RGBDS scope, so they can go inside an `If` body. Global labels are left to routines and functions,
@@ -232,6 +237,46 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `clobbers()` that returns the `Regs` they use (see [B5](#b5)), and `Regs::written_by(code)` reads which registers code
   may write (`None` when it cannot tell: a `call`, `rst`, `jp hl`, raw code, `sp`).
 
+- **Arbitrary metasprites** (since `refactor-p3-metasprites`): `MetaspritePart` and `RustBoy::add_metasprite(name, x, y,
+  parts)`: any nonempty arrangement within the free OAM entries and VRAM, with signed offsets, per-part tiles and
+  attributes, in 8x8 or 8x16 hardware size. Parts take OAM entries in list order; on DMG overlapping objects are drawn
+  by smaller X first (OAM order breaks ties and picks the 10 objects of a line). Generated names are `{name}_partN`;
+  `add_sprite_16x16` reuses the same constructor with its `_left`/`_right` names and unchanged output. Positions
+  (X 0..=247, Y 0..=239), capacity and 8x16 tile alignment are checked before anything is registered. Composite
+  moves stop the leading member at the limit and keep every part's offset; composite animation works in both sizes.
+  Emulator tests: an irregular six-part layout moved towards the four limits in both sizes (tiles and flags kept),
+  animation of every part, typed flags on every part of a 16x16 sprite and of a metasprite.
+
+- **Per-animation speed** (since `refactor-p3-animation-speed`): `SpriteManager::set_animation_delay(sprite, index,
+  frames)` sets a period of 1..=255 game frames for one animation at generation time. A sprite with any override gets
+  its own timer and previous-selection byte (`wAnim_{name}_Timer`, `wAnim_{name}_Previous`); its other animations use
+  the global period through that timer. A selection change seen by the dispatcher resets the clock; enabling the
+  selected animation again does not stall it. A disabled selection stops the clock, and enabling again after a
+  disabled frame starts a full period. Sprites without overrides keep the shared global counter, and programs without
+  overrides generate the same asm. The dispatcher saves BC (B the selection, C the shared-counter predicate); the
+  animation functions keep their AF-only convention and remain the only frame stepping, so Once and PingPong behave as
+  before. Composite setters (`set_composite_animation_delay`) configure every part and check all indices first;
+  `clear_animation_delay` / `clear_composite_animation_delay` remove overrides. Direct calls of an animation function
+  step at once, outside the dispatcher's timing.
+
+- **Animation completion events** (since `refactor-p3-animation-callbacks`): `enable_animation_events` gives an
+  animation a coalescing flag; `take_animation_event` loads A with 0/1 (Z when none) and clears it. Once emits when its
+  last frame is reached, once per observed activation or restart; Loop on the last-to-first wrap; PingPong on returning
+  to its first frame; single-frame Loop/PingPong every update after the one that enters them (entering a Loop or PingPong from a
+  tile outside its frames is not a completion), a single-frame Once once, on the update that enters it. The frame step is emitted once,
+  as a local subroutine of an event wrapper, so its early returns stay valid; the wrapper saves BC (AF changes only).
+  Callbacks (`set_animation_callback`, named functions) run after **all** sprites stepped, in sprite and animation
+  creation order, with BC/DE/HL saved, so a callback can switch or restart a whole metasprite. The composite APIs attach
+  one notification to the last member. Callbacks do not consume polling flags; unknown callback functions fail
+  `build()` (declare external ones with `external_symbol`), and functions reached through callbacks are included.
+  `restart_animation` / `restart_composite_animation` show the first frame at once and clear the animation's event,
+  Once latch and pending callback, the direction and an independent timer; the state they write is chosen at
+  generation time, so configure timing, events and callbacks first. Re-enabling a finished Once (switching away and
+  back, or disable then enable) re-arms its event without replaying the frames, as the B10 Once logic does: its event
+  fires again one period later. Handlers that reach event-producing animation functions are rejected. Costs, opt-in
+  only: a previous-selection byte per tracked sprite, an event byte per subscribed animation, a latch per subscribed
+  Once, a pending byte per callback. Example output is unchanged.
+
 - **Typed sprite attributes** (since `refactor-p3-sprite-flags`): `SpriteFlags`, `ObjectPalette` and `SpritePriority`
   in `stdlib::graphics::sprites` (prelude exports). `Sprite::new`, `RustBoy::add_sprite` and `add_sprite_16x16` take
   typed flags or raw `u8` values; the raw conversion keeps every bit, the CGB ones too, and the builders set or clear
@@ -282,6 +327,68 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   flags, and leave sprites in screen coordinates. `follow_background_point` keeps the world pixel (B, C) at a screen
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
   Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
+
+- **PNG and binary tile assets** (since `refactor-p3-png-assets`): `engine::assets::png_to_2bpp` converts a static PNG
+  to tile bytes with the `png` crate (decompression, sample expansion, interlacing, checksums). Palette slots map
+  colours to pixel indices, exactly by default or by nearest RGB distance (deterministic ties); fully transparent
+  pixels map to an index (0 by default) and partial alpha is rejected; 16-bit samples use their high byte; no gamma,
+  dithering, deduplication, cropping or padding. Tiles are row-major, or in 8x16 top/bottom pairs; animated PNGs are
+  rejected; output is limited to 64 MiB before allocating. `TileSource::from_png`, `from_2bpp` and `from_2bpp_bytes`
+  derive the tile count, own their bytes and return `AssetError`; they reuse the raw source as little-endian `dw`
+  pairs (no new enum variant), so no INCBIN include path is needed; paths resolve in the generating process. The old
+  `from_file(path, count)` still defers INCBIN to RGBDS with a manual count. FOSDEM loads its right half from its PNG
+  (byte-for-byte equal to the committed 2bpp, tested) and its left half and the coin with derived counts; their
+  snapshots inline the tile data as `dw`, the rest of their output is unchanged.
+
+- **Sprite visibility and runtime OAM pools** (since `refactor-p3-sprite-pools`): `Sprite`/`SpriteManager::hide` sets
+  Y=0 and keeps X, tile and flags; `show_at` takes screen coordinates and writes Y last; `hide_composite` /
+  `show_composite_at` apply to every member, placing the first registered part and keeping the offsets. A hidden
+  sprite is shown again by any Y write; the game owns logical positions. `RustBoy::create_sprite_pool` reserves a
+  contiguous shadow-OAM range in the OAM allocator, apart from static sprites and other pools, with one WRAM array
+  byte per entry for occupancy. Its stdlib routines allocate the lowest free index (relative to the pool; the entry
+  comes back cleared and hidden in HL), release (clearing all four OAM bytes before marking it free), hide without
+  freeing, or write B/C position and D/E tile/flags with Y last. Full pools, invalid or free indices, invalid
+  positions, double releases and odd 8x16 tiles return carry without writing. A pool alone enables shadow OAM and DMA;
+  IME is unchanged. One init/main producer, enforced through `Error::MainLoopOnly` for handler calls (transitively).
+  Multi-byte OAM writes can span a DMA: write in VBlank or keep the state in the game when a frame must be coherent.
+  Emulator tests: static sprites with pools, two pools, both sizes, exhaustion, reuse, every rejection, static
+  visibility; unit tests: capacity and handler reachability.
+
+- **Background tile animation** (since `refactor-p3-bg-animation`): `stdlib::graphics::tile_animation` is a frame state
+  machine that writes tile IDs through the VRAM queue; the engine's `create_background_animation` takes a
+  `BackgroundAnimationConfig` (fixed cells on either map, preloaded tile-ID frames) and allocates seven WRAM bytes
+  (cursor word, frame, timer, direction, enabled, finished) and ROM tables of targets and frames. `step`, once per game
+  frame from init/main, finishes queueing a frame before advancing, so a full queue cannot skip part of a frame. Loop,
+  ping-pong or once, 1 to 256 frames, a hold of 1..=255 calls per frame. Pause keeps the cursor and timer; restart
+  replays from frame 0 and keeps writes already queued. Once's finished flag means its last frame is queued, not
+  flushed. Frames of several cells are not atomic: the queue can flush part of one. Handler steps are rejected through
+  the queue dependency check.
+
+- **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
+  a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
+  loads fonts through the background tile allocator (`load_font`) and reserves each printer's cursor (a `u16` variable)
+  and each score's digit buffer (a WRAM array). A print job queues until the queue is full and resumes at its cursor
+  on the next main-loop call; carry clear means queued, not yet shown; it never writes VRAM directly. Newlines and wrapping return to the first X
+  column; unsupported glyphs and layouts past the map panic before anything is allocated. Decimal scores have five
+  digits with leading zeros, BCD scores four; invalid BCD keeps the previous buffer and cursor. One main/init
+  producer per job; handlers that reach `step` are rejected through the queue's dependency check. Replacing a number
+  or resetting a job keeps the writes already queued, so part of the old value can show while they drain. No
+  proportional fonts or Unicode.
+
+- **Entity pools** (since `refactor-p3-entities`): `RustBoy::create_entity_pool` wraps a sprite pool in entity words:
+  `spawn` allocates a hidden slot (A = the entity's relative index, carry when full), `set_sprite` writes and shows it
+  (A = index, B/C = position, D/E = tile/flags), `hide` keeps it alive, `despawn` clears and frees it. One hardware
+  sprite per entity; the game keeps any per-entity state, and entity composition is not part of this API. Same
+  registers, carry results and init/main-only rule as the pool routines it calls.
+
+- **WRAM arrays** (since `refactor-p3-wram-arrays`): `ArrayElement` (signed or unsigned bytes and words), `WramArray`
+  and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0 variables, contiguous `ds`
+  bytes in the variable allocator's creation order, initialised by a compact local-label loop. Static
+  `get`/`set`/`address` panic on an index or value out of range; the BC-indexed `address_indexed`/`get_indexed`/
+  `set_indexed` set carry on an index >= len and then touch no memory (setters take E/DE and keep BC/DE). Words are
+  little-endian; getters return A or HL. The array's shape is part of its `VarType` (`VarType::Array`) and of the
+  name-conflict checks. Emulator tests: all four element types, page crossings, every initialised byte, guard bytes,
+  indices 300, 512 and 65535 on a 300-element array, a nearly full 4095-byte WRAM0 array.
 
 - **VRAM write queue** (since `refactor-codex-p3-vram-queue`):
   `stdlib::graphics::vram_queue` owns the `QueueVramWrite` and `FlushVramQueue` routines.
@@ -1071,7 +1178,8 @@ screen are identical on every frame, and every frame of every animation is shown
 `test_variables_must_fit_in_wram0`, `test_animation_frames_must_be_the_sprite_tiles`,
 `test_loop_animation_ending_on_the_last_sprite_tile` (runs the animation on `gb_asm::test_cpu` in 8x8 and 8x16; it
 overflowed before), `test_allocation_stops_at_the_end_of_the_region`, `test_regions`; all the new ones failed before.
-Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (its size is only known when
+Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (since `refactor-p3-png-assets`,
+`from_2bpp` derives the count from the file instead; for `from_file` its size is only known when
 assembled).
 
 #### B18
@@ -1381,7 +1489,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20) (it panics since). |
 | 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
-| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |
+| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size): `TileSource::from_2bpp` / `from_png` since `refactor-p3-png-assets`. |
 
 ---
 
@@ -1390,22 +1498,24 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** no metasprites beyond 16×16, no text/numbers. Background scrolling exists since
-  `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
-  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
-- **Animation:** global speed only; no events (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
-- **Input:** `InputManager` supports held (`on_press` / `on_held`), just-pressed, released, and per-binding
-  auto-repeat actions. Several actions may bind the same button and run in registration order; repeat delay and interval
-  count sampled frames and each must be 1–255.
+- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
+  entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
+  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and
+  palettes/fades since `refactor-p3-palettes` (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+- **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
+  `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
+- **Input:** (p3-input) held/just-pressed/released/repeat bindings.
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
-  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
+  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
+  `refactor-p3-wram-arrays`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
-  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`).
+  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and
+  `.2bpp` files with a derived tile count exist since `refactor-p3-png-assets` (see §2).
 
 ---
 

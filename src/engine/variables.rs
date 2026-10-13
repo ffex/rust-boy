@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use crate::asm::expr::check_symbol;
-use crate::asm::{Block, Expr, Instr, Mem, R8, Section, is_identifier};
+use crate::asm::{
+    Block, Condition, Expr, Instr, LabelAllocator, Mem, R8, R16, Section, is_identifier,
+};
 
 use super::error::{Definition, Error};
 use super::memory::{MemoryAllocator, MemoryRegion};
@@ -11,6 +13,177 @@ use super::memory::{MemoryAllocator, MemoryRegion};
 /// Unique identifier for a variable
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VarId(pub(crate) usize);
+
+/// Scalar element type of a WRAM array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayElement {
+    /// Unsigned byte.
+    U8,
+    /// Signed byte.
+    I8,
+    /// Unsigned little-endian word.
+    U16,
+    /// Signed little-endian word.
+    I16,
+}
+impl ArrayElement {
+    fn scalar(self) -> VarType {
+        match self {
+            Self::U8 => VarType::U8,
+            Self::I8 => VarType::I8,
+            Self::U16 => VarType::U16,
+            Self::I16 => VarType::I16,
+        }
+    }
+}
+
+/// A contiguous typed WRAM0 array. Static indices and values are checked when code
+/// is generated; runtime indexed access uses BC and reports out-of-range with carry.
+#[derive(Debug, Clone)]
+pub struct WramArray {
+    var: Var,
+    element: ArrayElement,
+    len: u16,
+}
+impl WramArray {
+    /// Array label.
+    pub fn name(&self) -> &str {
+        self.var.name()
+    }
+    /// Variable-manager id, used for linked address and type queries.
+    pub fn id(&self) -> VarId {
+        self.var.id()
+    }
+    /// Number of elements (always nonzero).
+    pub fn len(&self) -> u16 {
+        self.len
+    }
+    /// Arrays cannot be empty.
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+    /// Scalar element type.
+    pub fn element_type(&self) -> ArrayElement {
+        self.element
+    }
+
+    /// Address of a statically checked element.
+    ///
+    /// # Panics
+    /// If `index` is not below the array's length.
+    #[track_caller]
+    pub fn address(&self, index: u16) -> Expr {
+        assert!(
+            index < self.len,
+            "array {:?} index {} is outside 0..{}",
+            self.name(),
+            index,
+            self.len
+        );
+        Expr::sym(self.name()) + i32::from(index) * i32::from(self.element.scalar().size())
+    }
+
+    /// Load a static element into A (byte) or HL (word). Changes A and, for words, HL.
+    ///
+    /// # Panics
+    /// If `index` is not below the array's length.
+    #[track_caller]
+    pub fn get(&self, index: u16) -> Vec<Instr> {
+        let mut code = Block::new();
+        let address = self.address(index);
+        code.ld_a_addr_def(address.clone());
+        if self.element.scalar().size() == 2 {
+            code.ld(R8::L, R8::A)
+                .ld_a_addr_def(address + 1)
+                .ld(R8::H, R8::A);
+        }
+        code.into_instrs()
+    }
+
+    /// Store a static element after checking index and the element's signed/unsigned range.
+    /// Changes A only; a word is little-endian.
+    ///
+    /// # Panics
+    /// If `index` is not below the array's length, or `value` does not fit the element type.
+    #[track_caller]
+    pub fn set(&self, index: u16, value: impl Into<i32>) -> Vec<Instr> {
+        let value = value.into();
+        let (min, max) = self.element.scalar().range();
+        assert!(
+            (min..=max).contains(&value),
+            "array {:?} value is out of range",
+            self.name()
+        );
+        let mut code = Block::new();
+        let address = self.address(index);
+        if self.element.scalar().size() == 1 {
+            code.ld(R8::A, value).ld_addr_def_a(address);
+        } else {
+            let [low, high] = (value as u16).to_le_bytes();
+            code.ld_a(low)
+                .ld_addr_def_a(address.clone())
+                .ld_a(high)
+                .ld_addr_def_a(address + 1);
+        }
+        code.into_instrs()
+    }
+
+    /// Address the BC-th element in HL. Carry set rejects indices >=len; HL is then
+    /// unchanged. BC is preserved. Changes A, flags and HL on success.
+    pub fn address_indexed(&self, labels: &LabelAllocator) -> Vec<Instr> {
+        let [valid, invalid, end] = labels.locals(["array_valid", "array_invalid", "array_end"]);
+        let [low, high] = self.len.to_le_bytes();
+        let mut code = Block::new();
+        code.ld(R8::A, R8::B)
+            .cp(high)
+            .jr_cond(Condition::C, &valid)
+            .jr_cond(Condition::NZ, &invalid)
+            .ld(R8::A, R8::C)
+            .cp(low)
+            .jr_cond(Condition::NC, &invalid)
+            .label(&valid)
+            .ld(R16::HL, Expr::sym(self.name()))
+            .add_hl(R16::BC);
+        if self.element.scalar().size() == 2 {
+            code.add_hl(R16::BC);
+        }
+        code.and(R8::A).jr(&end).label(&invalid).scf().label(&end);
+        code.into_instrs()
+    }
+
+    /// Read BC-th element into A (byte) or HL (word). Carry reports rejection;
+    /// rejected accesses read no array bytes. Preserves BC and DE.
+    pub fn get_indexed(&self, labels: &LabelAllocator) -> Vec<Instr> {
+        let end = labels.local("array_get_end");
+        let mut code = Block::new();
+        code.emit_all(self.address_indexed(labels))
+            .jr_cond(Condition::C, &end);
+        if self.element.scalar().size() == 1 {
+            code.ld(R8::A, R8::AtHl);
+        } else {
+            code.ld(R8::A, Mem::Hli)
+                .ld(R8::H, R8::AtHl)
+                .ld(R8::L, R8::A);
+        }
+        code.label(&end);
+        code.into_instrs()
+    }
+
+    /// Write E (byte) or DE (word) to BC-th element. Carry reports rejection;
+    /// rejected accesses write nothing. Changes A, flags and HL; preserves BC/DE.
+    pub fn set_indexed(&self, labels: &LabelAllocator) -> Vec<Instr> {
+        let end = labels.local("array_set_end");
+        let mut code = Block::new();
+        code.emit_all(self.address_indexed(labels))
+            .jr_cond(Condition::C, &end)
+            .ld(R8::AtHl, R8::E);
+        if self.element.scalar().size() == 2 {
+            code.inc(R16::HL).ld(R8::AtHl, R8::D);
+        }
+        code.label(&end);
+        code.into_instrs()
+    }
+}
 
 /// A handle to a variable that provides convenient operations.
 ///
@@ -73,7 +246,15 @@ impl Var {
     ///
     /// An HRAM variable is read with `ldh a, [name]`. The `If` comparisons test `a`: they
     /// work on 8-bit variables only.
+    ///
+    /// # Panics
+    /// If the variable is an array: use its [`WramArray`] handle.
+    #[track_caller]
     pub fn get(&self) -> Vec<Instr> {
+        assert!(
+            !matches!(self.var_type, VarType::Array { .. }),
+            "use the WramArray handle"
+        );
         let mut asm = Block::new();
         load_a(&mut asm, Expr::sym(&self.name), self.region);
         if self.var_type.size() == 2 {
@@ -131,6 +312,7 @@ fn store_a(asm: &mut Block, address: Expr, region: MemoryRegion) {
 /// written as such (`ld a, -1`, as before); a 16-bit value byte by byte, low byte first.
 fn store(asm: &mut Block, name: &str, var_type: VarType, region: MemoryRegion, value: i32) {
     match var_type {
+        VarType::Array { .. } => panic!("use the WramArray handle for array operations"),
         VarType::U8 | VarType::I8 => {
             // A negative value is written as such: `ld a, -1`
             asm.ld(R8::A, value);
@@ -160,14 +342,25 @@ pub enum VarType {
     I8,
     /// 2 bytes signed (dw, interpreted as signed)
     I16,
+    /// Contiguous typed WRAM0 array; the length is nonzero and its byte size fits u16.
+    Array { element: ArrayElement, len: u16 },
 }
 
 impl VarType {
     /// Get size in bytes
+    ///
+    /// # Panics
+    /// For an array whose byte size does not fit a `u16`.
+    #[track_caller]
     pub fn size(&self) -> u16 {
         match self {
             VarType::U8 | VarType::I8 => 1,
             VarType::U16 | VarType::I16 => 2,
+            VarType::Array { element, len } => element
+                .scalar()
+                .size()
+                .checked_mul(*len)
+                .expect("array byte size exceeds u16"),
         }
     }
 
@@ -176,6 +369,7 @@ impl VarType {
         match self {
             VarType::U8 | VarType::I8 => "db",
             VarType::U16 | VarType::I16 => "dw",
+            VarType::Array { .. } => "ds",
         }
     }
 
@@ -186,6 +380,7 @@ impl VarType {
             VarType::I8 => (i8::MIN.into(), i8::MAX.into()),
             VarType::U16 => (u16::MIN.into(), u16::MAX.into()),
             VarType::I16 => (i16::MIN.into(), i16::MAX.into()),
+            VarType::Array { element, .. } => element.scalar().range(),
         }
     }
 }
@@ -286,6 +481,42 @@ impl VariableManager {
             .map(|var| (var.name.as_str(), var.var_type))
     }
 
+    /// Create a typed WRAM0 array with one initial value repeated in every element.
+    /// Length must be nonzero and total byte size must fit u16; memory exhaustion is
+    /// reported by build(). Recreating the same shape keeps its first initial value.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, is a block `build()` reserves, or names a variable of
+    /// another type or shape; if `len` is 0, the array's byte size does not fit a `u16`, or
+    /// `initial` does not fit the element type.
+    /// ```
+    /// use rust_boy::prelude::*;
+    /// let mut gb = RustBoy::new();
+    /// let scores = gb.vars.create_array("wScores", ArrayElement::U16, 16, 100);
+    /// gb.init(scores.set(15, 65535));
+    /// # gb.build().unwrap();
+    /// ```
+    #[track_caller]
+    pub fn create_array(
+        &mut self,
+        name: &str,
+        element: ArrayElement,
+        len: u16,
+        initial: impl Into<i32>,
+    ) -> WramArray {
+        assert!(len > 0, "array length must be nonzero");
+        let var_type = VarType::Array { element, len };
+        var_type.size();
+        let initial = initial.into();
+        let (min, max) = var_type.range();
+        assert!(
+            (min..=max).contains(&initial),
+            "array initial value is out of range"
+        );
+        let var = self.create_var(name, var_type, initial, Place::Wram0("Variables"));
+        WramArray { var, element, len }
+    }
+
     /// Create an unsigned 8-bit variable
     ///
     /// # Panics
@@ -381,6 +612,10 @@ impl VariableManager {
         initial: i32,
         section: &str,
     ) -> Var {
+        assert!(
+            !matches!(var_type, VarType::Array { .. }),
+            "use create_array for arrays"
+        );
         // `build()` writes it as `SECTION "section", WRAM0`: checked here, not there
         Section::wram0(section);
         let (min, max) = var_type.range();
@@ -463,6 +698,10 @@ impl VariableManager {
 
     #[track_caller]
     fn create_var(&mut self, name: &str, var_type: VarType, initial: i32, place: Place) -> Var {
+        assert!(
+            !matches!(var_type, VarType::Array { .. }) || matches!(place, Place::Wram0(_)),
+            "arrays belong in WRAM0"
+        );
         let region = match place {
             Place::Wram0(_) => MemoryRegion::Wram0,
             Place::Hram => MemoryRegion::Hram,
@@ -663,7 +902,11 @@ impl VariableManager {
             for id in ids {
                 let var = &self.variables[id];
                 // Format: varName: db or varName: dw
-                asm.raw(&format!("{}: {}", var.name, var.var_type.directive()));
+                if matches!(var.var_type, VarType::Array { .. }) {
+                    asm.label(&var.name).ds(&var.var_type.size().to_string());
+                } else {
+                    asm.raw(&format!("{}: {}", var.name, var.var_type.directive()));
+                }
             }
         }
 
@@ -671,13 +914,30 @@ impl VariableManager {
     }
 
     /// Generate initialization code for variables with non-zero initial values
-    pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
+    pub(crate) fn generate_init_code(&self, labels: &LabelAllocator) -> Vec<Instr> {
         use crate::asm::Block;
 
         let mut asm = Block::new();
 
         // Every variable, even to 0, in creation order
         for var in self.variables.values() {
+            if let VarType::Array { element, len } = var.var_type {
+                let loop_label = labels.local("array_init");
+                let [low, high] = (var.initial_value as u16).to_le_bytes();
+                asm.ld(R16::HL, Expr::sym(&var.name))
+                    .ld(R16::BC, len)
+                    .label(&loop_label)
+                    .ld_a(low)
+                    .ld(Mem::Hli, R8::A);
+                if element.scalar().size() == 2 {
+                    asm.ld_a(high).ld(Mem::Hli, R8::A);
+                }
+                asm.dec(R16::BC)
+                    .ld(R8::A, R8::B)
+                    .or(R8::C)
+                    .jr_cond(Condition::NZ, &loop_label);
+                continue;
+            }
             store(
                 &mut asm,
                 &var.name,
@@ -751,7 +1011,10 @@ mod tests {
             ["SECTION \"Variables\", WRAM0[$C000]", "wKeys: db"]
         );
         // The first initial value is kept
-        assert_eq!(lines(vm.generate_init_code()), ["ld a, 0", "ld [wKeys], a"]);
+        assert_eq!(
+            lines(vm.generate_init_code(&LabelAllocator::new())),
+            ["ld a, 0", "ld [wKeys], a"]
+        );
     }
 
     #[test]
@@ -771,7 +1034,7 @@ mod tests {
     /// start-up code leaves it
     fn cpu_after_init(vm: &VariableManager) -> TestCpu {
         let mut cpu = TestCpu::default();
-        cpu.run(&vm.generate_init_code());
+        cpu.run(&vm.generate_init_code(&LabelAllocator::new()));
         cpu.trace.clear();
         cpu
     }
@@ -990,7 +1253,7 @@ mod tests {
         let hram_code: Vec<Instr> = [&speed, &delta, &score, &offset]
             .iter()
             .flat_map(|var| [var.set(1), var.get()].concat())
-            .chain(vm.generate_init_code())
+            .chain(vm.generate_init_code(&LabelAllocator::new()))
             .collect();
         for instr in &hram_code {
             let text = instr.to_string();
@@ -1098,7 +1361,7 @@ mod tests {
         assert_eq!(vm.create_needed("wCounter", 0), Ok(()));
         assert_eq!(vm.create_needed("wNew", 0), Ok(()));
         assert_eq!(
-            lines(vm.generate_init_code())[0],
+            lines(vm.generate_init_code(&LabelAllocator::new()))[0],
             "ld a, 5",
             "the first value"
         );
@@ -1178,7 +1441,7 @@ mod tests {
         assert_eq!(vm.check_layout(), Ok(()));
         // No initial value: the code that uses a buffer sets it up
         assert!(
-            !lines(vm.generate_init_code())
+            !lines(vm.generate_init_code(&LabelAllocator::new()))
                 .iter()
                 .any(|line| line.contains("wShadowOAM") || line.contains("hOAMDMA"))
         );

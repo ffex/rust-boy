@@ -437,6 +437,32 @@ BCD four. Invalid BCD keeps the old score and returns carry. Set numbers only wh
 change; resetting/replacing retains pending writes, so partial values can briefly display.
 Printer steps belong in init/main code; interrupt handlers cannot produce queue entries.
 
+## Background tile animation (`RustBoy`)
+
+Preload tile artwork, then animate its IDs at fixed cells on either background/window map.
+Each frame supplies one tile per cell, in cell order. Call `step` once per game frame:
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+gb.tiles.add_background("WaterTiles", TileSource::from_raw(&[["$00"; 8]; 3]));
+let config = BackgroundAnimationConfig::new(
+    TilemapArea::Map9800, &[(2, 3), (3, 3)],
+    &[vec![0, 1], vec![1, 2], vec![2, 0]],
+).delay(8).playback(AnimationType::PingPong);
+let water = gb.create_background_animation("Water", config);
+gb.add_to_main_loop(water.step());
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Loop/ping-pong/once support 1..=256 frames. Holds are 1..=255 calls after a frame is
+fully queued (default 1). A full VBlank queue pauses advancement, preserving the current
+frame's cursor. Carry set means queue full. Cells can become visible in pieces as the
+queue drains. Pause/resume retain progress; restart replays frame zero and keeps pending
+writes. `finished()` loads A with 1 once Once's final frame is queued, otherwise 0.
+The selected layer must be enabled separately; tile patterns are loaded beforehand.
+
 ## Palettes and fades (`RustBoy`)
 
 DMG palettes map four colour indices to shades. The background and window share BGP;
@@ -690,7 +716,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), text and score printing (see
-  [Text and scores](#text-and-scores-rustboy)), WRAM and HRAM
+  [Text and scores](#text-and-scores-rustboy)), background tile animation (see
+  [Background tile animation](#background-tile-animation-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
   and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
   (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), runtime sprite and
@@ -764,29 +791,3 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
-
-### Background tile animation
-
-Preload tile artwork, then animate its IDs at fixed cells on either background/window map.
-Each frame supplies one tile per cell, in cell order. Call `step` once per game frame:
-
-```rust
-use rust_boy::prelude::*;
-let mut gb = RustBoy::new();
-gb.tiles.add_background("WaterTiles", TileSource::from_raw(&[["$00"; 8]; 3]));
-let config = BackgroundAnimationConfig::new(
-    TilemapArea::Map9800, &[(2, 3), (3, 3)],
-    &[vec![0, 1], vec![1, 2], vec![2, 0]],
-).delay(8).playback(AnimationType::PingPong);
-let water = gb.create_background_animation("Water", config);
-gb.add_to_main_loop(water.step());
-let asm = gb.build()?;
-# Ok::<(), rust_boy::engine::Error>(())
-```
-
-Loop/ping-pong/once support 1..=256 frames. Holds are 1..=255 calls after a frame is
-fully queued (default 1). A full VBlank queue pauses advancement, preserving the current
-frame's cursor. Carry set means queue full. Cells can become visible in pieces as the
-queue drains. Pause/resume retain progress; restart replays frame zero and keeps pending
-writes. `finished()` loads A with 1 once Once's final frame is queued, otherwise 0.
-The selected layer must be enabled separately; tile patterns are loaded beforehand.

@@ -340,6 +340,16 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   Emulator tests: static sprites with pools, two pools, both sizes, exhaustion, reuse, every rejection, static
   visibility; unit tests: capacity and handler reachability.
 
+- **Background tile animation** (since `refactor-p3-bg-animation`): `stdlib::graphics::tile_animation` is a frame state
+  machine that writes tile IDs through the VRAM queue; the engine's `create_background_animation` takes a
+  `BackgroundAnimationConfig` (fixed cells on either map, preloaded tile-ID frames) and allocates seven WRAM bytes
+  (cursor word, frame, timer, direction, enabled, finished) and ROM tables of targets and frames. `step`, once per game
+  frame from init/main, finishes queueing a frame before advancing, so a full queue cannot skip part of a frame. Loop,
+  ping-pong or once, 1 to 256 frames, a hold of 1..=255 calls per frame. Pause keeps the cursor and timer; restart
+  replays from frame 0 and keeps writes already queued. Once's finished flag means its last frame is queued, not
+  flushed. Frames of several cells are not atomic: the queue can flush part of one. Handler steps are rejected through
+  the queue dependency check.
+
 - **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
   a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
   loads fonts through the background tile allocator (`load_font`) and reserves each printer's cursor (a `u16` variable)
@@ -1474,8 +1484,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
-  entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`.
-  Background scrolling exists since `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and
+  entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
+  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and
   palettes/fades since `refactor-p3-palettes` (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
@@ -1512,18 +1522,3 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
-
-### Phase 3 background tile animation (`refactor-p3-bg-animation`)
-
-`stdlib::graphics::tile_animation` owns a frame state machine and queued tilemap writes.
-The engine allocates seven WRAM bytes (cursor word plus frame, timer, direction, enabled,
-finished bytes) and ROM tables for map targets and tile-ID frames. `step` is called once
-per game frame from init/main; it finishes enqueueing a frame before advancing, so queue
-backpressure cannot skip a large frame. Playback supports loop, ping-pong, and once, with
-one through 256 frames and a per-animation hold of 1..=255 calls. Pausing preserves the
-current cursor/timer, while restarting resets playback without deleting pending writes.
-The Once finished flag marks final-frame enqueue completion, not flush completion.
-Animations change tile references on either background/window map; pattern artwork is
-loaded beforehand using existing tile APIs. Multi-cell frames are not atomic: the queue
-may flush a partial frame, and slow consumers extend the hold. Handler steps are rejected
-through the queue dependency check.

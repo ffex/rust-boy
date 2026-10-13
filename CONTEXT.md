@@ -362,7 +362,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   ping-pong or once, 1 to 256 frames, a hold of 1..=255 calls per frame. Pause keeps the cursor and timer; restart
   replays from frame 0 and keeps writes already queued. Once's finished flag means its last frame is queued, not
   flushed. Frames of several cells are not atomic: the queue can flush part of one. Handler steps are rejected through
-  the queue dependency check.
+  the queue dependency check. The target and frame tables go to the single ROM0 bank; too large ones make rgblink fail (past $4000
+  bytes), or rgbasm already (past $8000).
 
 - **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
   a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
@@ -1505,8 +1506,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
-  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and
-  palettes/fades since `refactor-p3-palettes` (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
+  `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
+  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the

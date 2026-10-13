@@ -163,6 +163,39 @@ mod tests {
     }
 
     #[test]
+    fn two_repeats_on_one_button_use_distinct_state_and_labels() {
+        let mut inputs = InputManager::new();
+        inputs
+            .on_repeat(PadButton::A, 3, 2, Vec::new())
+            .on_repeat(PadButton::A, 5, 4, Vec::new());
+        let code = inputs.generate_code(&LabelAllocator::new(), 7);
+        let asm = code.iter().map(Instr::to_string).collect::<Vec<_>>();
+
+        assert_eq!(
+            inputs.repeat_variable_names(7),
+            ["wInputRepeat_7", "wInputRepeat_8"]
+        );
+        for (id, label_id) in [(7, 0), (8, 1)] {
+            assert!(
+                asm.iter()
+                    .any(|line| line == &format!(".input_repeat_new_{id}_{label_id}:"))
+            );
+            assert!(
+                asm.iter()
+                    .any(|line| line == &format!(".input_repeat_held_{id}_{label_id}:"))
+            );
+            assert!(
+                asm.iter()
+                    .any(|line| line == &format!(".input_repeat_done_{id}_{label_id}:"))
+            );
+            assert!(
+                asm.iter()
+                    .any(|line| line == &format!("ld [wInputRepeat_{id}], a"))
+            );
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "repeat delay")]
     fn repeat_rejects_zero_delay() {
         InputManager::new().on_repeat(PadButton::A, 0, 1, Vec::new());

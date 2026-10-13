@@ -198,7 +198,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   calls, jumps to or reads, given as values, so a routine brings what it needs: `Routine::with_deps` lists it and every
   dependency, each once, dependencies first (a name is one routine: two different routines with one name panic), and
   `code_with_deps` is their code, the routine first. Its **variables** are the WRAM bytes it needs (`UpdateKeys`:
-  `wCurKeys`, `wNewKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
+  `wCurKeys`, `wNewKeys`, `wReleasedKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
   the flags `f`, printed `a, bc, f`): the registers it **reads**, **returns** and **clobbers**; every other register is
   **preserved**. A routine whose convention is not given may change every register (`Regs::ALL`). Every `gb_std`
   routine is a `Routine` (`memcopy()`, `wait_vblank()`, `wait_not_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
@@ -209,7 +209,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   |---|---|---|---|---|
   | `Memcopy` | `bc` (length), `de` (source), `hl` (destination) | `bc` = 0, `de`, `hl` after the bytes | `a`, `f` | |
   | `WaitVBlank`, `WaitNotVBlank` | | | `a`, `f` | |
-  | `UpdateKeys` | | | `a`, `b`, `f` | `wCurKeys`, `wNewKeys` |
+  | `UpdateKeys` | | | `a`, `b`, `c`, `f` | `wCurKeys`, `wNewKeys`, `wReleasedKeys` |
   | `GetTileByPixel` | `b` (X), `c` (Y) | `a` (tile), `hl` (its address) | `bc`, `f` | |
   | `Delay` | `bc` (count) | | `a`, `bc` (`$FFFF`), `f` | |
   | `is_specific_tile` | `a` (tile) | `f` (Z: one of the tiles) | none | |
@@ -497,7 +497,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
    `use_function` / `keep_function` (`InitOamDma` with sprites, its DMA routine after it, at `OamDmaCode`); then the
    `Anim_*` functions; then the interrupt handlers (`VBlankHandler`, which starts with the OAM DMA with sprites, and
    one for each other interrupt with code, since `refactor-p3-interrupts`). The variables an emitted routine needs (`wCurKeys`,
-   `wNewKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
+   `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
    variable initialisation (step 3) and the Data chunk include them.
 7. **Tiles / Tilemap**: `Label:` + `dw`/`INCBIN` + `LabelEnd:`; **Data**: `SECTION "Variables", WRAM0` + `name: db/dw`
    (since `refactor-p2-engine-api-memory`: `SECTION "HRAM Variables", HRAM[$FF80]` first when the program has HRAM
@@ -826,7 +826,7 @@ use `enable_animation(coin, idx)` / `disable_animation(coin)`.
 **Status: fixed** on `refactor-p0-fix-build` (A starts the animation, B stops it).
 
 #### B3
-**Duplicate labels `wCurKeys` / `wNewKeys` in `unbricked_rustboy`.** The example creates them
+**Duplicate input-state labels in `unbricked_rustboy`.** The example creates `wCurKeys` / `wNewKeys`
 (`src/bin/unbricked_rustboy/main.rs:50-51`) and `RustBoy::add_inputs` creates them again
 (`src/engine/rustboy.rs:487-488`); `VariableManager::create_var` (`src/engine/variables.rs:146`) never
 rejects duplicates, so `wCurKeys: db` is emitted twice → rgbasm "already defined". The same would happen
@@ -1365,7 +1365,7 @@ where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
 **`RustBoy::external_symbol(name)`** (`src/engine/rustboy.rs:361`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
-(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
+(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
 and the Data chunk are emitted (`:743-763`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
@@ -1393,7 +1393,7 @@ calls even when nothing names it (a jump table in an `INCLUDE`d file). The scan 
 `symbols` moved to `gb_asm::labels` and reads typed operands by type. The variables of every emitted routine are
 created (`Routine::variables`; they were the builtins' only). Every behaviour above is unchanged and its tests pass
 (`keep_function`, `external_symbol`, `use_function`, a user function replacing a builtin, second entry points, the
-name conflicts, `wCurKeys`/`wNewKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
+name conflicts, `wCurKeys`/`wNewKeys`/`wReleasedKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
 (each routine once, in a fixed order, linked), `test_a_dependency_nothing_names_is_emitted`,
 `test_a_routine_and_a_function_of_one_name`, `test_define_routine_replaces_a_builtin_with_its_variables`, and in
 `functions.rs` `test_a_routine_brings_its_dependencies`, `test_a_dependency_is_shared_not_replaced`,

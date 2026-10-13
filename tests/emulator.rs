@@ -1407,6 +1407,59 @@ fn engine_input_edges_hold_and_repeat_are_separate_bindings() {
     assert_eq!(gb.read_symbol("wReleased"), 2, "a new release fires again");
 }
 
+#[test]
+fn engine_repeat_bindings_across_managers_keep_independent_intervals() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wRepeatA", 0);
+    game.vars.create_u8("wRepeatB", 0);
+    game.vars.create_u8("wReleaseA", 0);
+
+    let mut first = InputManager::new();
+    first
+        .on_repeat(PadButton::A, 2, 3, count("wRepeatA").into_instrs())
+        .on_release(PadButton::A, count("wReleaseA").into_instrs());
+    game.add_inputs(first);
+    let mut second = InputManager::new();
+    second.on_repeat(PadButton::B, 3, 2, count("wRepeatB").into_instrs());
+    game.add_inputs(second);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    gb.run_script(&[(1, &[Button::A, Button::B])]);
+    assert_eq!(
+        (gb.read_symbol("wRepeatA"), gb.read_symbol("wRepeatB")),
+        (1, 1)
+    );
+    assert_eq!(gb.read_symbol("wInputRepeat_0"), 2);
+    assert_eq!(gb.read_symbol("wInputRepeat_2"), 3);
+
+    gb.run_script(&[(2, &[Button::A, Button::B])]);
+    assert_eq!(
+        (gb.read_symbol("wRepeatA"), gb.read_symbol("wRepeatB")),
+        (2, 1)
+    );
+    gb.run_script(&[(2, &[Button::A, Button::B])]);
+    assert_eq!(
+        (gb.read_symbol("wRepeatA"), gb.read_symbol("wRepeatB")),
+        (2, 2)
+    );
+    gb.run_script(&[(1, &[Button::A, Button::B])]);
+    assert_eq!(
+        gb.read_symbol("wRepeatA"),
+        3,
+        "A reloads its 3-frame interval"
+    );
+
+    // Releasing A while Left remains held records only A as released.
+    gb.run_script(&[(1, &[Button::A, Button::Left]), (1, &[Button::Left])]);
+    assert_eq!(gb.read_symbol("wReleaseA"), 1);
+    assert_eq!(gb.read_symbol("wReleasedKeys"), hw::PADF_A.value);
+    assert_eq!(gb.read_symbol("wCurKeys"), hw::PADF_LEFT.value);
+}
+
 /// The soft reset: A + B + Select + Start held together run the start-up code again, once
 /// per press. `wBoots`, a byte the start-up does not set, counts the start-ups (the `init`
 /// code adds 1); `wFrames`, a variable, counts the frames since the last one.

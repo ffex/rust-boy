@@ -148,16 +148,7 @@ pub fn check_key(
     button: PadButton,
     pressed_func: Vec<Instr>,
 ) -> Vec<Instr> {
-    let end_stem = format!("{}_end", button.label());
-    let [start, end] = labels.locals([button.label(), end_stem.as_str()]);
-    let mut asm = Block::new();
-    asm.label(&start);
-    asm.ld_a_addr_def("wCurKeys");
-    asm.and(button.flag());
-    asm.jp_cond(Condition::Z, &end);
-    asm.emit_all(pressed_func);
-    asm.label(&end);
-    asm.into_instrs()
+    check_key_state(labels, button, "wCurKeys", pressed_func)
 }
 
 /// The variable of [`check_soft_reset`]: 0 until it sees the four reset buttons not all held
@@ -268,6 +259,22 @@ mod tests {
         assert_eq!(run(&code, 0x20, &vars), [true, true, false]);
         assert_eq!(run(&code, 0x01, &vars), [false, false, true]);
         assert_eq!(run(&code, 0x21, &vars), [true, true, true]);
+    }
+
+    #[test]
+    fn check_key_state_uses_the_requested_bitmap_and_unique_labels() {
+        let labels = LabelAllocator::new();
+        let code = [
+            check_key_state(&labels, PadButton::A, "wNewKeys", mark("wPressed")),
+            check_key_state(&labels, PadButton::A, "wReleasedKeys", mark("wReleased")),
+        ]
+        .concat();
+        assert_code_labels_ok(&code);
+        let asm = code.iter().map(Instr::to_string).collect::<Vec<_>>();
+        assert!(asm.iter().any(|line| line == "ld a, [wNewKeys]"));
+        assert!(asm.iter().any(|line| line == "ld a, [wReleasedKeys]"));
+        assert!(asm.iter().any(|line| line == ".check_a_0:"));
+        assert!(asm.iter().any(|line| line == ".check_a_1:"));
     }
 
     #[test]

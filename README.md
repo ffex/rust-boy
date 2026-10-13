@@ -765,6 +765,32 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 
 MIT, see [LICENSE](LICENSE).
 
+### Background tile animation
+
+Preload tile artwork, then animate its IDs at fixed cells on either background/window map.
+Each frame supplies one tile per cell, in cell order. Call `step` once per game frame:
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+gb.tiles.add_background("WaterTiles", TileSource::from_raw(&[["$00"; 8]; 3]));
+let config = BackgroundAnimationConfig::new(
+    TilemapArea::Map9800, &[(2, 3), (3, 3)],
+    &[vec![0, 1], vec![1, 2], vec![2, 0]],
+).delay(8).playback(AnimationType::PingPong);
+let water = gb.create_background_animation("Water", config);
+gb.add_to_main_loop(water.step());
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Loop/ping-pong/once support 1..=256 frames. Holds are 1..=255 calls after a frame is
+fully queued (default 1). A full VBlank queue pauses advancement, preserving the current
+frame's cursor. Carry set means queue full. Cells can become visible in pieces as the
+queue drains. Pause/resume retain progress; restart replays frame zero and keeps pending
+writes. `finished()` loads A with 1 once Once's final frame is queued, otherwise 0.
+The selected layer must be enabled separately; tile patterns are loaded beforehand.
+
 ### PNG and binary tile assets
 
 Use `TileSource::from_png(path, &options)` to load tile artwork directly. Palette slots

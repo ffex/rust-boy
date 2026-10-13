@@ -6,6 +6,15 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
+### Background tile animation (Phase 3)
+
+- `BackgroundAnimationConfig` describes fixed cells and preloaded tile-ID frames on either
+  map. `create_background_animation` returns a main-loop animator with loop, ping-pong or
+  play-once playback and independent frame holds.
+- `step` resumes queue-full frames before advancing; `pause`, `resume`, `restart`, and
+  `finished` control/query playback. Each animator uses seven WRAM bytes and ROM tables.
+- Existing example output stays unchanged. Multi-cell frames may display in pieces while
+  the existing twelve-write VBlank queue drains; a finished flag means queued, not flushed.
 ### PNG and binary tile assets (Phase 3)
 
 - `TileSource::from_png(path, options)` converts PNGs in Rust. `PngOptions` specifies the

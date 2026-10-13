@@ -9,6 +9,7 @@
 
 mod animations;
 pub mod assets;
+mod background_animation;
 mod config;
 mod entities;
 mod error;
@@ -53,4 +54,5 @@ pub(crate) fn panic_message<R>(f: impl FnOnce() -> R) -> String {
 }
 
 pub use assets::{AssetError, PngColorMapping, PngOptions, TileOrder, png_to_2bpp};
+pub use background_animation::{BackgroundAnimation, BackgroundAnimationConfig};
 pub use text::{Font, NumberFormat, NumberPrinter, TextPrinter};

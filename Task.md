@@ -372,11 +372,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
-- [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
-      [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
-      `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
-      functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
-      "`Player` already defined" in rgbasm)
+- [x] Validate user-supplied symbol names (branch `refactor-p3-symbol-validation`): constants and
+      functions reject RGBDS keywords at registration; sprite/composite/animation/tile labels use the
+      same symbol rules; `build()` returns `Error::NameConflict` for duplicate global definitions across
+      `hardware.inc`, generated code, tile labels, constants, raw code and variables (including
+      `Coin`/`CoinEnd`, `Main`, and `add_sprite_tiles(player, "Player", ..)` collisions).
 - [ ] Follow-ups of the shadow OAM and the VRAM queue (from the reviews of #39 and #40):
       document that writes queued with the LCD off wait until it is on; `ldh` for `rLY` in `FlushVramQueue`
       (1 M-cycle an entry); an `hw` constant for `cp 153` in the late-flush test; whether `build()` should also

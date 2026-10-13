@@ -99,6 +99,7 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
+  - user-defined constants, functions and label names reject RGBDS keywords; `build()` reports collisions with `hardware.inc` and duplicate global definitions as `Error::NameConflict` before assembly.
   - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
     macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
 

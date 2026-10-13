@@ -1426,7 +1426,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Platform:** single ROM0 bank, no SRAM saves, no GBC.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
-  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`).
+  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). `refactor-p3-symbol-validation`
+  also rejects RGBDS keywords in user symbols and reports duplicate emitted global definitions as
+  `Error::NameConflict` before rgbasm runs.
 
 ---
 

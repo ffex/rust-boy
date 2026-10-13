@@ -547,6 +547,37 @@ pub(crate) fn defines(code: &[super::Instr], name: &str) -> bool {
     defs.contains(name)
 }
 
+/// The global symbols defined in `code`, in source order. RGBDS `REDEF` is an explicit
+/// reassignment, not a second definition; all other global labels and definitions are
+/// returned so the engine can reject collisions before handing output to rgbasm.
+pub(crate) fn definitions(code: &[super::Instr]) -> Vec<String> {
+    use super::Instr;
+
+    let mut result = Vec::new();
+    for instr in code {
+        match instr {
+            Instr::Label { name } if !name.starts_with('.') => result.push(name.clone()),
+            Instr::Def { label, .. } => result.push(label.clone()),
+            Instr::Raw { .. } | Instr::Db { .. } | Instr::Dw { .. } | Instr::Ds { .. } => {
+                for line in code_lines(&instr.to_string()) {
+                    let (label, rest) = split_label(&line);
+                    if let Some(label) = label {
+                        result.push(label.to_string());
+                    }
+                    if let Some((name, _)) = split_def(rest) {
+                        let keyword = rest.split_whitespace().next().unwrap_or("");
+                        if !keyword.eq_ignore_ascii_case("REDEF") {
+                            result.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +664,23 @@ mod tests {
     #[should_panic(expected = "label stem \"end\" given twice")]
     fn test_the_stems_of_one_number_are_distinct() {
         LabelAllocator::new().locals(["end", "end"]);
+    }
+
+    #[test]
+    fn test_definitions_include_global_labels_and_defs_but_skip_redef() {
+        let code = [
+            super::super::Instr::Raw {
+                line: "First: db 0\nDEF COUNT EQU 1\nREDEF COUNT += 1".to_string(),
+            },
+            super::super::Instr::Label {
+                name: ".local".to_string(),
+            },
+            super::super::Instr::Def {
+                label: "Typed".to_string(),
+                value: "2".to_string(),
+            },
+        ];
+        assert_eq!(definitions(&code), ["First", "COUNT", "Typed"]);
     }
 
     #[test]

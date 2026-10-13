@@ -554,6 +554,7 @@ impl SpriteManager {
         frame_step: u8,
     ) -> u8 {
         check_name("animation", name);
+        check_label("animation", name);
         if self.size == SpriteSize::Size8x16 && frame_step % 2 != 0 {
             panic!(
                 "animation \"{}\": frame_step {} is odd, but in 8x16 mode every frame is two \
@@ -777,6 +778,7 @@ impl SpriteManager {
     #[track_caller]
     pub(crate) fn check_composite_parts(&self, name: &str, names: &[String]) {
         check_name("composite sprite", name);
+        check_label("composite sprite", name);
         assert!(
             !names.is_empty(),
             "metasprite must contain at least one part"
@@ -848,6 +850,7 @@ impl SpriteManager {
     ) -> u8 {
         let mut anim_index = 0u8;
         check_name("animation", name);
+        check_label("animation", name);
 
         let composite = self.composite(composite_id);
         if composite.animation_names.iter().any(|anim| anim == name) {

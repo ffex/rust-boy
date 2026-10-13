@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::asm::labels::defines;
+use crate::asm::labels::{defines, definitions};
 use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, is_identifier};
 use crate::hw;
 use crate::stdlib::flow::Emittable;
@@ -14,7 +14,7 @@ use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
 
 use super::config::{Palettes, RustBoyConfig, Window};
-use super::error::Error;
+use super::error::{Definition, Error};
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
 use super::layout::{Chunk, Layout};
@@ -279,14 +279,18 @@ impl RustBoy {
     }
 
     /// Define a constant value
+    #[track_caller]
     pub fn define_const(&mut self, name: &str, value: impl std::fmt::Display) -> &mut Self {
+        super::sprites::check_label("constant", name);
         self.constants
             .push((name.to_string(), format!("{}", value)));
         self
     }
 
     /// Define a constant with a hex value
+    #[track_caller]
     pub fn define_const_hex(&mut self, name: &str, value: u16) -> &mut Self {
+        super::sprites::check_label("constant", name);
         self.constants
             .push((name.to_string(), format!("${:04X}", value)));
         self
@@ -486,7 +490,7 @@ impl RustBoy {
     /// # Ok::<(), rust_boy::engine::Error>(())
     /// ```
     pub fn external_symbol(&mut self, name: &str) -> &mut Self {
-        if !is_identifier(name) {
+        if !is_identifier(name) || crate::asm::expr::check_symbol(name).is_err() {
             panic!(
                 "invalid external symbol \"{}\": it must be a valid RGBDS identifier",
                 name
@@ -1146,6 +1150,7 @@ impl RustBoy {
         asm.emit_all(vars.generate_sections());
         asm.emit_all(raw_data);
 
+        validate_unique_definitions(&asm, &vars, &functions.names, &generated)?;
         Ok(asm)
     }
 
@@ -1827,13 +1832,55 @@ fn check_routine(routine: &Routine) {
 
 /// Panics unless `name` can be a function's label
 fn check_function_name(name: &str) {
-    if !is_identifier(name) {
+    if !is_identifier(name) || crate::asm::expr::check_symbol(name).is_err() {
         panic!(
-            "invalid function name \"{}\": it must be a valid RGBDS identifier (a letter or \
-             `_`, then letters, digits, `_`, `#`, `$` or `@`)",
+            "invalid function name \"{}\": it must be a valid RGBDS symbol, not a register \
+             or keyword",
             name
         );
     }
+}
+
+/// Reject duplicate global definitions before rgbasm reports an opaque duplicate-label
+/// error. `REDEF` is left to RGBDS because it intentionally updates an existing constant.
+fn validate_unique_definitions(
+    layout: &Layout,
+    vars: &VariableManager,
+    functions: &[String],
+    generated: &[String],
+) -> Result<(), Error> {
+    let mut seen = crate::hw::SYMBOLS
+        .iter()
+        .map(|(name, _)| ((*name).to_string(), Definition::ExternalSymbol))
+        .collect::<BTreeMap<_, _>>();
+    for chunk in Chunk::ORDER {
+        let Some(code) = layout.get_chunk(chunk) else {
+            continue;
+        };
+        for name in definitions(code) {
+            let current = if chunk == Chunk::Data {
+                vars.names()
+                    .find(|(variable, _)| *variable == name)
+                    .map(|(_, kind)| Definition::Variable(kind))
+                    .unwrap_or(Definition::CodeSymbol)
+            } else if chunk == Chunk::Functions && functions.iter().any(|item| item == &name) {
+                Definition::Function
+            } else if chunk == Chunk::Functions && generated.iter().any(|item| item == &name) {
+                Definition::GeneratedFunction
+            } else {
+                Definition::CodeSymbol
+            };
+            if let Some(first) = seen.get(&name) {
+                return Err(Error::NameConflict {
+                    name,
+                    first: *first,
+                    second: current,
+                });
+            }
+            seen.insert(name, current);
+        }
+    }
+    Ok(())
 }
 
 impl Default for RustBoy {
@@ -1874,6 +1921,96 @@ mod tests {
         let output = gb.build().unwrap();
         assert!(output.contains("DEF BRICK_LEFT EQU 0x05"));
         assert!(output.contains("DEF SCORE_ADDR EQU $9870"));
+    }
+
+    #[test]
+    fn test_symbol_collisions_are_reported_by_build() {
+        let mut gb = RustBoy::new();
+        gb.tiles.add_background("Coin", tiles(1));
+        gb.tiles.add_background("CoinEnd", tiles(1));
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "CoinEnd".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Main", tiles(1), 40, 40, 0);
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "Main".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+
+        let mut gb = RustBoy::new();
+        let player = gb.add_sprite("Player", tiles(1), 40, 40, 0);
+        gb.add_sprite_tiles(player, "Player", tiles(1));
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "Player".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid constant name \"ld\"")]
+    fn test_constant_names_reject_rgbds_keywords() {
+        RustBoy::new().define_const("ld", 1);
+    }
+
+    #[test]
+    fn test_function_animation_and_composite_names_reject_keywords() {
+        let message = panic_message(|| {
+            RustBoy::new().define_function_from("ld", Vec::<Instr>::new());
+        });
+        assert!(
+            message.contains("invalid function name \"ld\""),
+            "{message}"
+        );
+
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Ball", tiles(1), 40, 40, 0);
+        let message = panic_message(|| {
+            gb.sprites
+                .add_animation(sprite, "ld", 0, 0, AnimationType::Loop);
+        });
+        assert!(
+            message.contains("invalid animation name \"ld\""),
+            "{message}"
+        );
+
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let message = panic_message(|| {
+            gb.add_sprite_16x16("ld", tiles(2), tiles(2), 40, 40, 0);
+        });
+        assert!(
+            message.contains("invalid composite sprite name \"ld\""),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_user_symbols_cannot_redefine_hardware_inc_names() {
+        let mut gb = RustBoy::new();
+        gb.define_const("rLCDC", 1);
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "rLCDC".to_string(),
+                first: Definition::ExternalSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
     }
 
     #[test]

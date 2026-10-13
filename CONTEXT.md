@@ -260,8 +260,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 - **Animation completion events** (since `refactor-p3-animation-callbacks`): `enable_animation_events` gives an
   animation a coalescing flag; `take_animation_event` loads A with 0/1 (Z when none) and clears it. Once emits when its
   last frame is reached, once per observed activation or restart; Loop on the last-to-first wrap; PingPong on returning
-  to its first frame; single-frame Loop/PingPong every update after the one that enters them (entering any animation from a tile
-  outside its frames is not a completion), a single-frame Once once. The frame step is emitted once,
+  to its first frame; single-frame Loop/PingPong every update after the one that enters them (entering a Loop or PingPong from a
+  tile outside its frames is not a completion), a single-frame Once once, on the update that enters it. The frame step is emitted once,
   as a local subroutine of an event wrapper, so its early returns stay valid; the wrapper saves BC (AF changes only).
   Callbacks (`set_animation_callback`, named functions) run after **all** sprites stepped, in sprite and animation
   creation order, with BC/DE/HL saved, so a callback can switch or restart a whole metasprite. The composite APIs attach

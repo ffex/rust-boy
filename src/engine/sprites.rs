@@ -592,9 +592,10 @@ impl SpriteManager {
 
     /// Enable coalescing completion events for this animation. Once reports reaching
     /// its last frame once per activation/restart; Loop reports last→first wrap;
-    /// PingPong reports returning to its first frame. Entering an animation from a tile outside
-    /// its frames is not a completion. Single-frame Loop and PingPong report every update
-    /// after that. Events describe shadow state; visibility follows at the next DMA.
+    /// PingPong reports returning to its first frame. Entering a Loop or PingPong from a tile
+    /// outside its frames is not a completion; single-frame ones report every update after that.
+    /// A single-frame Once entered from another tile is on its last frame at once: it reports
+    /// on that update. Events describe shadow state; visibility follows at the next DMA.
     ///
     /// # Panics
     /// If `id` is not a sprite of this manager, or it has no animation `index`.
@@ -2652,6 +2653,52 @@ mod tests {
         cpu.run(&code);
         assert_eq!(shown_frame(&gb.sprites, &cpu, sprite), 1);
     }
+    #[test]
+    fn a_restart_clears_an_unpolled_completion() {
+        // A Loop wraps (a completion) and is restarted before the game polls it: the
+        // restart forgets that completion
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Walker", 0, 0, 0, 2);
+        sm.add_animation(sprite, "Walk", 0, 1, AnimationType::Loop);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        cpu.run(&code);
+        cpu.run(&code);
+        assert_eq!(cpu.mem["wAnim_Walker_Walk_Event"], 1, "wrapped, not polled");
+        cpu.run(&sm.restart_animation(sprite, 0));
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 0);
+    }
+
+    #[test]
+    fn a_once_put_back_on_an_earlier_frame_reports_again() {
+        // After a Once completes, a raw write puts its first frame back (no selection change
+        // the dispatcher sees): stepping off the last frame clears its latch, so reaching the
+        // last frame again is a new completion
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Door", 0, 0, 0, 3);
+        sm.add_animation(sprite, "Open", 0, 2, AnimationType::Once);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        let tile = format!("wShadowOAM+{}", hw::OAMA_TILEID.value);
+        let first = cpu.mem[&tile];
+        for expected in [0, 1, 0] {
+            cpu.run(&code);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, expected);
+        }
+        cpu.mem.insert(tile, first);
+        for expected in [0, 1] {
+            cpu.run(&code);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, expected);
+        }
+    }
+
     #[test]
     fn completion_flags_cover_cycles_once_and_explicit_restart() {
         for (kind, expected) in [

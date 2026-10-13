@@ -11,7 +11,11 @@ pub struct Font {
     tile: u8,
 }
 impl Font {
-    /// Panics for an empty or overflowing character/tile range.
+    /// A font of `count` glyphs from ASCII `first`, on background tiles from `tile`.
+    ///
+    /// # Panics
+    /// If `count` is 0 or the glyphs go past ASCII 127, or the tiles go past 255.
+    #[track_caller]
     pub fn new(first: u8, count: u16, tile: u8) -> Self {
         assert!(
             count > 0 && u16::from(first) + count <= 128,
@@ -20,7 +24,11 @@ impl Font {
         assert!(u16::from(tile) + count <= 256, "font tile range overflows");
         Self { first, count, tile }
     }
-    /// The tile for a supported ASCII character; panics otherwise.
+    /// The tile for a supported ASCII character.
+    ///
+    /// # Panics
+    /// If the font has no glyph for `ch`.
+    #[track_caller]
     pub fn glyph(self, ch: char) -> u8 {
         let value = ch as u32;
         assert!(
@@ -30,13 +38,25 @@ impl Font {
         self.tile + (value as u8 - self.first)
     }
     /// Resolve text into tilemap writes. Newlines and wrapping return to the original
-    /// X column. Panics before returning if a glyph falls outside the 32×32 map.
+    /// X column.
+    ///
+    /// # Panics
+    /// If `base` is not `$9800` or `$9C00`, the origin or a glyph falls outside the 32×32 map,
+    /// or the font has no glyph for a character.
+    #[track_caller]
     pub fn layout(self, base: u16, x: u8, y: u8, text: &str) -> Vec<(u16, u8)> {
         assert!(
             base == crate::hw::SCRN0.value || base == crate::hw::SCRN1.value,
             "invalid tilemap base"
         );
-        assert!(x < 32 && y < 32, "text origin outside tilemap");
+        let (width, height) = (
+            u16::from(crate::hw::SCRN_VX_B.value),
+            u16::from(crate::hw::SCRN_VY_B.value),
+        );
+        assert!(
+            u16::from(x) < width && u16::from(y) < height,
+            "text origin outside tilemap"
+        );
         let (mut col, mut row) = (u16::from(x), u16::from(y));
         let mut writes = Vec::new();
         for ch in text.chars() {
@@ -45,12 +65,12 @@ impl Font {
                 row += 1;
                 continue;
             }
-            if col == 32 {
+            if col == width {
                 col = u16::from(x);
                 row += 1;
             }
-            assert!(row < 32, "text extends beyond tilemap");
-            writes.push((base + row * 32 + col, self.glyph(ch)));
+            assert!(row < height, "text extends beyond tilemap");
+            writes.push((base + row * width + col, self.glyph(ch)));
             col += 1;
         }
         writes
@@ -89,7 +109,7 @@ pub fn print(name: &str, targets: &str, glyphs: &str, cursor: &str, len: u16) ->
         .add_hl(R16::DE)
         .ld(R8::A, R8::AtHl)
         .pop(R16Stack::HL)
-        .call("QueueVramWrite")
+        .call(vram_queue::enqueue().name())
         .pop(R16Stack::DE)
         .ret_cond(Condition::C)
         .inc(R16::DE)

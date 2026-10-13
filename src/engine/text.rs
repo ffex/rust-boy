@@ -23,9 +23,11 @@ impl TextPrinter {
     pub fn reset(&self) -> Vec<Instr> {
         self.cursor.set(0)
     }
+    /// The number of glyphs the job prints.
     pub fn len(&self) -> u16 {
         self.len
     }
+    /// Whether the job prints nothing (an empty string).
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -33,7 +35,9 @@ impl TextPrinter {
 /// Fixed-width score format, with leading zeroes.
 #[derive(Debug, Clone, Copy)]
 pub enum NumberFormat {
+    /// DE as an unsigned 16-bit number: five decimal digits (00000 to 65535)
     DecimalU16,
+    /// DE as four packed-BCD digits (D = the high two); a nibble above 9 is rejected
     PackedBcd,
 }
 /// A mutable print job whose tile buffer is filled from DE by `set_value`.
@@ -59,6 +63,8 @@ impl NumberPrinter {
         code.and(R8::A).label(&end);
         code.into_instrs()
     }
+    /// Queue as much of the score as fits; carry set means retry next frame (see
+    /// [`TextPrinter::step`]). Never call from an interrupt handler.
     pub fn step(&self) -> Vec<Instr> {
         self.printer.step()
     }
@@ -66,6 +72,11 @@ impl NumberPrinter {
 impl RustBoy {
     /// Load a contiguous single-tile ASCII font into the background tile region.
     /// Glyphs follow source order; unsupported characters panic when creating a job.
+    ///
+    /// # Panics
+    /// If the source has no tiles, more than 255, or glyphs past ASCII 127, or the tiles do
+    /// not fit the background tile region or `name` cannot be a label.
+    #[track_caller]
     pub fn load_font(&mut self, name: &str, source: TileSource, first: u8) -> Font {
         let count = u16::try_from(source.tile_count()).expect("too many font glyphs");
         Font::new(first, count, 0);
@@ -74,6 +85,7 @@ impl RustBoy {
             / crate::hw::TILE_SIZE) as u8;
         Font::new(first, count, tile)
     }
+    #[track_caller]
     fn check_text_name(&self, name: &str) {
         super::sprites::check_label("text", name);
         assert!(
@@ -124,6 +136,11 @@ impl RustBoy {
     /// Create a string job. Newlines/wrapping return to the original X column; text
     /// must fit the 32×32 map. Call `step` every frame: long strings resume automatically.
     /// Queued writes use LCD-on VBlank flushing, including jobs started during init.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label or is another printer's, the text does not fit the map
+    /// from (`x`, `y`), or `font` has no glyph for one of its characters.
+    #[track_caller]
     pub fn create_text_printer(
         &mut self,
         name: &str,
@@ -151,6 +168,11 @@ impl RustBoy {
     }
     /// Create a five-digit unsigned or four-digit packed-BCD score at tile coordinates.
     /// The font must include contiguous '0' through '9'. Initially displays zeroes.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label or is another printer's, the score does not fit the map
+    /// from (`x`, `y`), or `font` has no glyph for a digit.
+    #[track_caller]
     pub fn create_number_printer(
         &mut self,
         name: &str,

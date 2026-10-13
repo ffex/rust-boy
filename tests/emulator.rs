@@ -2628,6 +2628,41 @@ fn a_nearly_full_wram_array_uses_compact_startup_code() {
 }
 
 #[test]
+fn fonts_after_other_tiles_print_their_own_glyph_tiles() {
+    // Three other background tiles first, then a letter font ('A'..='C', tiles 3..=5) and a
+    // digit font (tiles 6..=15): the printed map bytes are the fonts' tiles, not 0-based
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.tiles
+        .add_background("Other", TileSource::from_raw(&[["$00"; 8]; 3]));
+    let letters = game.load_font("Letters", TileSource::from_raw(&[["$00"; 8]; 3]), b'A');
+    let digits = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+    let area = TilemapArea::Map9800;
+    let text = game.create_text_printer("Word", letters, area, 2, 0, "CAB");
+    let score = game.create_number_printer("Score", digits, area, 0, 1, NumberFormat::DecimalU16);
+    let mut init = Block::new();
+    init.ld(R16::DE, 12034)
+        .emit_all(score.set_value(game.labels()));
+    game.init(init);
+    game.add_to_main_loop(text.step())
+        .add_to_main_loop(score.step());
+    let mut gb = Rom::build(&game.build().unwrap(), &[]).boot();
+    gb.run_frames(10);
+    for (i, tile) in [5u8, 3, 4].into_iter().enumerate() {
+        assert_eq!(gb.read(area.address() + 2 + i as u16), tile, "letter {i}");
+    }
+    for (i, digit) in [1u8, 2, 0, 3, 4].into_iter().enumerate() {
+        assert_eq!(
+            gb.read(area.address() + 32 + i as u16),
+            6 + digit,
+            "digit {i}"
+        );
+    }
+}
+
+#[test]
 fn text_printer_resumes_long_strings_and_formats_scores() {
     if !rgbds_enabled() {
         return;

@@ -41,8 +41,8 @@ pub use crate::asm::{
 pub use crate::engine::{
     ANIM_DISABLED, AnimationType, ArrayElement, BuiltinFunction, Chunk, CompositeSpriteId,
     Definition, EntityPool, Error, Font, InputManager, Layout, Lcdc, MemoryRegion, MetaspritePart,
-    NumberFormat, NumberPrinter, Palettes, RustBoy, RustBoyConfig, SpriteId, SpriteSize, TextPrinter,
-    TileSource, TilemapArea, Var, VarType, Window, WramArray,
+    NumberFormat, NumberPrinter, Palettes, RustBoy, RustBoyConfig, SpriteId, SpriteSize,
+    TextPrinter, TileSource, TilemapArea, Var, VarType, Window, WramArray,
 };
 pub use crate::hw;
 pub use crate::stdlib::flow::{Call, If, IfA, IfCall, IfConst};

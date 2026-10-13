@@ -361,6 +361,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
         and MBC5 (9-bit); `Section::romx(...).bank(n)` places data explicitly.
   - [ ] Engine-managed mapper headers and banked asset access.
 - [ ] SRAM save games
+  - [x] Low-level MBC1/MBC5 RAM enable/disable and MBC5 RAM-bank selection
+        (`stdlib::sram`, stacked on #76).
+  - [ ] Persistent save API, mapper/header configuration and MBC1 RAM banking mode.
 - [ ] *(optional)* Game Boy Color: palettes, VRAM bank 1, double speed
 
 ### Tooling

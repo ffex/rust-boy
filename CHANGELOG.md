@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
+  select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
+
 - **ROM bank selection** (`stdlib::banking`): low-level routines select MBC1 7-bit and MBC5
   9-bit ROM banks for explicitly banked `ROMX` sections.
 

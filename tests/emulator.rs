@@ -2628,6 +2628,159 @@ fn a_nearly_full_wram_array_uses_compact_startup_code() {
 }
 
 #[test]
+fn fonts_after_other_tiles_print_their_own_glyph_tiles() {
+    // Three other background tiles first, then a letter font ('A'..='C', tiles 3..=5) and a
+    // digit font (tiles 6..=15): the printed map bytes are the fonts' tiles, not 0-based
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.tiles
+        .add_background("Other", TileSource::from_raw(&[["$00"; 8]; 3]));
+    let letters = game.load_font("Letters", TileSource::from_raw(&[["$00"; 8]; 3]), b'A');
+    let digits = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+    let area = TilemapArea::Map9800;
+    let text = game.create_text_printer("Word", letters, area, 2, 0, "CAB");
+    let score = game.create_number_printer("Score", digits, area, 0, 1, NumberFormat::DecimalU16);
+    let mut init = Block::new();
+    init.ld(R16::DE, 12034)
+        .emit_all(score.set_value(game.labels()));
+    game.init(init);
+    game.add_to_main_loop(text.step())
+        .add_to_main_loop(score.step());
+    let mut gb = Rom::build(&game.build().unwrap(), &[]).boot();
+    gb.run_frames(10);
+    for (i, tile) in [5u8, 3, 4].into_iter().enumerate() {
+        assert_eq!(gb.read(area.address() + 2 + i as u16), tile, "letter {i}");
+    }
+    for (i, digit) in [1u8, 2, 0, 3, 4].into_iter().enumerate() {
+        assert_eq!(
+            gb.read(area.address() + 32 + i as u16),
+            6 + digit,
+            "digit {i}"
+        );
+    }
+}
+
+#[test]
+fn text_printer_resumes_long_strings_and_formats_scores() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for area in [TilemapArea::Map9800, TilemapArea::Map9C00] {
+        let mut game = RustBoy::new();
+        let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+        let text = game.create_text_printer(
+            "Long",
+            font,
+            area,
+            0,
+            1,
+            "0123456789012345678901234567890123456789\n9",
+        );
+        let decimal =
+            game.create_number_printer("Decimal", font, area, 0, 4, NumberFormat::DecimalU16);
+        let bcd = game.create_number_printer("Bcd", font, area, 0, 5, NumberFormat::PackedBcd);
+        let mut init = Block::new();
+        init.ld(R16::DE, 65535)
+            .emit_all(decimal.set_value(game.labels()))
+            .ld(R16::DE, 0x1234)
+            .emit_all(bcd.set_value(game.labels()));
+        game.init(init);
+        game.add_to_main_loop(text.step())
+            .add_to_main_loop(decimal.step())
+            .add_to_main_loop(bcd.step());
+        let rom = Rom::build(&game.build().unwrap(), &[]);
+        let mut gb = rom.boot();
+        gb.run_frames(30);
+        for i in 0..40u16 {
+            assert_eq!(gb.read(area.address() + 32 + i), (i % 10) as u8);
+        }
+        assert_eq!(gb.read(area.address() + 96), 9);
+        for (i, digit) in [6, 5, 5, 3, 5].into_iter().enumerate() {
+            assert_eq!(gb.read(area.address() + 128 + i as u16), digit);
+        }
+        for (i, digit) in [1, 2, 3, 4].into_iter().enumerate() {
+            assert_eq!(gb.read(area.address() + 160 + i as u16), digit);
+        }
+        assert_eq!(gb.read_symbol("wTextLongCursor"), 41);
+        assert_eq!(gb.blocked_accesses().0, 0);
+    }
+}
+
+#[test]
+fn score_encoders_cover_decimal_boundaries_and_reject_invalid_bcd() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for value in [0, 1, 9, 10, 99, 100, 999, 1000, 9999, 10000, 32768, 65535] {
+        let mut game = RustBoy::new();
+        let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+        let score = game.create_number_printer(
+            "Score",
+            font,
+            TilemapArea::Map9800,
+            0,
+            0,
+            NumberFormat::DecimalU16,
+        );
+        let mut init = Block::new();
+        init.ld(R16::DE, value)
+            .emit_all(score.set_value(game.labels()));
+        game.init(init);
+        game.add_to_main_loop(score.step());
+        let rom = Rom::build(&game.build().unwrap(), &[]);
+        let mut gb = rom.boot();
+        gb.run_frames(10);
+        for (i, ch) in format!("{value:05}").bytes().enumerate() {
+            assert_eq!(
+                gb.read(hw::SCRN0.value + i as u16),
+                ch - b'0',
+                "value {value}"
+            );
+        }
+    }
+    for value in [0, 0x9999, 0xa123, 0x1b23, 0x12c3, 0x123f] {
+        let mut game = RustBoy::new();
+        let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+        let score = game.create_number_printer(
+            "Score",
+            font,
+            TilemapArea::Map9800,
+            0,
+            0,
+            NumberFormat::PackedBcd,
+        );
+        let invalid = game.vars.create_u8("wCarry", 0);
+        let mut init = Block::new();
+        init.ld(R16::DE, 0x1234)
+            .emit_all(score.set_value(game.labels()))
+            .ld(R16::DE, value)
+            .emit_all(score.set_value(game.labels()))
+            .ld_a(0)
+            .adc(0)
+            .ld_addr_def_a(invalid.name());
+        game.init(init);
+        game.add_to_main_loop(score.step());
+        let rom = Rom::build(&game.build().unwrap(), &[]);
+        let mut gb = rom.boot();
+        gb.run_frames(10);
+        let bad = value != 0 && value != 0x9999;
+        assert_eq!(gb.read_symbol(invalid.name()), u8::from(bad));
+        let expected = if bad {
+            [1, 2, 3, 4]
+        } else if value == 0 {
+            [0; 4]
+        } else {
+            [9; 4]
+        };
+        for (i, digit) in expected.into_iter().enumerate() {
+            assert_eq!(gb.read(hw::SCRN0.value + i as u16), digit);
+        }
+    }
+}
+
+#[test]
 fn runtime_oam_pools_allocate_hide_release_and_reuse_disjoint_slots() {
     if !rgbds_enabled() {
         return;

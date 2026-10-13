@@ -290,7 +290,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
       with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
       operations with carry. Pools have a single init/main producer and handler use is rejected.
-- [ ] Text: font loading, print string, print number / BCD score
+- [x] Text: font loading, print string, print number / BCD score (`refactor-p3-text`, stacked on
+      WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
 - [ ] Background tile animation
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
 

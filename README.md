@@ -409,6 +409,34 @@ no more VBlank left than the main loop.
 `stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
 Programs that never request the queue emit no queue code or storage.
 
+## Text and scores (`RustBoy`)
+
+Load one 8×8 tile per consecutive ASCII character, then call each printer's `step` in
+the main loop. Long strings resume across frames using the VBlank VRAM queue (12 pending
+writes). Carry set means retry next frame; carry clear means queued, with display updates
+at a subsequent VBlank. Enable the background/window for the selected map in your config.
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+// Supply real glyph tiles here, or TileSource::from_file("digits.2bpp", 10).
+let font = gb.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+let text = gb.create_text_printer("Message", font, TilemapArea::Map9800, 0, 0, "0123456789");
+let score = gb.create_number_printer("Score", font, TilemapArea::Map9800, 0, 1, NumberFormat::DecimalU16);
+let mut init = Block::new();
+init.ld(R16::DE, 12345).emit_all(score.set_value(gb.labels()));
+gb.init(init);
+gb.add_to_main_loop(text.step()).add_to_main_loop(score.step());
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Coordinates are tiles in the 32×32 map. Wrapping/newlines return to the initial X column;
+unsupported characters and writes beyond the map panic. Decimal uses five digits, packed
+BCD four. Invalid BCD keeps the old score and returns carry. Set numbers only when they
+change; resetting/replacing retains pending writes, so partial values can briefly display.
+Printer steps belong in init/main code; interrupt handlers cannot produce queue entries.
+
 ## Palettes and fades (`RustBoy`)
 
 DMG palettes map four colour indices to shades. The background and window share BGP;
@@ -661,7 +689,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
-  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
+  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), text and score printing (see
+  [Text and scores](#text-and-scores-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
   and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout, runtime sprite pools (see
   [Sprite visibility and reusable OAM slots](#sprite-visibility-and-reusable-oam-slots)),

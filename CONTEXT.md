@@ -340,6 +340,17 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   Emulator tests: static sprites with pools, two pools, both sizes, exhaustion, reuse, every rejection, static
   visibility; unit tests: capacity and handler reachability.
 
+- **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
+  a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
+  loads fonts through the background tile allocator (`load_font`) and reserves printer cursors and number buffers as
+  WRAM arrays. A print job queues until the queue is full and resumes at its cursor on the next main-loop call; carry
+  clear means queued, not yet shown; it never writes VRAM directly. Newlines and wrapping return to the first X
+  column; unsupported glyphs and layouts past the map panic before anything is allocated. Decimal scores have five
+  digits with leading zeros, BCD scores four; invalid BCD keeps the previous buffer and cursor. One main/init
+  producer per job; handlers that reach `step` are rejected through the queue's dependency check. Replacing a number
+  or resetting a job keeps the writes already queued, so part of the old value can show while they drain. No
+  proportional fonts or Unicode.
+
 - **Entity pools** (since `refactor-p3-entities`): `RustBoy::create_entity_pool` wraps a sprite pool in entity words:
   `spawn` allocates a hidden slot (A = the entity's relative index, carry when full), `set_sprite` writes and shows it
   (A = index, B/C = position, D/E = tile/flags), `hide` keeps it alive, `despawn` clears and frees it. One hardware
@@ -1462,7 +1473,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, no text/numbers. Background scrolling exists since
+- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, text and scores since `refactor-p3-text`. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since

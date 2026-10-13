@@ -172,6 +172,41 @@ impl Asm {
         &self.instrs
     }
 
+    /// Return a copy with flag-safe peephole optimizations applied.
+    ///
+    /// Currently this rewrites `ld a, 0` to `xor a` and `cp a, 0` to `and a` only when
+    /// the next instruction unconditionally overwrites every flag. This preserves the
+    /// flags visible after that next instruction while saving one byte and one M-cycle.
+    /// It is opt-in; [`Asm::to_asm`](super::codegen::Asm::to_asm) keeps the original code.
+    pub fn peephole_optimized(&self) -> Self {
+        let mut optimized = Self::with_labels(self.labels.clone());
+        let mut start = 0;
+        for end in self.group_ends() {
+            let group = &self.instrs[start..end];
+            for (index, instr) in group.iter().enumerate() {
+                let next_overwrites_flags = group.get(index + 1).is_some_and(writes_all_flags);
+                let replacement = if next_overwrites_flags {
+                    match instr {
+                        Instr::Ld {
+                            dst: Dst::R8(R8::A),
+                            src: Operand::Imm(value),
+                        } if value.value() == Some(0) => Some(Instr::Xor { src: R8::A.into() }),
+                        Instr::Cp {
+                            src: super::instr::AluOperand::Imm(value),
+                        } if value.value() == Some(0) => Some(Instr::And { src: R8::A.into() }),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                optimized.emit(replacement.unwrap_or_else(|| instr.clone()));
+            }
+            optimized.blank_line();
+            start = end;
+        }
+        optimized
+    }
+
     /// Where each group of lines ends, with the end of the program ([`Asm::blank_line`])
     pub(crate) fn group_ends(&self) -> impl Iterator<Item = usize> + '_ {
         self.group_ends
@@ -181,4 +216,72 @@ impl Asm {
     }
 
     instruction_builders!();
+}
+
+fn writes_all_flags(instr: &Instr) -> bool {
+    matches!(
+        instr,
+        Instr::Add { .. }
+            | Instr::Adc { .. }
+            | Instr::Sub { .. }
+            | Instr::Sbc { .. }
+            | Instr::And { .. }
+            | Instr::Xor { .. }
+            | Instr::Or { .. }
+            | Instr::Cp { .. }
+            | Instr::Rlca
+            | Instr::Rrca
+            | Instr::Rla
+            | Instr::Rra
+            | Instr::Rlc { .. }
+            | Instr::Rrc { .. }
+            | Instr::Rl { .. }
+            | Instr::Rr { .. }
+            | Instr::Sla { .. }
+            | Instr::Sra { .. }
+            | Instr::Swap { .. }
+            | Instr::Srl { .. }
+    )
+}
+
+#[cfg(test)]
+mod peephole_tests {
+    use super::*;
+    use crate::asm::test_cpu::TestCpu;
+
+    #[test]
+    fn peepholes_only_run_when_the_following_instruction_overwrites_flags() {
+        let mut asm = Asm::new();
+        asm.ld_a(0).cp_imm(0).add(1).cp_imm(0).label("Done").ret();
+        let optimized = asm.peephole_optimized();
+
+        assert!(asm.to_asm().contains("ld a, 0"));
+        assert!(optimized.to_asm().contains("xor a"));
+        assert!(optimized.to_asm().contains("and a, a"));
+
+        let original_size: usize = asm.instrs().iter().map(|instr| instr.size().unwrap()).sum();
+        let optimized_size: usize = optimized
+            .instrs()
+            .iter()
+            .map(|instr| instr.size().unwrap())
+            .sum();
+        assert_eq!(original_size - optimized_size, 2);
+
+        let mut original_cpu = TestCpu::default();
+        let mut optimized_cpu = TestCpu::default();
+        original_cpu.run(asm.instrs());
+        optimized_cpu.run(optimized.instrs());
+        assert_eq!(
+            (original_cpu.a, original_cpu.zero, original_cpu.carry),
+            (optimized_cpu.a, optimized_cpu.zero, optimized_cpu.carry)
+        );
+    }
+
+    #[test]
+    fn peepholes_keep_flags_when_the_next_instruction_does_not_replace_them() {
+        let mut asm = Asm::new();
+        asm.ld_a(0).inc(R8::B).label("Done").ret();
+        let optimized = asm.peephole_optimized();
+        assert!(optimized.to_asm().contains("ld a, 0"));
+    }
 }

@@ -388,7 +388,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       one test per example, and [B12](CONTEXT.md#b12)'s situation as it is today; run with `RGBDS_LINK_CHECK`, in CI)
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
-- [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
+- [x] Opt-in flag-safe peephole optimisations via `Asm::peephole_optimized()`:
+      `ld a, 0` → `xor a` and `cp a, 0` → `and a` only when the next instruction overwrites all flags
 - [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
       [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
       `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,

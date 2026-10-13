@@ -2740,3 +2740,164 @@ fn score_encoders_cover_decimal_boundaries_and_reject_invalid_bcd() {
         }
     }
 }
+
+#[test]
+fn runtime_oam_pools_allocate_hide_release_and_reuse_disjoint_slots() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(size));
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(size.tiles_per_sprite())]);
+        let before = game.add_sprite("StaticBefore", tiles.clone(), 8, 8, 0);
+        let pool = game.create_sprite_pool("Actors", 3);
+        game.add_sprite("StaticAfter", tiles, 120, 120, 0);
+        let other = game.create_sprite_pool("Other", 2);
+        assert_eq!((pool.first_slot(), other.first_slot()), (1, 5));
+        let action = game.vars.create_u8("wPoolAction", 0);
+        let result = game.vars.create_u8("wPoolResult", 0);
+        let full = game.vars.create_u8("wPoolFull", 0);
+        let mut init = Block::new();
+        for i in 0..3u8 {
+            init.emit_all(pool.allocate())
+                .ld_b(20 + i)
+                .ld_c(30 + i)
+                .ld_d(0)
+                .ld_e(0x10)
+                .emit_all(pool.write());
+        }
+        init.emit_all(pool.allocate()).ld_addr_def_a(full.name());
+        game.init(init);
+        let mut hide = Block::new();
+        hide.ld_a(0).emit_all(pool.hide()).emit_all(action.set(0));
+        let mut release = Block::new();
+        release
+            .ld_a(0)
+            .emit_all(pool.release())
+            .emit_all(action.set(0));
+        let mut reuse = Block::new();
+        reuse
+            .emit_all(pool.allocate())
+            .ld_addr_def_a(result.name())
+            .ld_b(60)
+            .ld_c(70)
+            .ld_d(0)
+            .ld_e(0x20)
+            .emit_all(pool.write())
+            .emit_all(action.set(0));
+        for (event, code) in [(1, hide), (2, release), (3, reuse)] {
+            game.add_to_main_loop(action.get());
+            game.add_to_main_loop(IfA::eq(event, code.into_instrs()));
+        }
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        gb.run_frames(2);
+        assert_eq!(gb.read_symbol(full.name()), 255);
+        assert_eq!(gb.oam_entry(0), [24, 16, 0, 0]);
+        let static_after = gb.oam_entry(4);
+        let active = gb.oam_entry(1);
+        assert_eq!(active, [46, 28, 0, 0x10]);
+        for i in 0..3 {
+            assert_eq!(gb.read(gb.symbol("wPoolActorsUsed") + i), 1);
+        }
+        gb.write_ram(gb.symbol(action.name()), 1);
+        gb.run_frames(3);
+        assert_eq!(gb.oam_entry(1), [0, active[1], active[2], active[3]]);
+        assert_eq!(gb.read_symbol("wPoolActorsUsed"), 1);
+        gb.write_ram(gb.symbol(action.name()), 2);
+        gb.run_frames(3);
+        assert_eq!(gb.oam_entry(1), [0; 4]);
+        assert_eq!(gb.read_symbol("wPoolActorsUsed"), 0);
+        gb.write_ram(gb.symbol(action.name()), 3);
+        gb.run_frames(3);
+        assert_eq!(gb.read_symbol(result.name()), 0);
+        assert_eq!(gb.oam_entry(1), [86, 68, 0, 0x20]);
+        assert_eq!(gb.oam_entry(4), static_after);
+        assert_eq!(gb.oam_entry(5), [0; 4]);
+        // Static sprite visibility leaves tile/flags alone and accepts a new screen position.
+        let mut game2 = RustBoy::new();
+        let sprite = game2.add_sprite("Visible", TileSource::from_raw(&[["$ff"; 8]]), 8, 8, 0x10);
+        game2.init(game2.sprites.hide(sprite));
+        let mut hidden = engine_rom(&game2).boot();
+        hidden.run_frames(2);
+        assert_eq!(hidden.oam_entry(0), [0, 16, 0, 0x10]);
+        game2.add_to_main_loop(game2.sprites.show_at(sprite, 24, 32));
+        let mut shown = engine_rom(&game2).boot();
+        shown.run_frames(3);
+        assert_eq!(shown.oam_entry(0), [48, 32, 0, 0x10]);
+        assert!(!game.sprites.hide(before).is_empty());
+    }
+}
+
+#[test]
+fn sprite_pool_rejects_free_invalid_and_unrepresentable_writes_without_mutation() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(size));
+        let pool = game.create_sprite_pool("Checked", 2);
+        let cases = game.vars.create_array("wPoolCarry", ArrayElement::U8, 9, 0);
+        let mut code = Block::new();
+        code.emit_all(pool.allocate())
+            .ld_b(24)
+            .ld_c(32)
+            .ld_d(0)
+            .ld_e(0x10)
+            .emit_all(pool.write());
+        let checks = [
+            (pool.release(), 255u8, 24u8, 32u8, 0u8, true),
+            (pool.hide(), 2, 24, 32, 0, true),
+            (pool.write(), 1, 24, 32, 0, true), // free slot
+            (pool.release(), 1, 24, 32, 0, true),
+            (pool.write(), 0, 248, 32, 0, true),
+            (pool.write(), 0, 24, 240, 0, true),
+            (pool.write(), 0, 24, 32, 1, size == SpriteSize::Size8x16),
+        ];
+        for (index, (operation, slot, x, y, tile, _)) in checks.iter().enumerate() {
+            code.ld_a(*slot)
+                .ld_b(*x)
+                .ld_c(*y)
+                .ld_d(*tile)
+                .ld_e(0x10)
+                .emit_all(operation.clone())
+                .ld_a(0)
+                .adc(0)
+                .ld_addr_def_a(cases.address(index as u16));
+        }
+        code.emit_all(pool.allocate())
+            .emit_all(pool.allocate()) // third claim: full
+            .ld_a(0)
+            .adc(0)
+            .ld_addr_def_a(cases.address(7))
+            .ld_a(1)
+            .emit_all(pool.release())
+            .ld_a(1)
+            .emit_all(pool.release())
+            .ld_a(0)
+            .adc(0)
+            .ld_addr_def_a(cases.address(8));
+        game.init(code);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        gb.run_frames(2);
+        let base = gb.symbol(cases.name());
+        for (index, (_, _, _, _, _, rejected)) in checks.iter().enumerate() {
+            assert_eq!(gb.read(base + index as u16), u8::from(*rejected));
+        }
+        assert_eq!(gb.read(base + 7), 1);
+        assert_eq!(gb.read(base + 8), 1);
+        assert_eq!(
+            gb.oam_entry(0),
+            [
+                48,
+                32,
+                if size == SpriteSize::Size8x16 { 0 } else { 1 },
+                0x10
+            ]
+        );
+        assert_eq!(gb.oam_entry(1), [0; 4]);
+        assert_eq!(gb.read_symbol("wPoolCheckedUsed"), 1);
+        assert_eq!(gb.read(gb.symbol("wPoolCheckedUsed") + 1), 0);
+    }
+}

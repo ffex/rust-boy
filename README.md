@@ -680,6 +680,36 @@ setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` r
 HL and carry status for custom operations; branch on carry before dereferencing it.
 Static operations panic on invalid indices/values; runtime bounds rejection sets carry.
 
+### Sprite visibility and reusable OAM slots
+
+Static sprites have `gb.sprites.hide(id)` and `show_at(id, x, y)` snippets; composite
+helpers apply to every part. Hiding sets OAM Y to 0 and preserves X/tile/flags.
+Show supplies a screen position; changing Y while hidden can make a sprite visible,
+so keep logical positions in your game state. Runtime operations keep startup data intact.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let pool = gb.create_sprite_pool("Actors", 8);
+let mut spawn = Block::new();
+let full = gb.labels().local("pool_full");
+spawn.emit_all(pool.allocate()).jr_cond(Condition::C, &full)
+    .ld_b(40).ld_c(60).ld_d(0).ld_e(0)
+    .emit_all(pool.write()).label(&full);
+gb.init(spawn);
+# gb.build().unwrap();
+```
+
+Register tile data separately before displaying pooled sprites. Allocation returns A
+as a relative slot index and HL as its cleared, hidden shadow-OAM entry. Full pools
+return A=255 and carry. `write` uses A=index, B=X, C=Y, D=tile, E=attributes; `hide`
+keeps the slot allocated, while `release` clears it and permits reuse. Invalid/free
+indices and invalid coordinates set carry without writes; 8x16 writes reject odd tiles.
+All pool operations belong in init/main, with one producer; build rejects handler
+calls. Allocation changes AF/BC/HL, other pool operations AF/HL; DE and IME are kept.
+Pool writes publish Y last but aren't atomic to DMA: use VBlank for coherent updates.
+
 ### Text and scores
 
 Load one 8×8 tile per consecutive ASCII character, then call each printer's `step` in

@@ -286,7 +286,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
 - [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
       off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
-- [ ] Sprite show / hide, OAM slot allocation
+- [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
+      static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
+      with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
+      operations with carry. Pools have a single init/main producer and handler use is rejected.
 - [x] Text: font loading, print string, print number / BCD score (`refactor-p3-text`, stacked on
       WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
 - [ ] Background tile animation
@@ -334,7 +337,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
 - [ ] Scenes / game states
-- [ ] Entities: spawn / despawn
+- [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
+      reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
+      `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
 - [x] WRAM arrays (branch `refactor-p3-wram-arrays`): contiguous typed byte/word arrays,
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.

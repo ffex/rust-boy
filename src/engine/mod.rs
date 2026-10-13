@@ -9,19 +9,23 @@
 
 mod animations;
 mod config;
+mod entities;
 mod error;
 mod functions;
 mod inputs;
 mod layout;
 mod memory;
 mod rustboy;
+mod sprite_pool;
 mod sprites;
 mod text;
+pub use sprite_pool::SpritePool;
 mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
 pub use config::{Lcdc, Palettes, RustBoyConfig, Window};
+pub use entities::EntityPool;
 pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;

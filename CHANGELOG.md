@@ -61,6 +61,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
   With the builtin `InitOamDma`, so are the labels of the code it copies, `OamDmaCode` and `OamDmaCodeEnd`
   (`Definition::BuiltinLabel`).
+- **Runtime entities** (Phase 3): `RustBoy::create_entity_pool` reserves reusable OAM slots;
+  `EntityPool::spawn` claims a hidden slot, `set_sprite` shows or updates it, `hide` keeps it
+  alive, and `despawn` clears and frees it. Each entity is one hardware sprite, and its index
+  is a runtime value in `A`.
 - **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
   `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
   handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
@@ -119,6 +123,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   runtime BC-indexed access sets carry on bounds failure and performs no array access.
   Arrays share WRAM0 allocation, initialize through compact loops and keep little-endian words.
   `VarType` gains an `Array` variant; exhaustive downstream matches must handle it.
+- **Visibility and OAM pools** (Phase 3): sprite/composite hide and show-at snippets;
+  `create_sprite_pool` reserves reusable runtime slots alongside static sprites. Pool allocation,
+  release, hide and register-driven writes report carry on rejection and preserve IME.
+  Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
+  Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

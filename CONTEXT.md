@@ -1484,6 +1484,33 @@ Initialization labels use build()'s fork, retaining deterministic rebuilds and u
 Emulator coverage checks all four types, page crossings, every initialized byte, guard bytes,
 invalid indices 300/65535 and a nearly-full 4095-byte WRAM0 array with compact startup code.
 
+### Phase 3 sprite visibility and runtime OAM pools
+
+`refactor-p3-sprite-pools` builds on WRAM arrays (#51). Static Sprite/SpriteManager hide sets
+Y=0, leaving X/tile/flags; show_at supplies screen coordinates and publishes Y last. Composite
+helpers apply to every member, with show_composite_at placing the first registered part and
+keeping original offsets. Hidden Y is the visibility mechanism: moving Y may make a sprite visible
+again; logical positions are owned by the game. Startup sprite data is unchanged.
+
+`RustBoy::create_sprite_pool` reserves a contiguous shadow-OAM range in the existing OAM
+allocator, disjoint from static sprites and other pools. One WRAM array byte per entry records
+occupancy. Standard-library routines allocate lowest free indices (relative to the pool), release
+with all OAM bytes cleared before publishing free, hide without freeing, or write B/C screen
+position and D/E tile/flags with Y last. Full/invalid/free indices, invalid positions, double
+release and odd 8x16 tile indices report carry without writes. A fresh allocation is hidden/zeroed.
+Pools alone enable normal shadow OAM/DMA; IME is unchanged. One init/main producer is enforced
+for typed/visible handler calls, including transitively, via MainLoopOnly. Multi-byte OAM writes
+can span DMA; write during VBlank or use game-owned state when frame-coherent updates are needed.
+Emulator tests cover static/pool coexistence, two pools, both sizes, exhaustion, reuse, every
+rejection status and static visibility; unit tests cover capacity and handler reachability.
+
+`refactor-p3-entities` adds an engine-facing entity vocabulary over those pool operations:
+`create_entity_pool` creates one-sprite entities, `spawn` allocates a hidden slot, `set_sprite`
+updates and shows it, `hide` keeps it allocated, and `despawn` clears and releases it. Runtime
+entity handles remain in `A` as relative pool indices; game code owns any persistent entity
+state. This deliberately keeps entity composition and per-entity component storage outside this
+small spawn/despawn API.
+
 ### Phase 3 text rendering (`refactor-p3-text`)
 
 `stdlib::graphics::text` owns ASCII glyph mapping, map layout, resumable queued printing, and

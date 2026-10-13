@@ -372,7 +372,11 @@ impl Sprite {
     }
 
     /// Show/place this entry at screen pixels. Writes Y last, keeping tile/flags.
-    /// Changes A only. Positions must fit X 0..=247/Y 0..=239.
+    /// Changes A only.
+    ///
+    /// # Panics
+    /// If the position is outside X 0..=247 / Y 0..=239.
+    #[track_caller]
     pub fn show_at(&self, x: u8, y: u8) -> Vec<Instr> {
         let x = x
             .checked_add(hw::OAM_X_OFFSET)

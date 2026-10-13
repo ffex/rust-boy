@@ -326,6 +326,46 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
   Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
 
+- **Sprite visibility and runtime OAM pools** (since `refactor-p3-sprite-pools`): `Sprite`/`SpriteManager::hide` sets
+  Y=0 and keeps X, tile and flags; `show_at` takes screen coordinates and writes Y last; `hide_composite` /
+  `show_composite_at` apply to every member, placing the first registered part and keeping the offsets. A hidden
+  sprite is shown again by any Y write; the game owns logical positions. `RustBoy::create_sprite_pool` reserves a
+  contiguous shadow-OAM range in the OAM allocator, apart from static sprites and other pools, with one WRAM array
+  byte per entry for occupancy. Its stdlib routines allocate the lowest free index (relative to the pool; the entry
+  comes back cleared and hidden in HL), release (clearing all four OAM bytes before marking it free), hide without
+  freeing, or write B/C position and D/E tile/flags with Y last. Full pools, invalid or free indices, invalid
+  positions, double releases and odd 8x16 tiles return carry without writing. A pool alone enables shadow OAM and DMA;
+  IME is unchanged. One init/main producer, enforced through `Error::MainLoopOnly` for handler calls (transitively).
+  Multi-byte OAM writes can span a DMA: write in VBlank or keep the state in the game when a frame must be coherent.
+  Emulator tests: static sprites with pools, two pools, both sizes, exhaustion, reuse, every rejection, static
+  visibility; unit tests: capacity and handler reachability.
+
+- **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
+  a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
+  loads fonts through the background tile allocator (`load_font`) and reserves printer cursors and number buffers as
+  WRAM arrays. A print job queues until the queue is full and resumes at its cursor on the next main-loop call; carry
+  clear means queued, not yet shown; it never writes VRAM directly. Newlines and wrapping return to the first X
+  column; unsupported glyphs and layouts past the map panic before anything is allocated. Decimal scores have five
+  digits with leading zeros, BCD scores four; invalid BCD keeps the previous buffer and cursor. One main/init
+  producer per job; handlers that reach `step` are rejected through the queue's dependency check. Replacing a number
+  or resetting a job keeps the writes already queued, so part of the old value can show while they drain. No
+  proportional fonts or Unicode.
+
+- **Entity pools** (since `refactor-p3-entities`): `RustBoy::create_entity_pool` wraps a sprite pool in entity words:
+  `spawn` allocates a hidden slot (A = the entity's relative index, carry when full), `set_sprite` writes and shows it
+  (A = index, B/C = position, D/E = tile/flags), `hide` keeps it alive, `despawn` clears and frees it. One hardware
+  sprite per entity; the game keeps any per-entity state, and entity composition is not part of this API. Same
+  registers, carry results and init/main-only rule as the pool routines it calls.
+
+- **WRAM arrays** (since `refactor-p3-wram-arrays`): `ArrayElement` (signed or unsigned bytes and words), `WramArray`
+  and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0 variables, contiguous `ds`
+  bytes in the variable allocator's creation order, initialised by a compact local-label loop. Static
+  `get`/`set`/`address` panic on an index or value out of range; the BC-indexed `address_indexed`/`get_indexed`/
+  `set_indexed` set carry on an index >= len and then touch no memory (setters take E/DE and keep BC/DE). Words are
+  little-endian; getters return A or HL. The array's shape is part of its `VarType` (`VarType::Array`) and of the
+  name-conflict checks. Emulator tests: all four element types, page crossings, every initialised byte, guard bytes,
+  indices 300, 512 and 65535 on a 300-element array, a nearly full 4095-byte WRAM0 array.
+
 - **VRAM write queue** (since `refactor-codex-p3-vram-queue`):
   `stdlib::graphics::vram_queue` owns the `QueueVramWrite` and `FlushVramQueue` routines.
   `RustBoy::queue_vram_write(address, value)` or `queue_vram_write_from_registers()` opts in:
@@ -1433,13 +1473,14 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, no text/numbers. Background scrolling exists since
+- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, text and scores since `refactor-p3-text`. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
-  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
+  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
+  `refactor-p3-wram-arrays`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.
@@ -1470,57 +1511,3 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
-
-### Phase 3 WRAM arrays
-
-`refactor-p3-wram-arrays` adds `ArrayElement` (signed/unsigned bytes/words), `WramArray`
-and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0
-variables reserved as contiguous `ds` bytes in the existing allocator/creation order, with uniform
-initialization through a compact local-label loop. Static get/set/address reject bounds or values
-outside the element range. BC-indexed address/get/set return carry on out-of-range indices and
-perform no memory access in that case; setters take E/DE and preserve BC/DE. Word values are
-little-endian; getters return A or HL. Array shape is part of VarType and name-conflict checks.
-Initialization labels use build()'s fork, retaining deterministic rebuilds and unchanged scalar output.
-Emulator coverage checks all four types, page crossings, every initialized byte, guard bytes,
-invalid indices 300/65535 and a nearly-full 4095-byte WRAM0 array with compact startup code.
-
-### Phase 3 sprite visibility and runtime OAM pools
-
-`refactor-p3-sprite-pools` builds on WRAM arrays (#51). Static Sprite/SpriteManager hide sets
-Y=0, leaving X/tile/flags; show_at supplies screen coordinates and publishes Y last. Composite
-helpers apply to every member, with show_composite_at placing the first registered part and
-keeping original offsets. Hidden Y is the visibility mechanism: moving Y may make a sprite visible
-again; logical positions are owned by the game. Startup sprite data is unchanged.
-
-`RustBoy::create_sprite_pool` reserves a contiguous shadow-OAM range in the existing OAM
-allocator, disjoint from static sprites and other pools. One WRAM array byte per entry records
-occupancy. Standard-library routines allocate lowest free indices (relative to the pool), release
-with all OAM bytes cleared before publishing free, hide without freeing, or write B/C screen
-position and D/E tile/flags with Y last. Full/invalid/free indices, invalid positions, double
-release and odd 8x16 tile indices report carry without writes. A fresh allocation is hidden/zeroed.
-Pools alone enable normal shadow OAM/DMA; IME is unchanged. One init/main producer is enforced
-for typed/visible handler calls, including transitively, via MainLoopOnly. Multi-byte OAM writes
-can span DMA; write during VBlank or use game-owned state when frame-coherent updates are needed.
-Emulator tests cover static/pool coexistence, two pools, both sizes, exhaustion, reuse, every
-rejection status and static visibility; unit tests cover capacity and handler reachability.
-
-`refactor-p3-entities` adds an engine-facing entity vocabulary over those pool operations:
-`create_entity_pool` creates one-sprite entities, `spawn` allocates a hidden slot, `set_sprite`
-updates and shows it, `hide` keeps it allocated, and `despawn` clears and releases it. Runtime
-entity handles remain in `A` as relative pool indices; game code owns any persistent entity
-state. This deliberately keeps entity composition and per-entity component storage outside this
-small spawn/despawn API.
-
-### Phase 3 text rendering (`refactor-p3-text`)
-
-`stdlib::graphics::text` owns ASCII glyph mapping, map layout, resumable queued printing, and
-unsigned-decimal / packed-BCD encoders. The engine loads fonts through the existing background
-tile allocator and reserves printer cursors and number buffers through the variable allocator
-(WRAM arrays, #51). A print job queues until full and resumes at its cursor on the next main-loop
-call; carry clear means queued, not yet flushed. It never writes VRAM directly. Newlines and
-wrapping return to the initial X column; unsupported glyphs and overflowing layouts panic before
-allocating a job. Decimal scores have five leading-zero digits, BCD scores four; invalid BCD
-leaves the previous buffer/cursor intact. Jobs are single main/init producers; handler calls to
-printing are rejected through the existing queue dependency check. Replacing a number or resetting
-a job retains already pending writes: the final new value is correct, but a partial old value can
-be visible while it drains. This is text output, without proportional fonts or Unicode shaping.

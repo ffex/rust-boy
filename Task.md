@@ -341,7 +341,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
       `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
-- [x] WRAM arrays (branch `refactor-p3-wram-arrays`): contiguous typed byte/word arrays,
+- [x] WRAM arrays (branch `refactor-p3-wram-arrays`; HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`,
+      `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
       Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG

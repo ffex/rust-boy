@@ -6,17 +6,6 @@ The refactoring of [Task.md](Task.md) Phases 0 to 2, and the Phase 3 features do
 together: every breaking change of the refactoring is in this release, so a program migrates once. The reasons are in
 [CONTEXT.md](CONTEXT.md): the levels assessment (§3) and the bug catalogue (§4, B1–B30).
 
-### Text rendering (Phase 3)
-
-- `load_font` loads contiguous ASCII tile fonts; `create_text_printer` prints strings with
-  newline/wrapping support on either tilemap. `TextPrinter::step` resumes when the VBlank
-  queue fills; carry clear means all glyphs are queued. Reset explicitly to print again.
-- `create_number_printer` supports five-digit unsigned decimal and four-digit packed BCD,
-  with leading zeroes. `NumberPrinter::set_value(labels)` reads DE and restarts the job;
-  invalid BCD returns carry without changing its buffer. Call `step` from the main loop.
-- Existing example assembly is unchanged. Fonts use existing background tile capacity;
-  each printer adds a WRAM word cursor, and scores add four or five WRAM bytes.
-
 ### Highlights
 
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
@@ -65,6 +54,12 @@ together: every breaking change of the refactoring is in this release, so a prog
   `EntityPool::spawn` claims a hidden slot, `set_sprite` shows or updates it, `hide` keeps it
   alive, and `despawn` clears and frees it. Each entity is one hardware sprite, and its index
   is a runtime value in `A`.
+- **Text and scores** (Phase 3): `load_font` loads a contiguous ASCII tile font; `create_text_printer` prints a
+  string, with newlines and wrapping, on either map; `TextPrinter::step` resumes when the VBlank queue is full (carry
+  clear: every glyph is queued); `reset` prints it again. `create_number_printer` shows a five-digit unsigned decimal
+  or four-digit packed-BCD score with leading zeros; `NumberPrinter::set_value(labels)` reads DE and restarts the job,
+  and invalid BCD returns carry without changing the buffer. Fonts use the background tile capacity; each printer adds
+  a WRAM cursor word, a score four or five bytes. Example output is unchanged.
 - **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
   `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
   handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
@@ -126,6 +121,8 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Visibility and OAM pools** (Phase 3): sprite/composite hide and show-at snippets;
   `create_sprite_pool` reserves reusable runtime slots alongside static sprites. Pool allocation,
   release, hide and register-driven writes report carry on rejection and preserve IME.
+  `set_sprite_size` panics after the first pool as after the first sprite (a pool's Write routine checks 8x16
+  tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
   Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
   Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
 - **Tooling**:
@@ -157,7 +154,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 
@@ -178,6 +175,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `SECTION "Variables", WRAM0` (floating) | `SECTION "Variables", WRAM0[$C000]`: each variable section is at its address. A `raw()` section fixed where the variables are now overlaps them; let it float |
 | `get_address`: creation order across sections | section by section, in first-use order: the address the variable has when linked, once the program's variables are created (`build()` puts its own at the end of the last section) |
 | no HRAM variables | `gb.vars.create_hram_u8("hSpeed", 0)` (also `u16`, `i8`, `i16`): `Var::set` / `get` use `ldh`; HRAM gives variables $FF80-$FFBF, and the stack keeps the rest |
+| `VarType` matched exhaustively | it has `Array { element, len }` (WRAM arrays, `create_array`): add its arm |
 | `MemoryRegion` matched exhaustively | `MemoryRegion` is `#[non_exhaustive]`, and it has `SpriteTiles`, `BackgroundTiles`, `Wram0`, `Hram`: add a `_` arm |
 
 ### 3. Engine behaviour (Phase 1 fixes that change what a program does)

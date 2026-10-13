@@ -286,7 +286,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
 - [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
       off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
-- [ ] Sprite show / hide, OAM slot allocation
+- [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
+      static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
+      with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
+      operations with carry. Pools have a single init/main producer and handler use is rejected.
 - [ ] Text: font loading, print string, print number / BCD score
 - [ ] Background tile animation
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)

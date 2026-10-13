@@ -83,6 +83,7 @@ pub struct RustBoy {
 
     /// Whether the program uses the bounded VRAM write queue.
     vram_queue: bool,
+    main_only_routines: Vec<String>,
 
     /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
     /// builtins, animation delay. The sprite size is also the sprite manager's, which
@@ -130,6 +131,7 @@ impl RustBoy {
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
             vram_queue: false,
+            main_only_routines: Vec::new(),
             config,
         }
     }
@@ -164,7 +166,8 @@ impl RustBoy {
     /// needs 8x16 mode.
     ///
     /// # Panics
-    /// If sprites were already added with another size: call it before adding sprites.
+    /// If sprites or sprite pools were already added with another size: call it before adding
+    /// them (a pool's Write routine checks 8x16 tiles when the pool is created).
     pub fn set_sprite_size(&mut self, size: SpriteSize) -> &mut Self {
         self.sprites.set_size(size);
         self.config.sprite_size = size;
@@ -1018,6 +1021,16 @@ impl RustBoy {
                 });
             }
         }
+        for (interrupt, handler) in &self.handlers {
+            for routine in &self.main_only_routines {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
+            }
+        }
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
@@ -1691,6 +1704,59 @@ impl RustBoy {
             })
             .collect();
         self.sprites.create_composite(name, sprites)
+    }
+
+    /// Reserve OAM slots for runtime sprites. Pools and static sprites share 40 entries.
+    /// Tiles remain registered separately; pool writes take an existing hardware tile index.
+    /// All pool operations belong in init/main; handler use returns MainLoopOnly from build.
+    /// Create pools after [`RustBoy::set_sprite_size`]: the size is fixed from the first pool on.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, `count` is 0 or more than the free OAM entries, or the
+    /// pool's state or routine names are already used.
+    #[track_caller]
+    pub fn create_sprite_pool(&mut self, name: &str, count: u8) -> super::sprite_pool::SpritePool {
+        check_name("sprite pool", name);
+        let occupancy = format!("wPool{name}Used");
+        let routines = crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            0,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        );
+        assert!(
+            !self.vars.names().any(|(existing, _)| existing == occupancy),
+            "sprite pool state name already exists"
+        );
+        for routine in &routines {
+            assert!(
+                !self.function_exists(routine.name()),
+                "sprite pool routine name already exists"
+            );
+        }
+        let first = self.sprites.reserve_pool_slots(count);
+        self.vars.create_array(
+            &occupancy,
+            super::variables::ArrayElement::U8,
+            u16::from(count),
+            0,
+        );
+        for routine in crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            first,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        ) {
+            self.main_only_routines.push(routine.name().to_string());
+            self.define_routine(routine);
+        }
+        super::sprite_pool::SpritePool {
+            name: name.to_string(),
+            first,
+            count,
+        }
     }
 
     /// Give sprite `sprite` more tiles, from another source: frames spread over several

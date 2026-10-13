@@ -295,6 +295,36 @@ producers, polling and restart code belong in init/main, with one main-loop cons
 Handler calls to event-producing animation functions are rejected; raw RAM access and
 poll/restart snippets are caller contracts.
 
+### Sprite visibility and reusable OAM slots
+
+Static sprites have `gb.sprites.hide(id)` and `show_at(id, x, y)` snippets; composite
+helpers apply to every part. Hiding sets OAM Y to 0 and preserves X/tile/flags.
+Show supplies a screen position; changing Y while hidden can make a sprite visible,
+so keep logical positions in your game state. Runtime operations keep startup data intact.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let pool = gb.create_sprite_pool("Actors", 8);
+let mut spawn = Block::new();
+let full = gb.labels().local("pool_full");
+spawn.emit_all(pool.allocate()).jr_cond(Condition::C, &full)
+    .ld_b(40).ld_c(60).ld_d(0).ld_e(0)
+    .emit_all(pool.write()).label(&full);
+gb.init(spawn);
+# gb.build().unwrap();
+```
+
+Register tile data separately before displaying pooled sprites. Allocation returns A
+as a relative slot index and HL as its cleared, hidden shadow-OAM entry. Full pools
+return A=255 and carry. `write` uses A=index, B=X, C=Y, D=tile, E=attributes; `hide`
+keeps the slot allocated, while `release` clears it and permits reuse. Invalid/free
+indices and invalid coordinates set carry without writes; 8x16 writes reject odd tiles.
+All pool operations belong in init/main, with one producer; build rejects handler
+calls. Allocation changes AF/BC/HL, other pool operations AF/HL; DE and IME are kept.
+Pool writes publish Y last but aren't atomic to DMA: use VBlank for coherent updates.
+
 ## WRAM arrays (`RustBoy`)
 
 ```rust
@@ -610,7 +640,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
   variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
-  and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
+  and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout, runtime sprite pools (see
+  [Sprite visibility and reusable OAM slots](#sprite-visibility-and-reusable-oam-slots)),
   (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want, and
   completion events or callbacks; see [Per-animation timing](#per-animation-timing) and
   [Animation completion and replay](#animation-completion-and-replay)), joypad bindings, a main loop woken once a frame by

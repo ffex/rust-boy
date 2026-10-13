@@ -108,6 +108,13 @@ together: every breaking change of the refactoring is in this release, so a prog
   runtime BC-indexed access sets carry on bounds failure and performs no array access.
   Arrays share WRAM0 allocation, initialize through compact loops and keep little-endian words.
   `VarType` gains an `Array` variant; exhaustive downstream matches must handle it.
+- **Visibility and OAM pools** (Phase 3): sprite/composite hide and show-at snippets;
+  `create_sprite_pool` reserves reusable runtime slots alongside static sprites. Pool allocation,
+  release, hide and register-driven writes report carry on rejection and preserve IME.
+  `set_sprite_size` panics after the first pool as after the first sprite (a pool's Write routine checks 8x16
+  tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
+  Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
+  Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -137,7 +144,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 

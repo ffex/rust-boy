@@ -326,6 +326,20 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
   Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
 
+- **Sprite visibility and runtime OAM pools** (since `refactor-p3-sprite-pools`): `Sprite`/`SpriteManager::hide` sets
+  Y=0 and keeps X, tile and flags; `show_at` takes screen coordinates and writes Y last; `hide_composite` /
+  `show_composite_at` apply to every member, placing the first registered part and keeping the offsets. A hidden
+  sprite is shown again by any Y write; the game owns logical positions. `RustBoy::create_sprite_pool` reserves a
+  contiguous shadow-OAM range in the OAM allocator, apart from static sprites and other pools, with one WRAM array
+  byte per entry for occupancy. Its stdlib routines allocate the lowest free index (relative to the pool; the entry
+  comes back cleared and hidden in HL), release (clearing all four OAM bytes before marking it free), hide without
+  freeing, or write B/C position and D/E tile/flags with Y last. Full pools, invalid or free indices, invalid
+  positions, double releases and odd 8x16 tiles return carry without writing. A pool alone enables shadow OAM and DMA;
+  IME is unchanged. One init/main producer, enforced through `Error::MainLoopOnly` for handler calls (transitively).
+  Multi-byte OAM writes can span a DMA: write in VBlank or keep the state in the game when a frame must be coherent.
+  Emulator tests: static sprites with pools, two pools, both sizes, exhaustion, reuse, every rejection, static
+  visibility; unit tests: capacity and handler reachability.
+
 - **WRAM arrays** (since `refactor-p3-wram-arrays`): `ArrayElement` (signed or unsigned bytes and words), `WramArray`
   and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0 variables, contiguous `ds`
   bytes in the variable allocator's creation order, initialised by a compact local-label loop. Static

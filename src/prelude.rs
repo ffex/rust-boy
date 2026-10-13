@@ -50,3 +50,5 @@ pub use crate::stdlib::graphics::sprites::{ObjectPalette, SpriteFlags, SpritePri
 pub use crate::stdlib::inputs::PadButton;
 pub use crate::stdlib::interrupts::{Interrupt, Stat, Timer, TimerClock};
 pub use crate::stdlib::routine::{Regs, Routine};
+
+pub use crate::engine::SpritePool;

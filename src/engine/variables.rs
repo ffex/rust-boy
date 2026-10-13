@@ -68,6 +68,10 @@ impl WramArray {
     }
 
     /// Address of a statically checked element.
+    ///
+    /// # Panics
+    /// If `index` is not below the array's length.
+    #[track_caller]
     pub fn address(&self, index: u16) -> Expr {
         assert!(
             index < self.len,
@@ -80,6 +84,10 @@ impl WramArray {
     }
 
     /// Load a static element into A (byte) or HL (word). Changes A and, for words, HL.
+    ///
+    /// # Panics
+    /// If `index` is not below the array's length.
+    #[track_caller]
     pub fn get(&self, index: u16) -> Vec<Instr> {
         let mut code = Block::new();
         let address = self.address(index);
@@ -94,6 +102,10 @@ impl WramArray {
 
     /// Store a static element after checking index and the element's signed/unsigned range.
     /// Changes A only; a word is little-endian.
+    ///
+    /// # Panics
+    /// If `index` is not below the array's length, or `value` does not fit the element type.
+    #[track_caller]
     pub fn set(&self, index: u16, value: impl Into<i32>) -> Vec<Instr> {
         let value = value.into();
         let (min, max) = self.element.scalar().range();
@@ -234,6 +246,10 @@ impl Var {
     ///
     /// An HRAM variable is read with `ldh a, [name]`. The `If` comparisons test `a`: they
     /// work on 8-bit variables only.
+    ///
+    /// # Panics
+    /// If the variable is an array: use its [`WramArray`] handle.
+    #[track_caller]
     pub fn get(&self) -> Vec<Instr> {
         assert!(
             !matches!(self.var_type, VarType::Array { .. }),
@@ -464,6 +480,11 @@ impl VariableManager {
     /// Create a typed WRAM0 array with one initial value repeated in every element.
     /// Length must be nonzero and total byte size must fit u16; memory exhaustion is
     /// reported by build(). Recreating the same shape keeps its first initial value.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, is a block `build()` reserves, or names a variable of
+    /// another type or shape; if `len` is 0, the array's byte size does not fit a `u16`, or
+    /// `initial` does not fit the element type.
     /// ```
     /// use rust_boy::prelude::*;
     /// let mut gb = RustBoy::new();

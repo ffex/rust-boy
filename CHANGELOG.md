@@ -163,6 +163,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `SECTION "Variables", WRAM0` (floating) | `SECTION "Variables", WRAM0[$C000]`: each variable section is at its address. A `raw()` section fixed where the variables are now overlaps them; let it float |
 | `get_address`: creation order across sections | section by section, in first-use order: the address the variable has when linked, once the program's variables are created (`build()` puts its own at the end of the last section) |
 | no HRAM variables | `gb.vars.create_hram_u8("hSpeed", 0)` (also `u16`, `i8`, `i16`): `Var::set` / `get` use `ldh`; HRAM gives variables $FF80-$FFBF, and the stack keeps the rest |
+| `VarType` matched exhaustively | it has `Array { element, len }` (WRAM arrays, `create_array`): add its arm |
 | `MemoryRegion` matched exhaustively | `MemoryRegion` is `#[non_exhaustive]`, and it has `SpriteTiles`, `BackgroundTiles`, `Wram0`, `Hram`: add a `_` arm |
 
 ### 3. Engine behaviour (Phase 1 fixes that change what a program does)

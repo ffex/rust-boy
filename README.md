@@ -295,6 +295,58 @@ producers, polling and restart code belong in init/main, with one main-loop cons
 Handler calls to event-producing animation functions are rejected; raw RAM access and
 poll/restart snippets are caller contracts.
 
+### Sprite visibility and reusable OAM slots
+
+Static sprites have `gb.sprites.hide(id)` and `show_at(id, x, y)` snippets; composite
+helpers apply to every part. Hiding sets OAM Y to 0 and preserves X/tile/flags.
+Show supplies a screen position; changing Y while hidden can make a sprite visible,
+so keep logical positions in your game state. Runtime operations keep startup data intact.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let pool = gb.create_sprite_pool("Actors", 8);
+let mut spawn = Block::new();
+let full = gb.labels().local("pool_full");
+spawn.emit_all(pool.allocate()).jr_cond(Condition::C, &full)
+    .ld_b(40).ld_c(60).ld_d(0).ld_e(0)
+    .emit_all(pool.write()).label(&full);
+gb.init(spawn);
+# gb.build().unwrap();
+```
+
+Register tile data separately before displaying pooled sprites. Allocation returns A
+as a relative slot index and HL as its cleared, hidden shadow-OAM entry. Full pools
+return A=255 and carry. `write` uses A=index, B=X, C=Y, D=tile, E=attributes; `hide`
+keeps the slot allocated, while `release` clears it and permits reuse. Invalid/free
+indices and invalid coordinates set carry without writes; 8x16 writes reject odd tiles.
+All pool operations belong in init/main, with one producer; build rejects handler
+calls. Allocation changes AF/BC/HL, other pool operations AF/HL; DE and IME are kept.
+Pool writes publish Y last but aren't atomic to DMA: use VBlank for coherent updates.
+
+## WRAM arrays (`RustBoy`)
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let scores = gb.vars.create_array("wScores", ArrayElement::U16, 300, 100);
+gb.init(scores.set(299, 65535)); // static index and value checked here
+let mut code = Block::new();
+code.ld(R16::BC, 256u16).ld(R16::DE, 1234u16)
+    .emit_all(scores.set_indexed(gb.labels()));
+gb.add_to_main_loop(code); // carry set if BC >= 300; nothing written on rejection
+# gb.build().unwrap();
+```
+
+Arrays occupy contiguous WRAM0 bytes and share the variable allocator. Initialization
+repeats the supplied value with a compact loop. Byte elements use `U8`/`I8`, words
+`U16`/`I16` and little-endian storage. Runtime getters return A for bytes or HL for words;
+setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` returns
+HL and carry status for custom operations; branch on carry before dereferencing it.
+Static operations panic on invalid indices/values; runtime bounds rejection sets carry.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:
@@ -587,7 +639,9 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
 - **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
-  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
+  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
+  and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout, runtime sprite pools (see
+  [Sprite visibility and reusable OAM slots](#sprite-visibility-and-reusable-oam-slots)),
   (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want, and
   completion events or callbacks; see [Per-animation timing](#per-animation-timing) and
   [Animation completion and replay](#animation-completion-and-replay)), joypad bindings, a main loop woken once a frame by
@@ -657,55 +711,3 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
-
-### WRAM arrays
-
-```rust
-use rust_boy::prelude::*;
-
-let mut gb = RustBoy::new();
-let scores = gb.vars.create_array("wScores", ArrayElement::U16, 300, 100);
-gb.init(scores.set(299, 65535)); // static index and value checked here
-let mut code = Block::new();
-code.ld(R16::BC, 256u16).ld(R16::DE, 1234u16)
-    .emit_all(scores.set_indexed(gb.labels()));
-gb.add_to_main_loop(code); // carry set if BC >= 300; nothing written on rejection
-# gb.build().unwrap();
-```
-
-Arrays occupy contiguous WRAM0 bytes and share the variable allocator. Initialization
-repeats the supplied value with a compact loop. Byte elements use `U8`/`I8`, words
-`U16`/`I16` and little-endian storage. Runtime getters return A for bytes or HL for words;
-setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` returns
-HL and carry status for custom operations; branch on carry before dereferencing it.
-Static operations panic on invalid indices/values; runtime bounds rejection sets carry.
-
-### Sprite visibility and reusable OAM slots
-
-Static sprites have `gb.sprites.hide(id)` and `show_at(id, x, y)` snippets; composite
-helpers apply to every part. Hiding sets OAM Y to 0 and preserves X/tile/flags.
-Show supplies a screen position; changing Y while hidden can make a sprite visible,
-so keep logical positions in your game state. Runtime operations keep startup data intact.
-
-```rust
-use rust_boy::prelude::*;
-
-let mut gb = RustBoy::new();
-let pool = gb.create_sprite_pool("Actors", 8);
-let mut spawn = Block::new();
-let full = gb.labels().local("pool_full");
-spawn.emit_all(pool.allocate()).jr_cond(Condition::C, &full)
-    .ld_b(40).ld_c(60).ld_d(0).ld_e(0)
-    .emit_all(pool.write()).label(&full);
-gb.init(spawn);
-# gb.build().unwrap();
-```
-
-Register tile data separately before displaying pooled sprites. Allocation returns A
-as a relative slot index and HL as its cleared, hidden shadow-OAM entry. Full pools
-return A=255 and carry. `write` uses A=index, B=X, C=Y, D=tile, E=attributes; `hide`
-keeps the slot allocated, while `release` clears it and permits reuse. Invalid/free
-indices and invalid coordinates set carry without writes; 8x16 writes reject odd tiles.
-All pool operations belong in init/main, with one producer; build rejects handler
-calls. Allocation changes AF/BC/HL, other pool operations AF/HL; DE and IME are kept.
-Pool writes publish Y last but aren't atomic to DMA: use VBlank for coherent updates.

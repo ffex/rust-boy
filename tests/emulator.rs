@@ -2532,7 +2532,11 @@ fn wram_arrays_initialize_and_check_runtime_indices_across_pages() {
         let array = game.vars.create_array("wArray", element, 300, initial);
         let after = game.vars.create_u8("wArrayAfter", 0xa5);
         let mut code = Block::new();
-        for (case, index) in [0u16, 1, 255, 256, 299, 300, 65535].into_iter().enumerate() {
+        // 512: high byte above 300's, low byte below it (only the high-byte compare rejects it)
+        for (case, index) in [0u16, 1, 255, 256, 299, 300, 512, 65535]
+            .into_iter()
+            .enumerate()
+        {
             let result = game.vars.create_u16(&format!("wArrayResult{case}"), 0);
             let status = game.vars.create_u8(&format!("wArrayStatus{case}"), 0);
             let valid = index < 300;

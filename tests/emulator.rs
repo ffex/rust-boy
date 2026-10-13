@@ -2709,6 +2709,32 @@ fn text_printer_resumes_long_strings_and_formats_scores() {
 }
 
 #[test]
+fn a_text_job_of_more_than_256_glyphs_prints_all_and_stops() {
+    // The cursor is a 16-bit word: past 255 glyphs its high byte counts too
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+    let text: String = (0..300)
+        .map(|i| char::from(b'0' + (i % 10) as u8))
+        .collect();
+    let printer = game.create_text_printer("Long", font, TilemapArea::Map9800, 0, 0, &text);
+    game.add_to_main_loop(printer.step());
+    let mut gb = Rom::build(&game.build().unwrap(), &[]).boot();
+    gb.run_frames(60);
+    for i in 0..300u16 {
+        assert_eq!(gb.read(hw::SCRN0.value + i), (i % 10) as u8, "glyph {i}");
+    }
+    let cursor = gb.symbol("wTextLongCursor");
+    assert_eq!(
+        u16::from_le_bytes([gb.read(cursor), gb.read(cursor + 1)]),
+        300
+    );
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
+
+#[test]
 fn score_encoders_cover_decimal_boundaries_and_reject_invalid_bcd() {
     if !rgbds_enabled() {
         return;
@@ -2753,7 +2779,8 @@ fn score_encoders_cover_decimal_boundaries_and_reject_invalid_bcd() {
         );
         let invalid = game.vars.create_u8("wCarry", 0);
         let mut init = Block::new();
-        init.ld(R16::DE, 0x1234)
+        // The old value shares no digit with the invalid ones: a partial write would show
+        init.ld(R16::DE, 0x5678)
             .emit_all(score.set_value(game.labels()))
             .ld(R16::DE, value)
             .emit_all(score.set_value(game.labels()))
@@ -2768,7 +2795,7 @@ fn score_encoders_cover_decimal_boundaries_and_reject_invalid_bcd() {
         let bad = value != 0 && value != 0x9999;
         assert_eq!(gb.read_symbol(invalid.name()), u8::from(bad));
         let expected = if bad {
-            [1, 2, 3, 4]
+            [5, 6, 7, 8]
         } else if value == 0 {
             [0; 4]
         } else {

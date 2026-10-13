@@ -50,6 +50,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
   With the builtin `InitOamDma`, so are the labels of the code it copies, `OamDmaCode` and `OamDmaCodeEnd`
   (`Definition::BuiltinLabel`).
+- **Runtime entities** (Phase 3): `RustBoy::create_entity_pool` reserves reusable OAM slots;
+  `EntityPool::spawn` claims a hidden slot, `set_sprite` shows or updates it, `hide` keeps it
+  alive, and `despawn` clears and frees it. Each entity is one hardware sprite, and its index
+  is a runtime value in `A`.
 - **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
   `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
   handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or

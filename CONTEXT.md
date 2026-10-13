@@ -1417,3 +1417,10 @@ for typed/visible handler calls, including transitively, via MainLoopOnly. Multi
 can span DMA; write during VBlank or use game-owned state when frame-coherent updates are needed.
 Emulator tests cover static/pool coexistence, two pools, both sizes, exhaustion, reuse, every
 rejection status and static visibility; unit tests cover capacity and handler reachability.
+
+`refactor-p3-entities` adds an engine-facing entity vocabulary over those pool operations:
+`create_entity_pool` creates one-sprite entities, `spawn` allocates a hidden slot, `set_sprite`
+updates and shows it, `hide` keeps it allocated, and `despawn` clears and releases it. Runtime
+entity handles remain in `A` as relative pool indices; game code owns any persistent entity
+state. This deliberately keeps entity composition and per-entity component storage outside this
+small spawn/despawn API.

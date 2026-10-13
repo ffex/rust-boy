@@ -9,6 +9,7 @@
 
 mod animations;
 mod config;
+mod entities;
 mod error;
 mod functions;
 mod inputs;
@@ -23,6 +24,7 @@ mod variables;
 
 pub use animations::AnimationType;
 pub use config::{Lcdc, Palettes, RustBoyConfig};
+pub use entities::EntityPool;
 pub use error::{Definition, Error};
 pub use functions::BuiltinFunction;
 pub use inputs::InputManager;

@@ -292,7 +292,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       operations with carry. Pools have a single init/main producer and handler use is rejected.
 - [x] Text: font loading, print string, print number / BCD score (`refactor-p3-text`, stacked on
       WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
-- [ ] Background tile animation
+- [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
+      loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
 - [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
 
 ### Animation

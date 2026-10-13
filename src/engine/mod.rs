@@ -8,6 +8,7 @@
 //! [`Error`]).
 
 mod animations;
+mod background_animation;
 mod config;
 mod entities;
 mod error;
@@ -51,4 +52,5 @@ pub(crate) fn panic_message<R>(f: impl FnOnce() -> R) -> String {
         .unwrap_or_default()
 }
 
+pub use background_animation::{BackgroundAnimation, BackgroundAnimationConfig};
 pub use text::{Font, NumberFormat, NumberPrinter, TextPrinter};

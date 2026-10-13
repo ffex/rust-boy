@@ -60,6 +60,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   or four-digit packed-BCD score with leading zeros; `NumberPrinter::set_value(labels)` reads DE and restarts the job,
   and invalid BCD returns carry without changing the buffer. Fonts use the background tile capacity; each printer adds
   a WRAM cursor word, a score four or five bytes. Example output is unchanged.
+- **Background tile animation** (Phase 3): `BackgroundAnimationConfig` (fixed cells, preloaded tile-ID frames, either
+  map) and `create_background_animation`, a main-loop animator with loop, ping-pong or once playback and a hold per
+  frame. `step` finishes a frame the full queue held back before advancing; `pause`, `resume`, `restart` and `finished`.
+  Seven WRAM bytes and ROM tables per animator. Frames of several cells can show in pieces while the twelve-write VBlank
+  queue drains; `finished` means queued, not flushed. Example output is unchanged.
 - **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
   `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
   handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
@@ -154,7 +159,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 

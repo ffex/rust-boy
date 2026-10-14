@@ -1520,7 +1520,7 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
   Initial presses and repeats share one emitted action body, so local labels in bounded movement and
   other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
-- **Engine:** no scenes, RNG, sprite collision, 16-bit math, loops/switch; screen-pixel solid-tile checks exist as
+- **Engine:** scene dispatch is available through `SceneManager`; no RNG, sprite collision, 16-bit math, loops/switch; screen-pixel solid-tile checks exist as
   `TileCollision` (`refactor-p3-tile-collision`) (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).

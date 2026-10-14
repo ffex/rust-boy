@@ -53,6 +53,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
   conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
+- **Scenes** (Phase 3): `SceneManager` builds a dispatcher for byte-sized scene IDs. Add its dispatcher through
+  `RustBoy::call_routine`, register scene update routines, and use `switch_to` to select the state for the next frame.
+  Scene routines and their dependencies are included automatically; unknown states and empty dispatchers
+  do nothing. `switch_to` requires registering the dispatcher so its state byte is declared.
 - **Audio initialization** (Phase 3): `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or
   powered-on audio before user initialization, including soft resets. Inherit preserves old output.
   `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.

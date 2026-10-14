@@ -7,8 +7,8 @@
 //! [`scroll_by`] reads the current SCX/SCY: when an `on_stat` handler changes them mid-frame
 //! (a split screen), VBlank code reads the value of the last split, not the camera.
 //! `GetTileByPixel` takes map pixels: add SCX/SCY to screen coordinates while scrolled.
-//! `RustBoy`'s start-up code does not write SCX/SCY: after a soft reset the camera keeps its
-//! scroll unless init code calls [`set_scroll`].
+//! `RustBoy`'s start-up resets SCX/SCY to zero on power-on and soft reset; init code can call
+//! [`set_scroll`] to choose a different starting position.
 
 use crate::asm::{Block, Instr, Mem, R8};
 use crate::hw;

@@ -844,8 +844,9 @@ impl RustBoy {
     /// ([`Error::MemoryFull`]), code or data in a RAM section or a section name used twice
     /// ([`Error::Section`]).
     ///
-    /// Raw RGBDS conditionals are not evaluated: their definitions are left to
-    /// rgbasm, and conditional `PURGE` conservatively forgets a prior definition.
+    /// Raw RGBDS conditionals and `REPT`/`FOR` iterations are not evaluated: their
+    /// definitions (including tails skipped by `BREAK`) are left to rgbasm. A
+    /// `PURGE` in either conservatively forgets a prior definition.
     /// Macros and symbols defined only by included user files are also checked by
     /// rgbasm. Definite duplicate definitions outside conditionals are rejected here.
     ///
@@ -2284,6 +2285,35 @@ mod tests {
             asm.raw("DEF TEMP EQU 1\nPURGE TEMP\nDEF TEMP EQU 2\nDEF TEMP EQU 3");
         });
         assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "TEMP"));
+    }
+
+    #[test]
+    fn test_raw_iterations_defer_definitions_but_keep_later_duplicate_checks() {
+        for raw in [
+            "REPT 0\nMain: db 1\nENDR",
+            "FOR idx, 0\nMain: db 1\nENDR",
+            "REPT 1\nBREAK\nMain: db 1\nENDR",
+            "FOR idx, 1\nBREAK\nMain: db 1\nENDR",
+            "REPT 1\nFOR idx, 0\nMain: db 1\nENDR\nENDR",
+            "DEF TEMP EQU 1\nREPT 1\nPURGE TEMP\nENDR\nDEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nFOR idx, 1\nPURGE TEMP\nENDR\nDEF TEMP EQU 2",
+            "MACRO unused\nREPT 0\nPURGE rLCDC\nENDR\nENDM",
+        ] {
+            let mut gb = RustBoy::new();
+            // Separate instructions exercise nesting across raw instruction boundaries.
+            gb.raw(|asm| {
+                for line in raw.lines() {
+                    asm.raw(line);
+                }
+            });
+            crate::asm::label_check::rgbds_rom(&gb.build().unwrap());
+            gb.raw(|asm| {
+                asm.raw("Definite: db 1\nDefinite: db 2");
+            });
+            assert!(
+                matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "Definite")
+            );
+        }
     }
 
     #[test]

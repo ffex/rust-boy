@@ -554,13 +554,14 @@ pub(crate) enum DefinitionEvent {
     Purge(String),
 }
 
-/// RGBDS conditionals are left to the assembler. Definitions inside them are not
-/// definite; a PURGE inside one may remove an earlier definition. Keep the nesting
-/// state across chunks, since raw assembly can open a conditional in one chunk and
-/// close it in another.
+/// RGBDS conditionals and iterations are left to the assembler. Their definitions
+/// are not definite: a loop may execute zero times or BREAK before a definition.
+/// A PURGE inside either may remove an earlier definition. Keep nesting across
+/// chunks, since raw assembly can open a block in one chunk and close it in another.
 #[derive(Default)]
 pub(crate) struct DefinitionScanner {
     conditional_depth: usize,
+    iteration_depth: usize,
     macro_depth: usize,
 }
 
@@ -590,6 +591,14 @@ impl DefinitionScanner {
             if self.macro_depth != 0 {
                 continue;
             }
+            if keyword.eq_ignore_ascii_case("REPT") || keyword.eq_ignore_ascii_case("FOR") {
+                self.iteration_depth += 1;
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("ENDR") {
+                self.iteration_depth = self.iteration_depth.saturating_sub(1);
+                continue;
+            }
             if keyword.eq_ignore_ascii_case("IF") {
                 self.conditional_depth += 1;
                 continue;
@@ -606,7 +615,7 @@ impl DefinitionScanner {
                 }
                 continue;
             }
-            if self.conditional_depth != 0 {
+            if self.conditional_depth != 0 || self.iteration_depth != 0 {
                 continue;
             }
             if let Some(label) = label {
@@ -758,6 +767,25 @@ mod tests {
                 DefinitionEvent::Purge("Old".into()),
                 DefinitionEvent::Define("Visible".into())
             ]
+        );
+    }
+
+    #[test]
+    fn test_iteration_scan_state_spans_chunks_and_keeps_possible_purges() {
+        use super::super::Instr;
+        let raw = |line: &str| Instr::Raw { line: line.into() };
+        let mut scanner = DefinitionScanner::default();
+        assert_eq!(
+            scanner.scan(&[raw("DEF Old EQU 1\nREPT 0\nFOR idx, 1")]),
+            [DefinitionEvent::Define("Old".into())]
+        );
+        assert_eq!(
+            scanner.scan(&[raw("BREAK\nHidden: db 1\nPURGE Old\nENDR")]),
+            [DefinitionEvent::Purge("Old".into())]
+        );
+        assert_eq!(
+            scanner.scan(&[raw("StillHidden: db 1\nENDR\nVisible: db 1")]),
+            [DefinitionEvent::Define("Visible".into())]
         );
     }
 

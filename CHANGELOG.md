@@ -182,6 +182,8 @@ together: every breaking change of the refactoring is in this release, so a prog
     and duplicate global definitions as `Error::NameConflict` before assembly. Raw RGBDS conditional
     definitions are deferred to the assembler, and `PURGE` permits a fresh definition; a conditional
     purge conservatively forgets the previous definition. Unexpanded macro bodies are skipped.
+    `REPT`/`FOR` bodies and tails skipped by `BREAK` are deferred too, so zero iterations and breaks
+    no longer cause false conflicts; definite duplicate checks resume after the iteration.
   - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
     macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
 

@@ -1537,6 +1537,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   permits a fresh definition while later definite duplicates are still rejected. Unexpanded macro bodies
   are skipped, including their conditional and purge directives. Conditional and macro nesting
   persists across chunks; regression programs assemble with RGBDS.
+  `REPT`/`FOR` bodies are likewise deferred, covering zero iterations and tails skipped by `BREAK`.
+  Iteration nesting persists across instructions and chunks; possible purges conservatively forget prior
+  definitions, while definite duplicates after the iteration remain errors. Linked regressions cover these cases.
 
 ---
 

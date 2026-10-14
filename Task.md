@@ -418,6 +418,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       are conservatively deferred to the assembler, and `PURGE` ends a symbol lifetime; regression
       programs cover conditional branches, conditional purge, multiple purged symbols and later duplicates.
       Unexpanded macro bodies are skipped, including definitions split across instructions.
+      Raw `REPT`/`FOR` definitions, including tails skipped by `BREAK`, are also deferred; nesting
+      persists across instructions and chunks, possible purges forget prior definitions, and definite
+      duplicates after iterations are still rejected. Linked regressions cover zero iterations and breaks.
 - [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
       after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
       branch `refactor-p3-vram-queue-followups`.

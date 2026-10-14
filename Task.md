@@ -362,7 +362,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
       Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG
-- [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
+- [ ] Sprite-vs-sprite collision (AABB)
+- [x] Generalised tile collision (`refactor-p3-tile-collision`):
+      `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using
+      the active map and current SCX/SCY; sample multiple points for larger objects.
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /

@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Tile collision checks** (`engine::TileCollision`): test screen pixels against a set of
+  solid tile IDs using the active background map and current camera scroll.
+
 - **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
   select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
 

@@ -326,7 +326,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and
   flags, and leave sprites in screen coordinates. `follow_background_point` keeps the world pixel (B, C) at a screen
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
-  Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
+  Start-up resets SCX/SCY to 0 on power-on and soft reset; `init` can set a custom camera. Sprites are screen-space today
+  (world-coordinate sprites are undecided, see Task.md): programs that need world positions track them and use
+  `follow_background_point`.
 
 - **PNG and binary tile assets** (since `refactor-p3-png-assets`): `engine::assets::png_to_2bpp` converts a static PNG
   to tile bytes with the `png` crate (decompression, sample expansion, interlacing, checksums). Palette slots map

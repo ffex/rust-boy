@@ -245,6 +245,9 @@ off so VRAM is readable:
 gb.call_args("GetTileByScreenPixel", gb.sprites.get_pivot(ball, 0, 1));
 ```
 
+Startup resets the camera to (0, 0), including after soft reset. Put a custom `set_background_scroll` call in `init`
+when the game should start elsewhere.
+
 ### Arbitrary metasprites
 
 A metasprite is a list of hardware parts relative to a screen anchor. Parts may have

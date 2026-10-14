@@ -3993,3 +3993,38 @@ fn get_tile_by_screen_pixel_adds_background_scroll_before_lookup() {
     assert_eq!(gb.read_symbol("wUnscrolledTile"), 17);
     assert_eq!(gb.read_symbol("wScrolledTile"), 93);
 }
+
+#[test]
+fn engine_soft_reset_returns_background_camera_to_origin() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.set_soft_reset(true);
+    let done = game.labels().local("camera_set_once");
+    let mut set_once = Block::new();
+    set_once
+        .ld_a_addr_def("wCameraWritten")
+        .and(R8::A)
+        .jp_cond(Condition::NZ, &done)
+        .ld_a(1)
+        .ld_addr_def_a("wCameraWritten")
+        .ld_a(64)
+        .ldh(Mem::addr(hw::SCX), R8::A)
+        .ld_a(48)
+        .ldh(Mem::addr(hw::SCY), R8::A)
+        .label(&done);
+    game.add_to_main_loop(set_once);
+    game.raw(|asm| {
+        asm.chunk(Chunk::Data).label("wCameraWritten").ds("1");
+    });
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (64, 48));
+
+    gb.run_script(&[
+        (20, &[Button::A, Button::B, Button::Select, Button::Start]),
+        (3, &[]),
+    ]);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (0, 0));
+}

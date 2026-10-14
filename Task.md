@@ -255,9 +255,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `stdlib::graphics::scroll` snippets reused by `RustBoy`, wrapping at 256; emit in init or VBlank)
 - [ ] Follow-ups of the background camera (from the review of #43):
       - [x] `GetTileByScreenPixel` adds SCX/SCY to screen coordinates before the shared `GetTileByPixel` lookup.
-      - [ ] Whether sprites should get world coordinates or a "follow sprite" helper (today
-            `follow_background_point` needs world positions kept by the program).
-      - [ ] Whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today).
+      - [ ] Decide whether engine sprites get world coordinates or a "follow sprite" helper. Open: no decision is
+            recorded (the review of #43 left it as a maintainer question). Today sprites stay in screen coordinates and
+            callers that need world positions track them and use `follow_background_point`; no code changed here.
+      - [x] Start-up resets SCX/SCY to zero on power-on and soft reset; user init can choose another position.
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
 - [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be

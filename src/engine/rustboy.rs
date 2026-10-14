@@ -998,7 +998,9 @@ impl RustBoy {
             lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
         }
         if let Some(window) = self.config.window {
-            lcdc = lcdc | hw::LCDCF_WINON;
+            if window.visible_on_startup {
+                lcdc = lcdc | hw::LCDCF_WINON;
+            }
             if window.tilemap == TilemapArea::Map9C00 {
                 lcdc = lcdc | hw::LCDCF_WIN9C00;
             }
@@ -4377,7 +4379,7 @@ mod tests {
     fn test_window_from_the_config_at_start_up() {
         // The start-up code on the test CPU: WX/WY before user init, the window bits in the
         // LCD-on value. LCDC writes of init code are replaced by that value (documented on
-        // `show_window`): a configured window hidden in init shows anyway.
+        // `show_window`): a visible-by-default configured window hidden in init shows anyway.
         for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
             let mut gb =
                 RustBoy::with_config(RustBoyConfig::default().window(Window::new(map, 40, 112)));
@@ -4401,6 +4403,35 @@ mod tests {
             assert_mem(&cpu, "rWX", 47);
             assert_mem(&cpu, "rWY", 112);
             assert_mem(&cpu, "rLCDC", 0x83 | 0x20 | map_bit);
+        }
+    }
+
+    #[test]
+    fn test_window_hidden_at_start_up_keeps_map_bit_and_position() {
+        for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
+            let mut gb = RustBoy::with_config(
+                RustBoyConfig::default()
+                    .window(Window::new(map, 40, 112).visible_on_startup(false)),
+            );
+            let (code, mut cpu) = startup(&mut gb);
+            cpu.stubs.insert("Memcopy".to_string());
+            cpu.consts.retain(|text, _| !text.contains('|'));
+            for flag in [
+                hw::LCDCF_ON,
+                hw::LCDCF_BGON,
+                hw::LCDCF_OBJON,
+                hw::LCDCF_OBJ8,
+                hw::LCDCF_WINON,
+                hw::LCDCF_WIN9C00,
+            ] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.run(&code);
+            assert_mem(&cpu, "rWX", 47);
+            assert_mem(&cpu, "rWY", 112);
+            let lcdc = cpu.mem["rLCDC"];
+            assert_eq!(lcdc & 0x20, 0, "LCDCF_WINON must stay clear");
+            assert_eq!(lcdc, 0x83 | map_bit);
         }
     }
 

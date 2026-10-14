@@ -54,6 +54,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
   conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
+- **Scenes** (Phase 3): `SceneManager` builds a dispatcher for byte-sized scene IDs. Add its dispatcher through
+  `RustBoy::call_routine`, register scene update routines, and use `switch_to` to select the state for the next frame.
+  Scene routines and their dependencies are included automatically; unknown states and empty dispatchers
+  do nothing. `switch_to` requires registering the dispatcher so its state byte is declared.
 - **Audio initialization** (Phase 3): `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or
   powered-on audio before user initialization, including soft resets. Inherit preserves old output.
   `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.
@@ -121,8 +125,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
   `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded because
   WX=166 glitches on DMG. Raw coordinates are available for clipping/off-screen placement. Window
-  and background share tiles/BGP and require LCDC bit 0 on DMG. `show_window(true)` writes no
-  position: without a configured window, set one first. Existing output is unchanged.
+  and background share tiles/BGP; LCDC bit 0 gates both on DMG. `Window` is non-exhaustive, supports
+  `Window::from_raw`, and can start hidden with `visible_on_startup(false)`. The final LCDC value comes from config;
+  runtime window/LCDC snippets should run in VBlank.
+- **Window migration**: replace external `Window { tilemap, wx, wy }` literals with `Window::from_raw(tilemap, wx, wy)`
+  or `Window::new(tilemap, x, y)`; the type is now `#[non_exhaustive]` for future-compatible settings.
 - **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
   LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
   or `$9C00`; map-pixel coordinates and the calling convention are unchanged.
@@ -181,6 +188,9 @@ together: every breaking change of the refactoring is in this release, so a prog
   `wReleasedKeys` variable. `RustBoy::add_inputs` creates it automatically.
 - **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
   validation and the late-VBlank queue test.
+- **Pseudo-random bytes** (Phase 3): `stdlib::random::random_u8` returns the next byte of a
+  repeatable 8-bit LFSR sequence in A and stores its state in `wRandomSeed`; zero state falls back to `$A7`.
+  Custom nonzero seeds retain their initial value; runtime zero states recover on the next call.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

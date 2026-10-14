@@ -1,6 +1,7 @@
 //! Audio power, mixer configuration and one-shot effects. Snippets preserve IME and all registers
 //! except AF. Initialization resets the APU, silences its channels and sets the mixer;
 //! it does not erase wave RAM or generate sound. Runtime power-on also resets channels.
+pub mod music;
 pub mod sfx;
 pub use sfx::*;
 

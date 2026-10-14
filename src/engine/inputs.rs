@@ -107,9 +107,14 @@ impl InputManager {
                     let id = first_id + index;
                     let new_stem = format!("input_repeat_new_{id}");
                     let held_stem = format!("input_repeat_held_{id}");
+                    let action_stem = format!("input_repeat_action_{id}");
                     let done_stem = format!("input_repeat_done_{id}");
-                    let [new, held, done] =
-                        labels.locals([new_stem.as_str(), held_stem.as_str(), done_stem.as_str()]);
+                    let [new, held, action, done] = labels.locals([
+                        new_stem.as_str(),
+                        held_stem.as_str(),
+                        action_stem.as_str(),
+                        done_stem.as_str(),
+                    ]);
                     let state = format!("wInputRepeat_{id}");
                     let mut code = Block::new();
                     code.ld_a_addr_def("wNewKeys").and(binding.button.flag());
@@ -120,12 +125,10 @@ impl InputManager {
                     code.label(&held);
                     code.ld_a_addr_def(&state).dec(R8::A).ld_addr_def_a(&state);
                     code.jp_cond(Condition::NZ, &done);
-                    code.ld_a(interval).ld_addr_def_a(&state);
-                    code.emit_all(binding.action.clone());
-                    code.jp(&done);
+                    code.ld_a(interval).ld_addr_def_a(&state).jp(&action);
                     code.label(&new).ld_a(delay).ld_addr_def_a(&state);
-                    code.emit_all(binding.action.clone());
-                    code.jp(&done);
+                    // Emit label-bearing user snippets once for both trigger paths.
+                    code.label(&action).emit_all(binding.action.clone());
                     code.label(&done);
                     out.extend(code.into_instrs());
                 }

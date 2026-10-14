@@ -1513,6 +1513,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Input:** (p3-input) held/just-pressed/released/repeat bindings. Multiple input managers share
   one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
+  Initial presses and repeats share one emitted action body, so local labels in bounded movement and
+  other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).

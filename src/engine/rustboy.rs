@@ -3044,6 +3044,23 @@ mod tests {
     }
 
     #[test]
+    fn test_repeat_action_with_local_labels_links() {
+        let mut gb = RustBoy::new();
+        let (paddle, _) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        // Bounded movement contains local branch labels. The initial press and
+        // subsequent repeats must share one copy of those definitions.
+        inputs.on_repeat(
+            PadButton::Left,
+            3,
+            2,
+            gb.sprites.move_left_limit(paddle, 1, 8),
+        );
+        gb.add_inputs(inputs);
+        assert_links(&gb.build().unwrap());
+    }
+
+    #[test]
     fn test_multiple_input_managers_poll_once_before_all_bindings() {
         let mut gb = RustBoy::new();
         for (button, marker) in [

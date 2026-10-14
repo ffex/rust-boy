@@ -325,7 +325,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       (`InputManager::on_just_pressed`, `on_release`, and `on_held`; `on_press` remains a
       backwards-compatible alias for held actions)
 - [x] Auto-repeat (`on_repeat(button, delay, interval, action)` runs on press immediately,
-      then after the delay and at each interval while held; counters are per binding)
+      then after the delay and at each interval while held; counters are per binding;
+      label-bearing actions share one emitted body for initial presses and repeats)
 - [x] Multiple bindings for the same button (all bindings run in registration order); multiple
       managers share one `UpdateKeys` sample per frame (PR #61 review F5).
 

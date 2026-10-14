@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::stdlib::audio::AudioConfig;
 use crate::stdlib::graphics::palette::Palette;
 use crate::stdlib::interrupts::{Stat, Timer};
 
@@ -69,6 +70,8 @@ pub struct RustBoyConfig {
     /// The timer the start-up code starts; stopped by default.
     /// [`RustBoy::on_timer`](super::RustBoy::on_timer) sets it with its handler.
     pub timer: Option<Timer>,
+    /// APU startup policy; Inherit leaves legacy boot state unchanged.
+    pub audio: AudioConfig,
 }
 
 impl Default for RustBoyConfig {
@@ -84,6 +87,7 @@ impl Default for RustBoyConfig {
             soft_reset: false,
             stat: None,
             timer: None,
+            audio: AudioConfig::Inherit,
         }
     }
 }
@@ -92,6 +96,12 @@ impl RustBoyConfig {
     /// The default configuration ([`RustBoyConfig::default`])
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Configure audio before user init, including on soft reset.
+    pub fn audio(mut self, audio: AudioConfig) -> Self {
+        self.audio = audio;
+        self
     }
 
     /// With every sprite of size `size`

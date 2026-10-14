@@ -55,3 +55,4 @@ pub use crate::stdlib::interrupts::{Interrupt, Stat, Timer, TimerClock};
 pub use crate::stdlib::routine::{Regs, Routine};
 
 pub use crate::engine::SpritePool;
+pub use crate::stdlib::audio::{AudioConfig, Mixer};

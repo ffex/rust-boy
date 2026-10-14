@@ -141,6 +141,12 @@ impl RustBoy {
         &self.config
     }
 
+    /// Set the audio startup policy. Runtime power helpers are in `stdlib::audio`.
+    pub fn set_audio(&mut self, audio: crate::stdlib::audio::AudioConfig) -> &mut Self {
+        self.config.audio = audio;
+        self
+    }
+
     /// Set the animation delay value in frames (higher = slower animations)
     /// Default is 8 (animation updates every 8 frames, ~7.5 fps at 60fps)
     /// ([`RustBoyConfig::animation_delay`])
@@ -788,6 +794,7 @@ impl RustBoy {
         startup.label("EntryPoint");
         startup.di();
         startup.ld(R16::SP, Expr::hex(hw::STACK_TOP));
+        startup.emit_all(crate::stdlib::audio::initialize(self.config.audio));
         startup.call("WaitVBlank");
 
         // Turn off screen for safe VRAM access

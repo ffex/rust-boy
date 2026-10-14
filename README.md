@@ -829,3 +829,22 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Audio startup
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+// Stereo volume 0..=7; route channel 1 to the left output only.
+gb.init(rust_boy::stdlib::audio::set_mixer(Mixer::new(4, 4, hw::AUDTERM_1_LEFT.value)));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`AudioConfig::Off` powers off at startup. `On` resets existing channels, powers on
+with the selected mixer, and leaves channels silent until triggered. `Inherit` is
+the default and leaves boot audio state unchanged. Configuration runs before user
+init on cold startup and soft reset. Runtime `power_off`, `power_on` and `set_mixer`
+snippets preserve IME and change AF only. Wave RAM is retained. Volume zero is quiet,
+not mute; use zero routing or power off to mute. `hw::NR10` through `NR52`,
+`AUD3WAVERAM`, and `AUD*` flags name the hardware.inc symbols.

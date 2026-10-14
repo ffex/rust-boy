@@ -711,6 +711,20 @@ Or build every example at once into `target/examples/<bin>/` (under `$CARGO_TARG
 scripts/assemble-examples.sh
 ```
 
+To see how much linked ROM space an example uses and how much of its frame and VBlank
+cycle budgets it consumes on the exercised no-input path, run:
+
+```bash
+scripts/report.sh fosdem       # one example
+scripts/report.sh              # all seven examples
+```
+
+The cycle figures are dynamic measurements over ten frames in the headless test emulator;
+they are ranges for the exercised path, not static worst-case bounds. The VBlank share includes
+the CPU interrupt dispatch and vector jump (9 M-cycles), through the return from the handler.
+CI executes the live report through `scripts/assemble-examples.sh`; the report tests return
+early without `RGBDS_LINK_CHECK` and are not marked ignored.
+
 CI does the same on every pull request and keeps the ROMs, with their `.sym` and `.map` files, as a downloadable
 artifact (`example-roms`).
 Open them in any Game Boy emulator.

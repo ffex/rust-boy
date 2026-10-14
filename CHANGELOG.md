@@ -8,6 +8,10 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Build report** (Phase 3): `scripts/report.sh [bin]` reports linked ROM occupancy and observed main-loop and
+  VBlank-handler cycle budgets for all seven examples. VBlank timing includes interrupt dispatch
+  and the vector jump (9 M-cycles), with a linked empty-handler regression.
+
 - **AABB collision** (`engine::Aabb`, also exported by the prelude): half-open rectangle
   overlap checks for byte screen coordinates whose right/bottom edges do not wrap.
 

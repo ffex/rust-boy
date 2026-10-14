@@ -32,3 +32,7 @@ if ((${#failed[@]} > 0)); then
     echo "Failed examples: ${failed[*]}" >&2
     exit 1
 fi
+
+# Exercise the linked-size parser and dynamic cycle measurements while RGBDS is known to
+# be available. Keep this assembly command's concise per-example output unchanged.
+scripts/report.sh > /dev/null

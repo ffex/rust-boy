@@ -428,7 +428,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Asm comments pointing back to the Rust source (`#[track_caller]`): opt-in
       `RustBoyConfig::source_comments` / `RustBoy::set_source_comments` adds a file:line comment before each
       non-empty `init`, main-loop, and interrupt-handler snippet; off by default, so snapshots and output stay unchanged
-- [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
+- [x] ROM-size and cycle-budget report (branch `refactor-p3-build-report`):
+      `scripts/report.sh [bin]` reports linked ROM occupancy and dynamically observed main-loop and VBlank-handler
+      M-cycle ranges against their hardware budgets, using the headless emulator over ten frames.
+      The VBlank share includes interrupt dispatch and the vector jump (9 M-cycles); a linked
+      empty-handler regression checks the full 26 M-cycles. All seven examples, including music, are covered.
 - [x] Opt-in flag-safe peephole optimisations via `Asm::peephole_optimized()`:
       `ld a, 0` → `xor a` and `cp a, 0` → `and a` only when the next instruction overwrites all flags; the zero-load rewrite additionally requires that it does not read carry. Carry-reading regressions and full AF equivalence are checked on the emulator
 - [x] Validate user-supplied symbol names (branch `refactor-p3-symbol-validation`): constants and

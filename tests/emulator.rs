@@ -14,6 +14,7 @@ use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
 use rust_boy::stdlib::banking;
 use rust_boy::stdlib::graphics::vram_queue;
+use rust_boy::stdlib::math;
 use rust_boy::stdlib::sram;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
@@ -1019,6 +1020,62 @@ fn mbc_bank_selectors_assemble_and_return_to_the_caller() {
     gb.run_frames(5);
     assert_eq!(gb.read_symbol("wBankHigh"), 1);
     assert_eq!(gb.read_symbol("wBankLow"), 0xFF);
+}
+
+#[test]
+fn stdlib_math_routines_run_on_the_gameboy() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wMathAddLo", 0);
+    game.vars.create_u8("wMathAddHi", 0);
+    game.vars.create_u8("wMathProductLo", 0);
+    game.vars.create_u8("wMathProductHi", 0);
+    game.vars.create_u8("wMathQuotientLo", 0);
+    game.vars.create_u8("wMathQuotientHi", 0);
+    game.vars.create_u8("wMathRemainder", 0);
+
+    let add = game.call_routine(&math::add_u16());
+    let multiply = game.call_routine(&math::multiply_u8());
+    let divide = game.call_routine(&math::divide_u16_by_u8());
+    let mut code = Block::new();
+    code.ld_hl(u16::MAX)
+        .ld_de(1)
+        .emit_all(add)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wMathAddHi")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wMathAddLo")
+        .ld_a(0xFF)
+        .ld(R8::B, R8::A)
+        .emit_all(multiply)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wMathProductHi")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wMathProductLo")
+        .ld_hl(1000)
+        .ld(R8::C, 7)
+        .emit_all(divide)
+        .ld(R8::D, R8::A)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wMathQuotientHi")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wMathQuotientLo")
+        .ld(R8::A, R8::D)
+        .ld_addr_def_a("wMathRemainder");
+    game.add_to_main_loop(code);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wMathAddLo"), 0);
+    assert_eq!(gb.read_symbol("wMathAddHi"), 0);
+    assert_eq!(gb.read_symbol("wMathProductLo"), 1);
+    assert_eq!(gb.read_symbol("wMathProductHi"), 0xFE);
+    assert_eq!(gb.read_symbol("wMathQuotientLo"), 142);
+    assert_eq!(gb.read_symbol("wMathQuotientHi"), 0);
+    assert_eq!(gb.read_symbol("wMathRemainder"), 6);
 }
 
 #[test]

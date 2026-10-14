@@ -374,7 +374,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Generalised tile collision (`refactor-p3-tile-collision`):
       `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using
       the active map and current SCX/SCY; sample multiple points for larger objects.
-- [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
+- [x] 16-bit math helpers (branch `refactor-p3-math`): unsigned 16-bit add/subtract/compare,
+      8×8 multiply and 16÷8 divide with documented register/flag contracts. Regression tests
+      link all routines and cover borrow-free subtraction, greater-than comparison, asymmetric
+      multiplication and nine-bit shifted division remainders.
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
       `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads

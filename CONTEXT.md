@@ -303,7 +303,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   window shares the background tiles and BGP and needs LCDC bit 0 on DMG. `show_window(true)` without a configured
   window writes no position: it shows at the boot values WX=0, WY=0 unless the program sets one. `build()` writes the
   whole LCD-on LCDC value after init code, so `show_window` and `select_window_tilemap` act from VBlank code, not from
-  init (`test_window_from_the_config_at_start_up`); a configured window cannot start hidden today.
+  init (`test_window_from_the_config_at_start_up`). `Window` is non-exhaustive, with `new` for screen coordinates and
+  `from_raw` for clipping; it defaults visible and can start hidden with `visible_on_startup(false)`. A configured
+  window is allowed when `Lcdc.background` is false, though LCDC bit 0 makes it invisible on DMG.
 
 - **Runtime tilemaps** (since `refactor-p3-runtime-tilemaps`): `TileManager::add_tilemap_rom` keeps level or screen
   maps in ROM, emitted in creation order and left out of the start-up copies: they reserve no VRAM map (`get_address`

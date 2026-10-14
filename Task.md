@@ -261,11 +261,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       - [x] Start-up resets SCX/SCY to zero on power-on and soft reset; user init can choose another position.
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
-- [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
-      `#[non_exhaustive]` like `Lcdc` (its public `wx`/`wy` fields allow raw start-up values today); whether `build()`
-      should reject or warn about a configured window with `Lcdc.background` off (invisible on DMG, documented today);
-      whether a configured window can start hidden (a `Window` flag), or LCDC writes in init survive the LCD-on write
-      (today `build()` replaces them; documented on `show_window`)
+- [x] Follow-ups of the window layer (from the review of #44):
+      - [x] Mark `Window` `#[non_exhaustive]` and add `Window::from_raw` for clipped/off-screen WX/WY values.
+      - [x] Keep a window allowed with `Lcdc.background(false)`; document that LCDC bit 0 disables it on DMG.
+      - [x] Add `Window::visible_on_startup(false)`; runtime `show_window(true)` still works.
+      - [x] Keep `RustBoyConfig` authoritative for the final LCDC value; runtime LCDC snippets belong in VBlank.
 - [x] `GetTileByPixel` for the `$9C00` map (branch `refactor-p3-tilemap-lookup`):
       reads LCDC bit 3 at runtime; follows both configured and runtime background-map selection.
 - [x] Tilemaps kept in ROM only, to copy at runtime (branch `refactor-p3-runtime-tilemaps`):

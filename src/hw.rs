@@ -570,3 +570,13 @@ pub const WINDOW_X_OFFSET: u8 = 7;
 
 /// Wave RAM holds sixteen bytes (32 four-bit samples).
 pub const WAVE_RAM_BYTES: usize = 16;
+
+/// CH3 DAC enable (NR30 bit 7).
+pub const WAVE_DAC_ON: u8 = 0x80;
+/// CH3 output levels (NR32 bits 6..5).
+pub const WAVE_LEVEL_MUTE: u8 = 0;
+pub const WAVE_LEVEL_FULL: u8 = 0x20;
+pub const WAVE_LEVEL_HALF: u8 = 0x40;
+pub const WAVE_LEVEL_QUARTER: u8 = 0x60;
+/// CH4 seven-bit LFSR selection (NR43 bit 3).
+pub const NOISE_WIDTH_SEVEN: u8 = 0x08;

@@ -1,6 +1,9 @@
-//! Audio power and mixer configuration. Snippets preserve IME and all registers
+//! Audio power, mixer configuration and one-shot effects. Snippets preserve IME and all registers
 //! except AF. Initialization resets the APU, silences its channels and sets the mixer;
 //! it does not erase wave RAM or generate sound. Runtime power-on also resets channels.
+pub mod sfx;
+pub use sfx::*;
+
 use crate::asm::{Block, Instr, Mem, R8};
 use crate::hw;
 

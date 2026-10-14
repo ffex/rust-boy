@@ -1503,7 +1503,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
-- **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
+- **Audio:** opt-in power/mixer initialization and typed one-shot effects exist; music driver integration remains.
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
   background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
@@ -1561,3 +1561,23 @@ audio registers, wave RAM and existing hardware.inc flags are exported through h
 The emulator currently stores audio IO but does not synthesize or clock APU channels;
 tests verify register writes/startup ordering and assembly, with NR52 reset semantics
 checked against Pan Docs. Sound effects and driver integration remain separate tasks.
+
+### Phase 3 sound effects (`refactor-p3-sfx`, depends on APU initialization)
+
+`stdlib::audio::sfx` supplies validated `PulseEffect`, `Sweep`, `WaveEffect`,
+`WavePattern` and `NoiseEffect` values selected by `Sfx`. `play_sfx` tests NR52
+before writing (carry set on rejection), stops only the selected DAC, enables its
+length timer before loading a maximum-length setup value, then programs and triggers
+it and loads the requested duration last. This avoids extra-clock/trigger reload
+and a regular length clock during setup changing a one-tick effect into a 63/255-tick
+effect. CH3 is stopped throughout wave RAM upload and triggered
+only after re-enabling its DAC, avoiding DMG active-wave access/corruption. The
+hardware advances length/envelope/sweep; no software sequencer or state is allocated.
+NR50/NR51/NR52 and other channels are untouched; snippets clobber AF and preserve IME.
+The caller serializes audio writers, including interrupt handlers. DAC toggles can
+pop; sample zero is skipped on first wave playback, and channel phase is not reset.
+Unit tests execute the snippets and compare writes, model the extra-length clock,
+check bounds, unique local labels in an If, and register preservation. Linked-ROM
+checks verify channel register values and wave uploads, but the test emulator has
+no APU synthesis, so audible output is not verified. Music arbitration is the driver
+integration task. No existing example output changes.

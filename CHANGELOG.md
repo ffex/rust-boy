@@ -55,6 +55,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.
   Power-on resets channels without triggering sound or changing wave RAM. `hw` exports NR registers, wave RAM,
   routing and audio flags.
+- **Sound effects** (Phase 3): `RustBoy::play_sfx` / `stdlib::audio::play_sfx` trigger typed one-shot effects on
+  channels 1–4. Length, period, envelope, sweep and noise settings are validated;
+  wave samples are packed and uploaded with CH3 stopped. The APU and mixer stay unchanged.
+  Carry reports an off APU; `stop_channel` stops the selected DAC. Snippets use AF only
+  and preserve IME. Configure `AudioConfig::On` and serialize audio writers before use.
 - **Sprites** (Phase 3): every sprite of a `RustBoy` program lives in a shadow OAM in WRAM, which the VBlank handler
   copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
   The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,

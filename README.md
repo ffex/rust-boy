@@ -27,7 +27,8 @@ The [changelog](CHANGELOG.md) lists every breaking change of the refactoring, wi
 
 ## Requirements
 
-- Rust 1.85 or newer (edition 2024). No other Rust dependencies.
+- Rust 1.85 or newer (edition 2024). One Rust dependency: the pure-Rust [`png`](https://crates.io/crates/png)
+  decoder, for `TileSource::from_png` (it runs in the generating program, not on the Game Boy).
 - [RGBDS](https://rgbds.gbdev.io/) 0.9 or newer to build ROMs (CI uses 1.0.4).
 
 To use it in your own project:
@@ -67,6 +68,11 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 ```
+
+`on_press` keeps its original meaning: the action runs every frame the button is held. For edge-triggered actions,
+use `on_just_pressed` or `on_release`; several bindings can target the same button. `on_repeat(button, delay, interval,
+action)` runs once on press, then repeats after `delay` held frames and every `interval` frames. Both repeat counts must
+be between 1 and 255.
 
 ## Routines
 
@@ -157,6 +163,42 @@ assert!(out.contains("TimerHandler:\n    push af\n    ld a, [wTicks]"));
 `rSTAT` and timer set-up). The **soft reset** jumps to the entry point (`$0100`), so the whole start-up runs again,
 as at power-on: every variable is set to its initial value, the `init()` code runs again; it happens once per press
 (holding the four buttons does not reset the game again and again).
+
+## PNG and binary tile assets (`RustBoy`)
+
+Use `TileSource::from_png(path, &options)` to load tile artwork directly. Palette slots
+are pixel indices 0..=3; default colors are `[255,255,255]`, `[170,170,170]`, `[85,85,85]`,
+and black. Exact matching rejects unknown colors; nearest RGB matching is explicit.
+Fully transparent pixels map to index zero by default, and partial alpha is rejected.
+
+```no_run
+use rust_boy::prelude::*;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = PngOptions::default()
+        .mapping(PngColorMapping::Nearest)
+        .tile_order(TileOrder::Sprite8x16);
+    let artwork = TileSource::from_png("player.png", &options)?;
+    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    gb.add_sprite("Player", artwork, 80, 72, 0);
+    println!("{}", gb.build()?);
+    Ok(())
+}
+```
+
+PNG dimensions must be multiples of eight; 8×16 ordering additionally requires a
+height divisible by sixteen and emits each vertical pair consecutively. Indexed,
+grayscale, RGB, alpha, and interlaced static PNGs are supported. Packed samples expand
+to 8 bits; 16-bit samples use their high byte. Mapping does not apply gamma correction,
+dithering, deduplication, padding or cropping. Animated PNGs are rejected.
+
+`png_to_2bpp(&png_bytes, &options)` returns binary bytes that you can write as a `.2bpp`
+file. `TileSource::from_2bpp(path)` reads a nonempty multiple of sixteen bytes and derives
+the count; `from_2bpp_bytes(&bytes)` does the same for memory. Loaded sources own their
+data and emit DW pairs, so no asset INCBIN include path is needed. Paths resolve relative
+to the generating program's current directory; use `CARGO_MANIFEST_DIR` for crate assets.
+All loaders return `AssetError`; allocation limits remain the tile manager's existing
+128 background / 256 sprite tiles. The legacy `from_file(path,count)` remains available
+for deferred RGBDS INCBIN, where you supply the correct count and include directory.
 
 ## Sprites and the shadow OAM (`RustBoy`)
 
@@ -251,6 +293,125 @@ metasprite parts. Clear overrides with `clear_animation_delay` or
 `clear_composite_animation_delay`. These are generation-time settings, with two WRAM
 bytes per independently timed sprite. Programs without overrides retain global timing.
 
+### Animation completion and replay
+
+Subscribe to a polling flag, a named callback, or both. Callbacks run in the main loop
+after all sprites have stepped, before other game logic; BC/DE/HL are preserved.
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+let actor = gb.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 4]), 40, 40, 0);
+let attack = gb.sprites.add_animation(actor, "Attack", 0, 2, AnimationType::Once);
+let idle = gb.sprites.add_animation(actor, "Idle", 3, 3, AnimationType::Loop);
+gb.sprites.set_animation_delay(actor, attack, 2);
+gb.sprites.set_animation_callback(actor, attack, "AttackDone");
+gb.sprites.set_initial_animation(actor, attack);
+// Configure subscriptions/timing before generating restart snippets.
+gb.define_function_from("AttackDone", gb.sprites.restart_animation(actor, idle));
+let observed = gb.vars.create_u8("wAttackObserved", 0);
+gb.add_to_main_loop(gb.sprites.take_animation_event(actor, attack));
+gb.add_to_main_loop(IfA::eq(1, observed.set(1)));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`Once` emits once when it reaches its last frame, including a first update that is
+already on that frame. Changing selection away and back rearms it, but preserves the
+existing tile/replay rules. `Loop` emits on last→first wrap; `PingPong` on returning to
+the first frame. Single-frame loops/ping-pong emit every update after the first (entering one
+from another tile is not a completion); single-frame Once
+emits once. Events describe shadow OAM, which becomes visible at the following DMA.
+
+`enable_animation_events` enables polling without a callback. `take_animation_event`
+returns A = 0/1 and Z for no event, then clears the flag; multiple pending completions
+coalesce. Callbacks do not clear that polling flag. Callback functions can be defined
+after binding, or declared external. Use the composite versions of these methods for
+one event/callback per logical metasprite.
+
+`restart_animation` and `restart_composite_animation` immediately show the first frame
+and clear that animation's pending event/callback and Once latch. Direction and any
+independent timer reset; shared-clock sprites advance on the next global tick. Repeated
+enable calls keep their existing behavior and do not replay a finished Once. Event
+producers, polling and restart code belong in init/main, with one main-loop consumer.
+Handler calls to event-producing animation functions are rejected; raw RAM access and
+poll/restart snippets are caller contracts.
+
+### Sprite visibility and reusable OAM slots
+
+Static sprites have `gb.sprites.hide(id)` and `show_at(id, x, y)` snippets; composite
+helpers apply to every part. Hiding sets OAM Y to 0 and preserves X/tile/flags.
+Show supplies a screen position; changing Y while hidden can make a sprite visible,
+so keep logical positions in your game state. Runtime operations keep startup data intact.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let pool = gb.create_sprite_pool("Actors", 8);
+let mut spawn = Block::new();
+let full = gb.labels().local("pool_full");
+spawn.emit_all(pool.allocate()).jr_cond(Condition::C, &full)
+    .ld_b(40).ld_c(60).ld_d(0).ld_e(0)
+    .emit_all(pool.write()).label(&full);
+gb.init(spawn);
+# gb.build().unwrap();
+```
+
+Register tile data separately before displaying pooled sprites. Allocation returns A
+as a relative slot index and HL as its cleared, hidden shadow-OAM entry. Full pools
+return A=255 and carry. `write` uses A=index, B=X, C=Y, D=tile, E=attributes; `hide`
+keeps the slot allocated, while `release` clears it and permits reuse. Invalid/free
+indices and invalid coordinates set carry without writes; 8x16 writes reject odd tiles.
+All pool operations belong in init/main, with one producer; build rejects handler
+calls. Allocation changes AF/BC/HL, other pool operations AF/HL; DE and IME are kept.
+Pool writes publish Y last but aren't atomic to DMA: use VBlank for coherent updates.
+
+### Entity pools
+
+`create_entity_pool` gives a sprite pool entity names: one hardware sprite per entity, its
+index in A, the game keeping any other state.
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let enemies = gb.create_entity_pool("Enemies", 4);
+let mut spawn = Block::new();
+let full = gb.labels().local("no_enemy");
+spawn.emit_all(enemies.spawn()).jr_cond(Condition::C, &full) // A = the new entity
+    .ld_b(80).ld_c(40).ld_d(0).ld_e(0)
+    .emit_all(enemies.set_sprite()).label(&full);
+gb.init(spawn);
+# gb.build().unwrap();
+```
+
+`spawn` returns a hidden entity (carry when the pool is full), `set_sprite` writes and shows
+it (A = entity, B/C = position, D/E = tile/flags), `hide` keeps it alive and `despawn` frees it.
+Registers, carry results and the init/main-only rule are the pool's (above).
+
+## WRAM arrays (`RustBoy`)
+
+```rust
+use rust_boy::prelude::*;
+
+let mut gb = RustBoy::new();
+let scores = gb.vars.create_array("wScores", ArrayElement::U16, 300, 100);
+gb.init(scores.set(299, 65535)); // static index and value checked here
+let mut code = Block::new();
+code.ld(R16::BC, 256u16).ld(R16::DE, 1234u16)
+    .emit_all(scores.set_indexed(gb.labels()));
+gb.add_to_main_loop(code); // carry set if BC >= 300; nothing written on rejection
+# gb.build().unwrap();
+```
+
+Arrays occupy contiguous WRAM0 bytes and share the variable allocator. Initialization
+repeats the supplied value with a compact loop. Byte elements use `U8`/`I8`, words
+`U16`/`I16` and little-endian storage. Runtime getters return A for bytes or HL for words;
+setters take E or DE, preserve BC/DE, and change A/HL/flags. `address_indexed` returns
+HL and carry status for custom operations; branch on carry before dereferencing it.
+Static operations panic on invalid indices/values; runtime bounds rejection sets carry.
+
 ## Queued VRAM writes (`RustBoy`)
 
 Tilemap edits and score digits can be queued from game code without waiting for the PPU:
@@ -290,10 +451,64 @@ no more VBlank left than the main loop.
 `stdlib::graphics::vram_queue` provides the routines, initialization and RAM section for standalone programs.
 Programs that never request the queue emit no queue code or storage.
 
+## Text and scores (`RustBoy`)
+
+Load one 8×8 tile per consecutive ASCII character, then call each printer's `step` in
+the main loop. Long strings resume across frames using the VBlank VRAM queue (12 pending
+writes). Carry set means retry next frame; carry clear means queued, with display updates
+at a subsequent VBlank. Enable the background/window for the selected map in your config.
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+// Supply real glyph tiles here, or TileSource::from_file("digits.2bpp", 10).
+let font = gb.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+let text = gb.create_text_printer("Message", font, TilemapArea::Map9800, 0, 0, "0123456789");
+let score = gb.create_number_printer("Score", font, TilemapArea::Map9800, 0, 1, NumberFormat::DecimalU16);
+let mut init = Block::new();
+init.ld(R16::DE, 12345).emit_all(score.set_value(gb.labels()));
+gb.init(init);
+gb.add_to_main_loop(text.step()).add_to_main_loop(score.step());
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Coordinates are tiles in the 32×32 map. Wrapping/newlines return to the initial X column;
+unsupported characters and writes beyond the map panic. Decimal uses five digits, packed
+BCD four. Invalid BCD keeps the old score and returns carry. Set numbers only when they
+change; resetting/replacing retains pending writes, so partial values can briefly display.
+Printer steps belong in init/main code; interrupt handlers cannot produce queue entries.
+
+## Background tile animation (`RustBoy`)
+
+Preload tile artwork, then animate its IDs at fixed cells on either background/window map.
+Each frame supplies one tile per cell, in cell order. Call `step` once per game frame:
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::new();
+gb.tiles.add_background("WaterTiles", TileSource::from_raw(&[["$00"; 8]; 3]));
+let config = BackgroundAnimationConfig::new(
+    TilemapArea::Map9800, &[(2, 3), (3, 3)],
+    &[vec![0, 1], vec![1, 2], vec![2, 0]],
+).delay(8).playback(AnimationType::PingPong);
+let water = gb.create_background_animation("Water", config);
+gb.add_to_main_loop(water.step());
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Loop/ping-pong/once support 1..=256 frames. Holds are 1..=255 calls after a frame is
+fully queued (default 1). A full VBlank queue pauses advancement, preserving the current
+frame's cursor. Carry set means queue full. Cells can become visible in pieces as the
+queue drains. Pause/resume retain progress; restart replays frame zero and keeps pending
+writes. `finished()` loads A with 1 once Once's final frame is queued, otherwise 0.
+The selected layer must be enabled separately; tile patterns are loaded beforehand.
+
 ## Palettes and fades (`RustBoy`)
 
 DMG palettes map four colour indices to shades. The background and window share BGP;
-object index 0 stays transparent. Startup `Palettes` still accepts hardware bytes.
+object index 0 stays transparent. Startup `Palettes` accepts typed `Palette` values or raw `u8` hardware bytes.
 Use typed palettes for runtime writes and `PaletteFade` for nonblocking fade-in/out:
 
 ```rust
@@ -526,6 +741,7 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
 | `unbricked_rustboy` | `engine` | The same game with `RustBoy` |
 | `fosdem` | `engine` | A 16×16 walking character with four animations (FOSDEM demo) |
 | `coin-anim` | `engine` | An animated coin: A starts the animation, B stops it |
+| `music` | `engine` | A two-note song played by the pinned, offline hUGEDriver |
 
 ## What is supported
 
@@ -540,12 +756,19 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), tiles
+  converted from PNG or read from `.2bpp` files in Rust (see [PNG and binary tile assets](#png-and-binary-tile-assets-rustboy)), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
-  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), WRAM and HRAM
-  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
-  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), animations (looping, ping-pong or played once, each with its own period if you want; see
-  [Per-animation timing](#per-animation-timing)), joypad bindings, a main loop woken once a frame by
+  writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), text and score printing (see
+  [Text and scores](#text-and-scores-rustboy)), background tile animation (see
+  [Background tile animation](#background-tile-animation-rustboy)), WRAM and HRAM
+  variables (`u8`/`i8`/`u16`/`i16`; the HRAM ones read and written with `ldh`; each variable section at a fixed address)
+  and WRAM arrays of them (see [WRAM arrays](#wram-arrays-rustboy)), sprites (8×8, or 8×16 with `set_sprite_size`) in a shadow OAM copied to OAM by an OAM DMA every VBlank, metasprites of any layout
+  (see [Arbitrary metasprites](#arbitrary-metasprites); 16×16 ones with `add_sprite_16x16`), runtime sprite and
+  entity pools (see [Sprite visibility and reusable OAM slots](#sprite-visibility-and-reusable-oam-slots) and
+  [Entity pools](#entity-pools)), animations (looping, ping-pong or played once, each with its own period if you want, and
+  completion events or callbacks; see [Per-animation timing](#per-animation-timing) and
+  [Animation completion and replay](#animation-completion-and-replay)), joypad bindings, a main loop woken once a frame by
   the VBlank interrupt, handlers for the VBlank, STAT, timer, serial and joypad interrupts, the `rSTAT` conditions and
   the timer, a soft reset (see [Frames and interrupts](#frames-and-interrupts-rustboy)), and routines (the builtins and
   your own, see [Routines](#routines)) that are included only when used, with what they need. Memory is checked: too
@@ -612,3 +835,110 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Audio startup
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+// Stereo volume 0..=7; route channel 1 to the left output only.
+gb.init(rust_boy::stdlib::audio::set_mixer(Mixer::new(4, 4, hw::AUDTERM_1_LEFT.value)));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`AudioConfig::Off` powers off at startup. `On` resets existing channels, powers on
+with the selected mixer, and leaves channels silent until triggered. `Inherit` is
+the default and leaves boot audio state unchanged. Configuration runs before user
+init on cold startup and soft reset. Runtime `power_off`, `power_on` and `set_mixer`
+snippets preserve IME and change AF only. Wave RAM is retained. Volume zero is quiet,
+not mute; use zero routing or power off to mute. `hw::NR10` through `NR52`,
+`AUD3WAVERAM`, and `AUD*` flags name the hardware.inc symbols.
+
+### One-shot sound effects
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+let beep = Sfx::Pulse2(PulseEffect::new(
+    1750, 32, Duty::Half, Envelope::new(12, EnvelopeDirection::Decrease, 2),
+));
+gb.init(gb.play_sfx(&beep));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`Sfx::Pulse1` adds a `Sweep`; `Pulse2` has none. `Sfx::Wave` takes a `WaveEffect`
+with a `WavePattern` (32 samples 0..=15, or 16 packed bytes) and `WaveLevel`.
+`Sfx::Noise` takes a `NoiseEffect` with a seven- or fifteen-bit LFSR, shift 0..=13
+and divider 0..=7 (zero means 0.5). Pulse/wave period is the hardware 11-bit value,
+not Hz: pulse frequency is `131072 / (2048 - period)`, wave frequency is half that.
+Constructors panic for out-of-range fields. Sweep addition overflow can silence CH1;
+zero-volume decreasing envelopes disable the DAC. Wave hardware first plays sample 1.
+
+Every effect replaces its channel and enables a hardware length timer: pulse/noise
+length 1..=64, wave length 1..=256 ticks at 256 Hz, with tick phase affecting duration.
+Envelopes use 64 Hz ticks (pace zero disables them); sweep uses 128 Hz ticks.
+`play_sfx` changes AF only and returns carry clear when programmed, carry set with no
+writes if the APU is off. It preserves power, mixer, other channels and IME.
+`stdlib::audio::stop_channel(Channel::Pulse2)` disables just that channel's DAC.
+The standalone `stdlib::audio::play_sfx(labels, &effect)` uses the supplied label allocator.
+Serialize audio writes with music/interrupt code; reserve a channel before replacing it.
+CH3 stops before uploading wave RAM. DAC toggles may pop, and this API does not
+reset pulse phase or provide a software effect sequence. See
+[Pan Docs registers](https://gbdev.io/pandocs/Audio_Registers.html) and
+[APU details](https://gbdev.io/pandocs/Audio_details.html) for hardware behavior.
+
+### Tracker music (hUGEDriver 6.1.1)
+
+```rust
+use rust_boy::prelude::*;
+let song = Song::from_rgbds(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/music/song.asm")), "DemoSong");
+let mut gb = RustBoy::new();
+gb.enable_music(song, MusicClock::MainFrame);
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Export from hUGETracker 1.0.1 as RGBDS assembly and use its descriptor name.
+`Song::from_rgbds_file(path, descriptor)` reads the file at generation time;
+`from_rgbds` accepts its text. Data must be self-contained except the standard
+`hUGE.inc` include, which is expanded. Internal globals and section names are
+prefixed per descriptor, so `add_music_song` accepts additional exports with the
+same pattern/instrument names. Descriptors stay public and must be unique. ROM0
+and ROMX placement is retained: keep a ROMX song's bank mapped for its whole tick.
+Other export formats/driver versions and automatic bank switching are not supported.
+
+`enable_music` runs once, starts the first song before user init, and changes an
+inherited audio policy to `AudioConfig::On(Mixer::default())`. Explicit audio
+policies stay in effect. Soft reset initializes the driver/song again. The pinned
+public-domain driver lives in `vendor/hugedriver`; generated output embeds its
+code/data and needs only the normal hardware.inc include. It reserves 100 WRAM0
+bytes at the top of available RAM, plus two control bytes, without moving user
+variables. Read the pinned version/license/transform details in its README.
+
+`MusicClock::MainFrame` ticks after `WaitFrame` and before game logic. Long game
+frames slow playback. `MusicClock::VBlank` ticks after DMA/VRAM queue flush, saving
+all registers; complex songs can extend the handler beyond VBlank, so account for
+that before adding timing-sensitive user VBlank code. An off APU skips ticks and
+keeps song position. The engine is the single tick owner; do not tick the driver
+again. Song callbacks must return promptly and must not reenter music controls.
+
+Emit `start_music("OtherDescriptor")` to restart/switch and take all four channels;
+old channels are silenced and mute reservations reset. `pause_music` freezes song
+position and cuts music-owned channels. `resume_music` continues a pause (cut notes
+return at the next note row), returning carry set if stopped. `stop_music` requires
+`start_music` before a later resume. Controls preserve IME; start/reserve/release
+may change all registers, pause/stop/resume change AF. User interrupt handlers
+cannot call them, directly or through a registered function; `build` reports
+`MainLoopOnly`. Initialization publishes its paused flag before touching driver
+state, so the generated VBlank tick skips incomplete initialization.
+
+With music enabled, `play_sfx` returns carry set without writes unless the channel
+is reserved. Emit `reserve_music_channel(Channel::Wave)` before its effect and
+`release_music_channel` afterward. Reserved channels survive pause/stop; release
+returns ownership at the next music note and invalidates CH3's wave cache so the
+song wave is reloaded. Serialize game audio writers and avoid driver-wide mixer
+changes in song effects when sharing channels. Playback is tested as linked SM83
+execution, song state and register/wave RAM writes; the test emulator does not
+synthesize audio. Build/run the demo with `scripts/run.sh --run music`.

@@ -1503,7 +1503,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
-- **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
+- **Audio:** opt-in power/mixer initialization and typed one-shot effects exist; pinned hUGEDriver music integration exists.
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
   background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
@@ -1555,3 +1555,72 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 APU initialization (`refactor-p3-apu`)
+
+`stdlib::audio` owns the stateless power/mixer snippets. `AudioConfig::Inherit` is the
+compatibility default and emits no audio instructions; `Off` writes NR52 off; `On`
+first powers off to reset channel state, then powers on and writes NR50/NR51. The
+configuration runs before user init on both cold startup and soft reset. `Mixer`
+validates 0..=7 left/right volume, disconnects VIN, and accepts NR51 routing flags;
+zero volume is not mute. Wave RAM is not cleared and no channel is triggered. All
+audio registers, wave RAM and existing hardware.inc flags are exported through hw.
+The emulator currently stores audio IO but does not synthesize or clock APU channels;
+tests verify register writes/startup ordering and assembly, with NR52 reset semantics
+checked against Pan Docs. Sound effects and driver integration remain separate tasks.
+
+### Phase 3 sound effects (`refactor-p3-sfx`, depends on APU initialization)
+
+`stdlib::audio::sfx` supplies validated `PulseEffect`, `Sweep`, `WaveEffect`,
+`WavePattern` and `NoiseEffect` values selected by `Sfx`. `play_sfx` tests NR52
+before writing (carry set on rejection), stops only the selected DAC, enables its
+length timer before loading a maximum-length setup value, then programs and triggers
+it and loads the requested duration last. This avoids extra-clock/trigger reload
+and a regular length clock during setup changing a one-tick effect into a 63/255-tick
+effect. CH3 is stopped throughout wave RAM upload and triggered
+only after re-enabling its DAC, avoiding DMG active-wave access/corruption. The
+hardware advances length/envelope/sweep; no software sequencer or state is allocated.
+NR50/NR51/NR52 and other channels are untouched; snippets clobber AF and preserve IME.
+The caller serializes audio writers, including interrupt handlers. DAC toggles can
+pop; sample zero is skipped on first wave playback, and channel phase is not reset.
+Unit tests execute the snippets and compare writes, model the extra-length clock,
+check bounds, unique local labels in an If, and register preservation. Linked-ROM
+checks verify channel register values and wave uploads, but the test emulator has
+no APU synthesis, so audible output is not verified. Music arbitration is the driver
+integration task. No existing example output changes.
+
+### Phase 3 tracker music (`refactor-p3-music`, depends on sound effects)
+
+Pinned public-domain hUGEDriver 6.1.1 (`13a26513498637baee9997bd3cad9476224db723`)
+files are vendored unchanged with upstream license/readme and checksums. The stdlib
+embeds/expands includes, modernizes legacy EQU declarations for RGBDS >=0.9,
+namespaces driver globals/macros, disables preview/GBDK branches, and turns the
+100-byte WRAM declarations into constants pointing into the engine buffer. The
+engine allocator reserves that buffer (and two zero-initialized control bytes),
+checks exhaustion/conflicts, and emits its numeric base before the driver. User
+variable addresses stay stable; generated assembly is deterministic and offline.
+`Song` imports self-contained hUGETracker 1.0.1 exports, retaining the public
+descriptor but prefixing internal labels/constants and section names. Multiple
+songs share the one driver and are emitted in insertion order. ROMX songs must
+remain mapped; banking is the later platform task.
+
+`enable_music` starts the first song before user init on cold/soft startup and
+turns inherited audio into On(default mixer), preserving explicit On/Off. Ticks
+run once per completed main frame by default, or in VBlank after DMA/queue flush
+with all registers saved. Long main frames slow music; complex VBlank ticks can
+spill beyond VBlank. Off APU skips ticks. Start pauses the consumer, silences all
+channels, initializes pointers/state, then publishes ready/playing. Pause freezes
+position and cuts only unreserved channels; stop also disarms resume; resume after
+pause continues with notes retriggered at the next note row. Reserved SFX channels
+survive pause/stop. CH3 release invalidates the wave cache before unmuting. Engine
+SFX rejects unreserved channels. User handlers reaching music controls/driver tick
+are rejected transitively; only the engine owns the consumer. Song callbacks must
+not reenter controls, and game audio writers must be serialized.
+
+Tests assemble/run multiple namespaced songs on the SM83, check note progression,
+clock modes, pause/stop/switch, APU gating, channel ownership/wave restoration,
+register preservation and injected VBlank during initialization. Exhaustion and
+symbol-conflict tests cover reserved state. The ROM test symbol parser now skips
+exported EQU constants rather than treating them as addresses (with a fixture test).
+The emulator still has no APU synthesis; audible output is not verified. The new
+music example/snapshot exercises offline generation; older snapshots are unchanged.

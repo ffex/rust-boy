@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Every example binary, in the order of the README
-pub const EXAMPLES: [&str; 6] = [
+pub const EXAMPLES: [&str; 7] = [
     "basic_usage",
     "unbricked",
     "unbricked_std",
     "unbricked_rustboy",
     "fosdem",
     "coin-anim",
+    "music",
 ];
 
 /// The repository's root
@@ -33,6 +34,7 @@ pub fn example_asm(bin: &str) -> String {
         "unbricked_rustboy" => env!("CARGO_BIN_EXE_unbricked_rustboy"),
         "fosdem" => env!("CARGO_BIN_EXE_fosdem"),
         "coin-anim" => env!("CARGO_BIN_EXE_coin-anim"),
+        "music" => env!("CARGO_BIN_EXE_music"),
         other => panic!("no example binary {:?}", other),
     };
     let output = Command::new(exe)

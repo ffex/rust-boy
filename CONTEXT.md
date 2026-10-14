@@ -328,7 +328,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and
   flags, and leave sprites in screen coordinates. `follow_background_point` keeps the world pixel (B, C) at a screen
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
-  Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
+  Start-up resets SCX/SCY to 0 on power-on and soft reset; `init` can set a custom camera. Sprites are screen-space today
+  (world-coordinate sprites are undecided, see Task.md): programs that need world positions track them and use
+  `follow_background_point`.
 
 - **PNG and binary tile assets** (since `refactor-p3-png-assets`): `engine::assets::png_to_2bpp` converts a static PNG
   to tile bytes with the `png` crate (decompression, sample expansion, interlacing, checksums). Palette slots map
@@ -1510,14 +1512,16 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
   background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
-  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+  (see §2); `GetTileByPixel` takes map pixels, while `GetTileByScreenPixel` adds SCX/SCY for screen-space collision
+  checks (Phase 3 follow-up).
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Input:** (p3-input) held/just-pressed/released/repeat bindings. Multiple input managers share
   one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
   Initial presses and repeats share one emitted action body, so local labels in bounded movement and
   other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
-- **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
+- **Engine:** no scenes, RNG, sprite collision, 16-bit math, loops/switch; screen-pixel solid-tile checks exist as
+  `TileCollision` (`refactor-p3-tile-collision`) (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,

@@ -22,7 +22,10 @@ impl TileCollision {
     ///
     /// `x` and `y` each leave their unsigned screen coordinate in `a`. The active camera
     /// scroll is added before looking up the current background map. Use while VRAM is
-    /// accessible (the engine main loop runs during VBlank).
+    /// accessible: with the LCD off, or during VBlank. The engine main loop starts in
+    /// VBlank, but earlier work can consume that interval. Schedule this check in a short
+    /// `RustBoy::on_vblank` handler and keep the complete handler within VBlank, or otherwise
+    /// ensure that VRAM remains accessible when the tile is read.
     ///
     /// When `body` runs, `a` is the tile ID and `hl` is its map address. The check clobbers
     /// `a`, `bc`, `d`, `hl` and flags; other registers are preserved except for changes made by

@@ -9,13 +9,14 @@ use support::gameboy::{FRAME_MCYCLES, GameBoy};
 use support::rom::{Rom, rgbds_enabled};
 
 const VBLANK_MCYCLES: u64 = 10 * 114;
-const EXAMPLES: [&str; 6] = [
+const EXAMPLES: [&str; 7] = [
     "basic_usage",
     "unbricked",
     "unbricked_std",
     "unbricked_rustboy",
     "fosdem",
     "coin-anim",
+    "music",
 ];
 
 fn rom_used_bytes(map: &str) -> usize {
@@ -37,7 +38,7 @@ fn rom_used_bytes(map: &str) -> usize {
         .sum()
 }
 
-fn measure_routine(gb: &mut GameBoy, entry: u16, end_opcode: u8, runs: usize) -> Vec<u64> {
+fn measure_vblank_handler(gb: &mut GameBoy, entry: u16, end_opcode: u8, runs: usize) -> Vec<u64> {
     let mut result = Vec::with_capacity(runs);
     for _ in 0..runs {
         assert!(gb.run_until_pc(entry, 2), "${entry:04X} did not run");
@@ -46,7 +47,9 @@ fn measure_routine(gb: &mut GameBoy, entry: u16, end_opcode: u8, runs: usize) ->
             gb.step();
         }
         gb.step();
-        result.push(gb.cycles() - start);
+        // Entry at VBlankHandler is after the CPU's 5-M-cycle interrupt dispatch
+        // and the 4-M-cycle JP at the $40 vector. Include both in the VBlank share.
+        result.push(gb.cycles() - start + 9);
     }
     result
 }
@@ -68,10 +71,10 @@ fn report(bin: &str) {
     if let Some(&handler) = rom.symbols.get("VBlankHandler") {
         let mut gb = rom.boot();
         gb.run_frames(5);
-        let samples = measure_routine(&mut gb, handler, 0xD9, 10);
+        let samples = measure_vblank_handler(&mut gb, handler, 0xD9, 10);
         let (min, max) = range(&samples);
         println!(
-            "  VBlank handler: {min}..{max} / {VBLANK_MCYCLES} M-cycles ({:.1}% max)",
+            "  VBlank handler (including dispatch): {min}..{max} / {VBLANK_MCYCLES} M-cycles ({:.1}% max)",
             max as f64 * 100.0 / VBLANK_MCYCLES as f64
         );
     } else {
@@ -138,4 +141,19 @@ WRAM0 bank #0:
     SECTION: $C000-$C0FF ($0100 bytes) ["Variables"]
 "#;
     assert_eq!(rom_used_bytes(map), 20);
+}
+
+#[test]
+fn empty_vblank_handler_budget_includes_dispatch_and_vector() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let game = rust_boy::engine::RustBoy::new();
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let handler = rom.symbols["VBlankHandler"];
+    let mut gb = rom.boot();
+    gb.run_frames(5);
+    // push af (4), ld a,1 (2), ld [wVBlankFlag],a (4), pop af (3),
+    // reti (4), CPU interrupt dispatch (5), and vector JP (4).
+    assert_eq!(measure_vblank_handler(&mut gb, handler, 0xD9, 3), [26; 3]);
 }

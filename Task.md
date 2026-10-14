@@ -404,6 +404,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] ROM-size and cycle-budget report (branch `refactor-p3-build-report`):
       `scripts/report.sh [bin]` reports linked ROM occupancy and dynamically observed main-loop and VBlank-handler
       M-cycle ranges against their hardware budgets, using the headless emulator over ten frames.
+      The VBlank share includes interrupt dispatch and the vector jump (9 M-cycles); a linked
+      empty-handler regression checks the full 26 M-cycles. All seven examples, including music, are covered.
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
 - [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
       [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites

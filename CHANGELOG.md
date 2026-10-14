@@ -9,7 +9,8 @@ together: every breaking change of the refactoring is in this release, so a prog
 ### Highlights
 
 - **Build report** (Phase 3): `scripts/report.sh [bin]` reports linked ROM occupancy and observed main-loop and
-  VBlank-handler cycle budgets.
+  VBlank-handler cycle budgets for all seven examples. VBlank timing includes interrupt dispatch
+  and the vector jump (9 M-cycles), with a linked empty-handler regression.
 - **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
   select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
 

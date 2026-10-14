@@ -13,14 +13,26 @@ pub struct BackgroundAnimationConfig {
     playback: AnimationType,
 }
 impl BackgroundAnimationConfig {
-    /// Each frame supplies one tile per cell, in the same order. Panics for empty,
-    /// duplicate or out-of-map cells, or an empty/mismatched frame sequence (>256).
+    /// Each frame supplies one tile per cell, in the same order.
+    ///
+    /// The cell targets and the frames are ROM tables in the single ROM0 bank
+    /// (2 bytes per cell, 2 per frame, plus one byte per cell per frame): tables that do not
+    /// fit with the rest of the program fail to build: rgblink rejects a section past $4000 bytes
+    /// (`Section "Header" is bigger than the max size for that type`), and rgbasm already
+    /// rejects one past $8000 (`Section "Header" grew too big`).
+    ///
+    /// # Panics
+    /// If `cells` is empty or has a duplicate or a cell outside the 32×32 map, or `frames`
+    /// is empty, has more than 256 frames, or a frame whose length is not the cell count.
+    #[track_caller]
     pub fn new(area: TilemapArea, cells: &[(u8, u8)], frames: &[Vec<u8>]) -> Self {
         assert!(!cells.is_empty(), "animation needs map cells");
         let mut seen = std::collections::BTreeSet::new();
         for &(x, y) in cells {
             assert!(
-                x < 32 && y < 32 && seen.insert((x, y)),
+                x < crate::hw::SCRN_VX_B.value
+                    && y < crate::hw::SCRN_VY_B.value
+                    && seen.insert((x, y)),
                 "invalid/duplicate animation cell"
             );
         }
@@ -41,11 +53,16 @@ impl BackgroundAnimationConfig {
         }
     }
     /// Calls per fully queued frame, 1..=255 (default 1). Backpressure extends it.
+    ///
+    /// # Panics
+    /// If `delay` is 0.
+    #[track_caller]
     pub fn delay(mut self, delay: u8) -> Self {
         assert!(delay > 0, "animation delay cannot be zero");
         self.delay = delay;
         self
     }
+    /// Loop (the default), PingPong or Once.
     pub fn playback(mut self, playback: AnimationType) -> Self {
         self.playback = playback;
         self
@@ -74,6 +91,7 @@ impl BackgroundAnimation {
     pub fn pause(&self) -> Vec<Instr> {
         self.enabled.set(0)
     }
+    /// Resume a paused animation where it stopped.
     pub fn resume(&self) -> Vec<Instr> {
         self.enabled.set(1)
     }
@@ -101,6 +119,14 @@ impl RustBoy {
     /// Animate one or more cells on either background/window map. Registers the
     /// VBlank queue consumer automatically. Each animator reserves seven WRAM bytes.
     /// All tile IDs refer to preloaded graphics. Steps cannot run in handlers.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, a function or another background animation already has the
+    /// routine name `UpdateBgAnim{name}`, or a variable has one of its state names
+    /// (`wBgAnim{name}…`), or a user function has the name of a VRAM-queue routine
+    /// (`QueueVramWrite`, `FlushVramQueue`). A *variable* named like the routine is caught by
+    /// `build()`, which returns [`Error::NameConflict`](super::Error::NameConflict).
+    #[track_caller]
     pub fn create_background_animation(
         &mut self,
         name: &str,
@@ -141,7 +167,9 @@ impl RustBoy {
                 .map(|&(x, y)| {
                     format!(
                         "${:04X}",
-                        config.area.address() + u16::from(y) * 32 + u16::from(x)
+                        config.area.address()
+                            + u16::from(y) * u16::from(crate::hw::SCRN_VX_B.value)
+                            + u16::from(x)
                     )
                 })
                 .collect::<Vec<_>>()

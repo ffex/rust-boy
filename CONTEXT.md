@@ -288,7 +288,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 
 - **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,
   `Shade` and `PaletteRegister` and stateless snippets, reused by `RustBoy::set_palette` and `fade_palette`. The
-  start-up `Palettes` keep taking hardware bytes. `PaletteFade` has four shade-saturating stages, fade-in from a
+  Startup `Palettes` accepts `Palette` or raw `u8`; writes reuse `set_palette`'s `ldh` form. `PaletteFade` has four shade-saturating stages, fade-in from a
   solid shade or fade-out to one; A selects the stage at runtime and values >= 3 stay complete. The game owns
   progress and timing: no hidden variables, waits or loops; emit in init or VBlank. Writes change A, fades A and
   flags (local labels from the allocator). BGP is shared by the background and the window; object colour 0 stays
@@ -362,7 +362,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   ping-pong or once, 1 to 256 frames, a hold of 1..=255 calls per frame. Pause keeps the cursor and timer; restart
   replays from frame 0 and keeps writes already queued. Once's finished flag means its last frame is queued, not
   flushed. Frames of several cells are not atomic: the queue can flush part of one. Handler steps are rejected through
-  the queue dependency check.
+  the queue dependency check. The target and frame tables go to the single ROM0 bank; too large ones make rgblink fail (past $4000
+  bytes), or rgbasm already (past $8000).
 
 - **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
   a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
@@ -397,7 +398,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `wVramQueue` (39 bytes), `wVramQueueRead` and `wVramQueueWrite` (one byte each) are reserved
   at the top of WRAM0, below shadow OAM when present, without moving user variables. Competing
   definitions return `Error::NameConflict`; insufficient memory is `Error::MemoryFull`.
-  Startup clears the cursors before user init code. Enqueue takes `hl` and `a`, changes all
+  Startup clears the cursors before user init code. Accepted writes queued while the LCD is off
+  remain pending until a VBlank after the LCD turns on; the queue does not poll or flush during
+  initialization. Enqueue takes `hl` and `a`, changes all
   registers and flags, and preserves IME. Carry clear means accepted; carry set means full or
   a runtime destination outside VRAM (constant errors panic at the API call). Rejection retains
   queued entries; callers retry if necessary. There is one producer, in init/main, never in an
@@ -406,7 +409,10 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   code are not followed, and a main-loop call to `FlushVramQueue`, a second consumer, is not rejected:
   both are documented limits). The write cursor is published after all bytes, so the consumer sees only
   complete entries even when enqueue is interrupted. Flush consumes FIFO entries with interrupts
-  off, beginning writes only on lines 144–152 and retaining entries if late. Unit tests cover
+  off, reading `rLY` with `ldh` (one M-cycle saved per entry), beginning writes only on lines
+  144–152 and retaining entries if late. `hw::LY_LAST_LINE` names 153, derived from
+  `SCRN_Y` and `VBLANK_LINES`, and is used by STAT validation and the late-flush test.
+  Unit tests cover
   wrapping, overflow, invalid destinations, FIFO order and routine conventions; emulator tests
   cover delayed main-loop work, rejection/IME at init, full-queue timing alongside OAM DMA,
   late deferral and VBlank injected at every enqueue instruction boundary. The interruption
@@ -1500,8 +1506,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
-  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and
-  palettes/fades since `refactor-p3-palettes` (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
+  `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
+  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
@@ -1510,7 +1517,10 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.
-- **Platform:** single ROM0 bank, no SRAM saves, no GBC.
+- **Platform:** generated engine programs still use ROM0 and do not select a cartridge mapper;
+  `stdlib::banking` has low-level MBC1/MBC5 ROM bank selectors (`refactor-p3-mbc-banking`), but
+  mapper headers and engine-managed banked asset access remain. `stdlib::sram` provides low-level
+  MBC1/MBC5 RAM gating and MBC5 bank selection; persistent saves and GBC support remain.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
   one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and

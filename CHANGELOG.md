@@ -8,6 +8,12 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
+  select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
+
+- **ROM bank selection** (`stdlib::banking`): low-level routines select MBC1 7-bit and MBC5
+  9-bit ROM banks for explicitly banked `ROMX` sections.
+
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.
@@ -84,6 +90,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   retain entries for the next VBlank. Queue code belongs only in init/main: handler code that reaches
   it makes `build()` return `Error::MainLoopOnly`. A full queue leaves the main loop little VBlank time
   (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
+  Writes queued while the LCD is off wait for a VBlank after it turns on. The flush reads `rLY` with
+  `ldh`, saving one M-cycle per queued entry.
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
@@ -107,7 +115,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   runtime `RustBoy::set_palette`, and four-stage `PaletteFade` through `fade_palette`.
   Load progress into A and apply in VBlank; the game controls speed, and progress >=3
   holds the final stage. Fade from/to a solid shade without blocking the main loop.
-  Existing startup `Palettes` bytes and example output remain compatible. `Shade` is ordered from white to black.
+  Startup `Palettes` accepts typed palettes or raw hardware bytes. Startup uses the shared `set_palette` routine's
+  `ldh` writes; generated example assembly changes accordingly. `Shade` is ordered from white to black.
   A fade leaves the palette byte in A: load the progress again before each fade.
 - **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
@@ -142,6 +151,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
   Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
   Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
+- **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
+  validation and the late-VBlank queue test.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.

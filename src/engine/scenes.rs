@@ -46,7 +46,8 @@ impl SceneManager {
     }
 
     /// Generate instructions that select `id` for the next dispatcher call.
-    /// The state takes effect the next time the dispatcher runs.
+    /// The state takes effect the next time the dispatcher runs. Register the dispatcher
+    /// with `RustBoy::call_routine` first so its state variable is declared.
     pub fn switch_to(&self, id: u8) -> Vec<Instr> {
         let mut code = Block::new();
         code.ld_a(id).ld_addr_def_a(&self.state);
@@ -75,5 +76,48 @@ impl SceneManager {
             dispatcher = dispatcher.with_dep(scene.clone());
         }
         dispatcher
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::asm::Asm;
+
+    fn update() -> Routine {
+        let mut code = Block::new();
+        code.label("UpdateTitle").ret();
+        Routine::new("UpdateTitle", code.into_instrs())
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered")]
+    fn duplicate_scene_ids_are_rejected() {
+        let mut scenes = SceneManager::new("UpdateScene", "wCurrentScene");
+        scenes.add_scene(0, update()).add_scene(0, update());
+    }
+
+    #[test]
+    fn switch_and_dispatch_instructions_are_stable() {
+        let mut scenes = SceneManager::new("UpdateScene", "wCurrentScene");
+        scenes.add_scene(2, update());
+        let mut expected = Block::new();
+        expected.ld_a(9).ld_addr_def_a("wCurrentScene");
+        assert_eq!(scenes.switch_to(9), expected.into_instrs());
+        let mut expected = Block::new();
+        expected
+            .label("UpdateScene")
+            .ld_a_addr_def("wCurrentScene")
+            .cp_imm(2)
+            .jp_cond(Condition::NZ, ".scene_next_2")
+            .call("UpdateTitle")
+            .ret()
+            .label(".scene_next_2")
+            .ret();
+        let mut actual = Asm::new();
+        actual.emit_all(scenes.dispatcher());
+        let mut wanted = Asm::new();
+        wanted.emit_all(expected.into_instrs());
+        assert_eq!(actual.to_asm(), wanted.to_asm());
     }
 }

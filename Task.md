@@ -429,7 +429,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `RustBoyConfig::source_comments` / `RustBoy::set_source_comments` adds a file:line comment before each
       non-empty `init`, main-loop, and interrupt-handler snippet; off by default, so snapshots and output stay unchanged
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
-- [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
+- [x] Opt-in flag-safe peephole optimisations via `Asm::peephole_optimized()`:
+      `ld a, 0` → `xor a` and `cp a, 0` → `and a` only when the next instruction overwrites all flags; the zero-load rewrite additionally requires that it does not read carry. Carry-reading regressions and full AF equivalence are checked on the emulator
 - [x] Validate user-supplied symbol names (branch `refactor-p3-symbol-validation`): constants and
       functions reject RGBDS keywords at registration; sprite/composite/animation/tile labels use the
       same symbol rules; `build()` returns `Error::NameConflict` for duplicate global definitions across

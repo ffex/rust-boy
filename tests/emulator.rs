@@ -4320,6 +4320,60 @@ fn sprite_pool_rejects_free_invalid_and_unrepresentable_writes_without_mutation(
     }
 }
 
+/// Check the full AF result on the hardware model: TestCpu intentionally models
+/// only Z/C, so N/H equivalence is checked here as well, with both carry inputs.
+#[test]
+fn peephole_rewrites_preserve_a_and_all_four_flags() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let nexts = [
+        Instr::Add { src: 1.into() },
+        Instr::Sub { src: 1.into() },
+        Instr::Adc { src: 1.into() },
+        Instr::Sbc { src: 1.into() },
+        Instr::Rla,
+        Instr::Rra,
+        Instr::Rl { operand: R8::A },
+        Instr::Rr { operand: R8::A },
+        Instr::And { src: 0x0f.into() },
+        Instr::Xor { src: 0xff.into() },
+    ];
+    for next in nexts {
+        for compare in [false, true] {
+            for carry in [false, true] {
+                for initial in [0, 0x0f, 0x80, 0xff] {
+                    let mut asm = Asm::new();
+                    asm.raw("SECTION \"Header\", ROM0[$100]\n    jp EntryPoint\n    ds $150-@, 0")
+                        .label("EntryPoint")
+                        .di()
+                        .ld_a(initial)
+                        .and(R8::A);
+                    if carry {
+                        asm.scf();
+                    }
+                    if compare {
+                        asm.cp_imm(0);
+                    } else {
+                        asm.ld_a(0);
+                    }
+                    asm.emit(next.clone()).label("Done").jr("Done");
+                    let run = |program: &Asm| {
+                        let mut gb = Rom::build(&program.to_asm(), &[]).boot();
+                        assert!(gb.run_until_pc(gb.symbol("Done"), 1));
+                        gb.registers().af()
+                    };
+                    assert_eq!(
+                        run(&asm),
+                        run(&asm.peephole_optimized()),
+                        "{next:?}, compare={compare}, carry={carry}, A={initial}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn get_tile_by_screen_pixel_adds_background_scroll_before_lookup() {
     if !rgbds_enabled() {

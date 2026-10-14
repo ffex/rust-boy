@@ -185,6 +185,9 @@ together: every breaking change of the refactoring is in this release, so a prog
   configure timing and events first, then generate restart snippets. Flags describe the shadow OAM, visible at the
   next DMA; polling events survive callback delivery. Unknown callback names fail `build()`; event-producing animation
   calls from interrupt handlers are rejected. Programs without subscriptions, the examples too, are unchanged.
+- **Peephole optimization** (Phase 3): opt-in `Asm::peephole_optimized()` shortens zero loads and comparisons
+  only when the following instruction overwrites every flag (without reading carry for the zero-load rewrite), preserving visible state while saving code bytes and
+  M-cycles. Default code generation is unchanged.
 - **WRAM arrays** (Phase 3): `vars.create_array` with `ArrayElement` and `WramArray`
   supports contiguous signed/unsigned bytes and words. Static access checks indices and values;
   runtime BC-indexed access sets carry on bounds failure and performs no array access.

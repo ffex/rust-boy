@@ -241,6 +241,33 @@ pub fn get_tile_by_pixel() -> Routine {
         .with_clobbers(Regs::BC | Regs::F)
 }
 
+/// The `GetTileByScreenPixel` routine: the background tile under a visible screen pixel,
+/// adjusted by the current SCX/SCY camera scroll before [`get_tile_by_pixel`] runs.
+///
+/// - Reads: `b` = screen X and `c` = screen Y, in pixels (0 to 255).
+/// - Returns: the same tile address in `hl` and tile index in `a` as `GetTileByPixel`.
+/// - Clobbers: `bc` and flags; preserves `de`.
+///
+/// Call while VRAM is accessible (in VBlank, or with the LCD off).
+pub fn get_tile_by_screen_pixel() -> Routine {
+    let mut asm = Block::new();
+    asm.comment("Add the camera scroll to screen coordinates, then look up that map pixel");
+    asm.label("GetTileByScreenPixel");
+    asm.ldh(R8::A, Mem::addr(hw::SCX))
+        .add(R8::B)
+        .ld(R8::B, R8::A);
+    asm.ldh(R8::A, Mem::addr(hw::SCY))
+        .add(R8::C)
+        .ld(R8::C, R8::A)
+        .call("GetTileByPixel")
+        .ret();
+    Routine::new("GetTileByScreenPixel", asm)
+        .with_dep(get_tile_by_pixel())
+        .with_reads(Regs::BC)
+        .with_returns(Regs::A | Regs::HL)
+        .with_clobbers(Regs::BC | Regs::F)
+}
+
 /// A routine `label` that sets the Z flag when `a` is one of the tiles `tiles_ids`
 ///
 /// Each tile id is a number (`"$00"`) or a constant (`"BRICK_LEFT"`), as [`Expr`] reads

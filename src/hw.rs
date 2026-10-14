@@ -132,6 +132,96 @@ symbols! {
     TAC: u16 = "rTAC", 0xFF07;
     /// Interrupt flags, `rIF` (bits `IEF_*`)
     IF: u16 = "rIF", 0xFF0F;
+    /// Audio register `NR10`; see Pan Docs Audio Registers.
+    NR10: u16 = "rNR10", 0xFF10;
+    /// Audio register `NR11`; see Pan Docs Audio Registers.
+    NR11: u16 = "rNR11", 0xFF11;
+    /// Audio register `NR12`; see Pan Docs Audio Registers.
+    NR12: u16 = "rNR12", 0xFF12;
+    /// Audio register `NR13`; see Pan Docs Audio Registers.
+    NR13: u16 = "rNR13", 0xFF13;
+    /// Audio register `NR14`; see Pan Docs Audio Registers.
+    NR14: u16 = "rNR14", 0xFF14;
+    /// Audio register `NR21`; see Pan Docs Audio Registers.
+    NR21: u16 = "rNR21", 0xFF16;
+    /// Audio register `NR22`; see Pan Docs Audio Registers.
+    NR22: u16 = "rNR22", 0xFF17;
+    /// Audio register `NR23`; see Pan Docs Audio Registers.
+    NR23: u16 = "rNR23", 0xFF18;
+    /// Audio register `NR24`; see Pan Docs Audio Registers.
+    NR24: u16 = "rNR24", 0xFF19;
+    /// Audio register `NR30`; see Pan Docs Audio Registers.
+    NR30: u16 = "rNR30", 0xFF1A;
+    /// Audio register `NR31`; see Pan Docs Audio Registers.
+    NR31: u16 = "rNR31", 0xFF1B;
+    /// Audio register `NR32`; see Pan Docs Audio Registers.
+    NR32: u16 = "rNR32", 0xFF1C;
+    /// Audio register `NR33`; see Pan Docs Audio Registers.
+    NR33: u16 = "rNR33", 0xFF1D;
+    /// Audio register `NR34`; see Pan Docs Audio Registers.
+    NR34: u16 = "rNR34", 0xFF1E;
+    /// Audio register `NR41`; see Pan Docs Audio Registers.
+    NR41: u16 = "rNR41", 0xFF20;
+    /// Audio register `NR42`; see Pan Docs Audio Registers.
+    NR42: u16 = "rNR42", 0xFF21;
+    /// Audio register `NR43`; see Pan Docs Audio Registers.
+    NR43: u16 = "rNR43", 0xFF22;
+    /// Audio register `NR44`; see Pan Docs Audio Registers.
+    NR44: u16 = "rNR44", 0xFF23;
+    /// Audio register `NR50`; see Pan Docs Audio Registers.
+    NR50: u16 = "rNR50", 0xFF24;
+    /// Audio register `NR51`; see Pan Docs Audio Registers.
+    NR51: u16 = "rNR51", 0xFF25;
+    /// Audio register `NR52`; see Pan Docs Audio Registers.
+    NR52: u16 = "rNR52", 0xFF26;
+    /// Sixteen packed wave-sample bytes, accessible while channel 3 is stopped.
+    AUD3WAVERAM: u16 = "_AUD3WAVERAM", 0xFF30;
+    /// Audio flag `AUDENA_ON` from hardware.inc.
+    AUDENA_ON: u8 = "AUDENA_ON", 0x80;
+    /// Audio flag `AUDENA_OFF` from hardware.inc.
+    AUDENA_OFF: u8 = "AUDENA_OFF", 0x00;
+    /// Audio flag `AUD1SWEEP_UP` from hardware.inc.
+    AUD1SWEEP_UP: u8 = "AUD1SWEEP_UP", 0x00;
+    /// Audio flag `AUD1SWEEP_DOWN` from hardware.inc.
+    AUD1SWEEP_DOWN: u8 = "AUD1SWEEP_DOWN", 0x08;
+    /// Audio flag `AUDVOL_VIN_LEFT` from hardware.inc.
+    AUDVOL_VIN_LEFT: u8 = "AUDVOL_VIN_LEFT", 0x80;
+    /// Audio flag `AUDVOL_VIN_RIGHT` from hardware.inc.
+    AUDVOL_VIN_RIGHT: u8 = "AUDVOL_VIN_RIGHT", 0x08;
+    /// Audio flag `AUDLEN_DUTY_12_5` from hardware.inc.
+    AUDLEN_DUTY_12_5: u8 = "AUDLEN_DUTY_12_5", 0x00;
+    /// Audio flag `AUDLEN_DUTY_25` from hardware.inc.
+    AUDLEN_DUTY_25: u8 = "AUDLEN_DUTY_25", 0x40;
+    /// Audio flag `AUDLEN_DUTY_50` from hardware.inc.
+    AUDLEN_DUTY_50: u8 = "AUDLEN_DUTY_50", 0x80;
+    /// Audio flag `AUDLEN_DUTY_75` from hardware.inc.
+    AUDLEN_DUTY_75: u8 = "AUDLEN_DUTY_75", 0xC0;
+    /// Audio flag `AUDENV_UP` from hardware.inc.
+    AUDENV_UP: u8 = "AUDENV_UP", 0x08;
+    /// Audio flag `AUDENV_DOWN` from hardware.inc.
+    AUDENV_DOWN: u8 = "AUDENV_DOWN", 0x00;
+    /// Audio flag `AUDHIGH_RESTART` from hardware.inc.
+    AUDHIGH_RESTART: u8 = "AUDHIGH_RESTART", 0x80;
+    /// Audio flag `AUDHIGH_LENGTH_ON` from hardware.inc.
+    AUDHIGH_LENGTH_ON: u8 = "AUDHIGH_LENGTH_ON", 0x40;
+    /// Audio flag `AUDHIGH_LENGTH_OFF` from hardware.inc.
+    AUDHIGH_LENGTH_OFF: u8 = "AUDHIGH_LENGTH_OFF", 0x00;
+    /// Audio flag `AUDTERM_1_LEFT` from hardware.inc.
+    AUDTERM_1_LEFT: u8 = "AUDTERM_1_LEFT", 0x10;
+    /// Audio flag `AUDTERM_1_RIGHT` from hardware.inc.
+    AUDTERM_1_RIGHT: u8 = "AUDTERM_1_RIGHT", 0x01;
+    /// Audio flag `AUDTERM_2_LEFT` from hardware.inc.
+    AUDTERM_2_LEFT: u8 = "AUDTERM_2_LEFT", 0x20;
+    /// Audio flag `AUDTERM_2_RIGHT` from hardware.inc.
+    AUDTERM_2_RIGHT: u8 = "AUDTERM_2_RIGHT", 0x02;
+    /// Audio flag `AUDTERM_3_LEFT` from hardware.inc.
+    AUDTERM_3_LEFT: u8 = "AUDTERM_3_LEFT", 0x40;
+    /// Audio flag `AUDTERM_3_RIGHT` from hardware.inc.
+    AUDTERM_3_RIGHT: u8 = "AUDTERM_3_RIGHT", 0x04;
+    /// Audio flag `AUDTERM_4_LEFT` from hardware.inc.
+    AUDTERM_4_LEFT: u8 = "AUDTERM_4_LEFT", 0x80;
+    /// Audio flag `AUDTERM_4_RIGHT` from hardware.inc.
+    AUDTERM_4_RIGHT: u8 = "AUDTERM_4_RIGHT", 0x08;
     /// LCD control, `rLCDC` (flags `LCDCF_*`)
     LCDC: u16 = "rLCDC", 0xFF40;
     /// LCD status, `rSTAT` (flags `STATF_*`)
@@ -363,6 +453,19 @@ pub const ROM_HEADER: u16 = 0x0100;
 /// from `$150` on (`ds $150 - @, 0` pads the header)
 pub const ROM_HEADER_END: u16 = 0x0150;
 
+/// MBC1 ROM bank low bits, selected by a write in `$2000..=$3FFF`.
+pub const MBC1_ROM_BANK_LOW: u16 = 0x2000;
+/// MBC1 ROM bank high bits, selected by a write in `$4000..=$5FFF`.
+pub const MBC1_ROM_BANK_HIGH: u16 = 0x4000;
+/// MBC5 ROM bank low eight bits, selected by a write in `$2000..=$2FFF`.
+pub const MBC5_ROM_BANK_LOW: u16 = 0x2000;
+/// MBC5 ROM bank high bit, selected by a write in `$3000..=$3FFF`.
+pub const MBC5_ROM_BANK_HIGH: u16 = 0x3000;
+/// Cartridge RAM gate for MBC1/MBC5: write `$0A` to enable and `$00` to disable.
+pub const CARTRIDGE_RAM_GATE: u16 = 0x0000;
+/// MBC5 cartridge RAM bank selector (bits 0–3), selected by writes at `$4000..=$5FFF`.
+pub const MBC5_RAM_BANK: u16 = 0x4000;
+
 /// Bytes in one 8x8 tile (2 bits per pixel)
 pub const TILE_SIZE: u16 = 16;
 /// Pixels in one row of a tile: a sprite is one tile wide
@@ -409,6 +512,8 @@ pub const OAM_DMA_MCYCLES: u16 = OAM_SIZE as u16;
 pub const LINE_MCYCLES: u16 = 114;
 /// Lines of VBlank in a frame: `LY` from [`SCRN_Y`] (144) to 153
 pub const VBLANK_LINES: u16 = 10;
+/// Last `rLY` line in a frame (153): the LY counter wraps to zero on the next line
+pub const LY_LAST_LINE: u8 = SCRN_Y.value + VBLANK_LINES as u8 - 1;
 /// M-cycles of VBlank (mode 1) in a frame: 10 lines of 114, the time OAM and VRAM are free
 /// for the CPU however long the visible lines' HBlanks are
 pub const VBLANK_MCYCLES: u16 = VBLANK_LINES * LINE_MCYCLES;
@@ -462,3 +567,16 @@ pub fn oam_offset(index: u8, byte: Symbol<u8>) -> u16 {
 
 /// Hardware WX offset from the window screen X coordinate.
 pub const WINDOW_X_OFFSET: u8 = 7;
+
+/// Wave RAM holds sixteen bytes (32 four-bit samples).
+pub const WAVE_RAM_BYTES: usize = 16;
+
+/// CH3 DAC enable (NR30 bit 7).
+pub const WAVE_DAC_ON: u8 = 0x80;
+/// CH3 output levels (NR32 bits 6..5).
+pub const WAVE_LEVEL_MUTE: u8 = 0;
+pub const WAVE_LEVEL_FULL: u8 = 0x20;
+pub const WAVE_LEVEL_HALF: u8 = 0x40;
+pub const WAVE_LEVEL_QUARTER: u8 = 0x60;
+/// CH4 seven-bit LFSR selection (NR43 bit 3).
+pub const NOISE_WIDTH_SEVEN: u8 = 0x08;

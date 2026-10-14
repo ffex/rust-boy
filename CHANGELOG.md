@@ -8,6 +8,12 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
+  select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
+
+- **ROM bank selection** (`stdlib::banking`): low-level routines select MBC1 7-bit and MBC5
+  9-bit ROM banks for explicitly banked `ROMX` sections.
+
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.
@@ -44,6 +50,25 @@ together: every breaking change of the refactoring is in this release, so a prog
   (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
   conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
+- **Audio initialization** (Phase 3): `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or
+  powered-on audio before user initialization, including soft resets. Inherit preserves old output.
+  `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.
+  Power-on resets channels without triggering sound or changing wave RAM. `hw` exports NR registers, wave RAM,
+  routing and audio flags.
+- **Sound effects** (Phase 3): `RustBoy::play_sfx` / `stdlib::audio::play_sfx` trigger typed one-shot effects on
+  channels 1–4. Length, period, envelope, sweep and noise settings are validated;
+  wave samples are packed and uploaded with CH3 stopped. The APU and mixer stay unchanged.
+  Carry reports an off APU; `stop_channel` stops the selected DAC. Snippets use AF only
+  and preserve IME. Configure `AudioConfig::On` and serialize audio writers before use.
+- **Tracker music** (Phase 3): `Song` imports self-contained hUGETracker 1.0.1 RGBDS exports with namespaced
+  internal symbols. `RustBoy::enable_music` embeds pinned public-domain hUGEDriver
+  6.1.1, starts a song at boot/reset and reserves 102 WRAM0 bytes through the allocator.
+  Main-frame or VBlank clocks, multiple songs, start/pause/resume/stop and SFX channel
+  reservation are available. With music enabled, `play_sfx` requires a reserved channel;
+  CH3 release invalidates the driver wave cache. An inherited audio policy becomes On.
+  `music` demonstrates offline assembly/ROM generation. Driver controls are main-only;
+  song banks must stay mapped, callbacks must not reenter controls, and complex VBlank
+  ticks can overrun its budget. The other examples' output is unchanged.
 - **Sprites** (Phase 3): every sprite of a `RustBoy` program lives in a shadow OAM in WRAM, which the VBlank handler
   copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
   The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,
@@ -65,6 +90,13 @@ together: every breaking change of the refactoring is in this release, so a prog
   frame. `step` finishes a frame the full queue held back before advancing; `pause`, `resume`, `restart` and `finished`.
   Seven WRAM bytes and ROM tables per animator. Frames of several cells can show in pieces while the twelve-write VBlank
   queue drains; `finished` means queued, not flushed. Example output is unchanged.
+- **PNG and binary tile assets** (Phase 3): `TileSource::from_png(path, options)` converts a PNG in Rust;
+  `PngOptions` sets the four RGB colours, exact or nearest matching, the transparent pixel index and row-major or 8×16
+  pair order; partial alpha and animated PNGs are rejected. `from_2bpp(path)` / `from_2bpp_bytes(bytes)` check whole
+  16-byte tiles and derive the count. All three return `AssetError`, own their data, resolve paths in the generating
+  process, and need no RGBDS include path. `from_file(path, count)` keeps its deferred INCBIN and manual count.
+  FOSDEM loads its PNG, FOSDEM and coin use derived counts: their snapshots inline the tiles as byte-equal `dw` data.
+  New dependency: the pure-Rust `png` crate (host side only).
 - **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
   `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
   handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
@@ -72,6 +104,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   retain entries for the next VBlank. Queue code belongs only in init/main: handler code that reaches
   it makes `build()` return `Error::MainLoopOnly`. A full queue leaves the main loop little VBlank time
   (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
+  Writes queued while the LCD is off wait for a VBlank after it turns on. The flush reads `rLY` with
+  `ldh`, saving one M-cycle per queued entry.
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
@@ -95,7 +129,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   runtime `RustBoy::set_palette`, and four-stage `PaletteFade` through `fade_palette`.
   Load progress into A and apply in VBlank; the game controls speed, and progress >=3
   holds the final stage. Fade from/to a solid shade without blocking the main loop.
-  Existing startup `Palettes` bytes and example output remain compatible. `Shade` is ordered from white to black.
+  Startup `Palettes` accepts typed palettes or raw hardware bytes. Startup uses the shared `set_palette` routine's
+  `ldh` writes; generated example assembly changes accordingly. `Shade` is ordered from white to black.
   A fade leaves the palette byte in A: load the progress again before each fade.
 - **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
@@ -133,6 +168,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
   Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
   Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
+- **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
+  validation and the late-VBlank queue test.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -162,7 +199,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 

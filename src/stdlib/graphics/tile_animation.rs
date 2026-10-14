@@ -45,7 +45,10 @@ impl TileAnimationState {
 /// queue full; clear means idle or complete. Changes all registers, preserves IME.
 /// Pausing preserves progress; `finished` becomes one after Once's final frame queues.
 /// The queue flush is asynchronous: multi-cell frames may become visible in pieces.
-/// Panics for zero targets/delay or frame count outside 1..=256.
+///
+/// # Panics
+/// If `cells` is not 1..=1024, `count` not 1..=256, or `delay` is 0.
+#[track_caller]
 pub fn animate(
     name: &str,
     targets: &str,
@@ -55,7 +58,8 @@ pub fn animate(
     delay: u8,
     playback: TilePlayback,
 ) -> Routine {
-    assert!(cells > 0 && cells <= 1024, "invalid cell count");
+    let map_cells = u16::from(crate::hw::SCRN_VX_B.value) * u16::from(crate::hw::SCRN_VY_B.value);
+    assert!(cells > 0 && cells <= map_cells, "invalid cell count");
     assert!(
         (1..=256).contains(&count) && delay > 0,
         "invalid animation timing"

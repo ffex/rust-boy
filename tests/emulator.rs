@@ -2252,6 +2252,52 @@ fn arbitrary_metasprites_keep_irregular_layout_at_every_edge() {
 }
 
 #[test]
+fn metasprite_parts_can_be_partly_off_screen_at_left_and_top_edges() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let tile = || TileSource::from_raw(&[["$ff"; 8]]);
+    let parts = [
+        MetaspritePart::new(tile(), -4, -4, 0),
+        MetaspritePart::new(tile(), 8, 0, 0),
+        MetaspritePart::new(tile(), -8, -16, 0),
+    ];
+    let mut game = RustBoy::new();
+    game.add_metasprite("Clipped", 0, 0, &parts);
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    assert_eq!(gb.oam_entry(0), [12, 4, 0, 0]);
+    assert_eq!(gb.oam_entry(1), [16, 16, 1, 0]);
+    assert_eq!(gb.oam_entry(2), [0, 0, 2, 0]);
+}
+
+#[test]
+fn clipped_metasprite_can_be_hidden_and_reshown() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let parts = [
+        MetaspritePart::new(TileSource::from_raw(&[["$ff"; 8]]), 0, 0, 0),
+        MetaspritePart::new(TileSource::from_raw(&[["$00"; 8]]), -4, -8, 0x20),
+    ];
+    let mut game = RustBoy::new();
+    let id = game.add_metasprite("Clipped", 0, 0, &parts);
+    game.init(game.sprites.hide_composite(id));
+    for (x, y, expected) in [
+        (0, 0, [[16, 8, 0, 0], [8, 4, 1, 0x20]]),
+        (-4, -8, [[8, 4, 0, 0], [0, 0, 1, 0x20]]),
+    ] {
+        game.init(game.sprites.show_composite_at(id, x, y));
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(3);
+        for (index, entry) in expected.iter().enumerate() {
+            assert_eq!(&gb.oam_entry(index), entry);
+        }
+    }
+}
+
+#[test]
 fn typed_flags_reach_every_part_of_a_16x16_sprite_and_a_metasprite() {
     if !rgbds_enabled() {
         return;
@@ -2339,7 +2385,7 @@ fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
                 .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
             game.sprites.set_initial_animation(sprite, 0);
         }
-        game.sprites.set_animation_delay(fast, 0, 1);
+        game.sprites.set_animation_period(fast, 0, 1);
         let parts: Vec<_> = (0..3)
             .map(|i| MetaspritePart::new(tiles.clone(), i * 8, 0, 0u8))
             .collect();
@@ -2347,7 +2393,7 @@ fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
         game.sprites
             .add_composite_animation(meta, "Walk", 0, 1, AnimationType::Loop);
         game.sprites.set_composite_initial_animation(meta, 0);
-        game.sprites.set_composite_animation_delay(meta, 0, 2);
+        game.sprites.set_composite_animation_period(meta, 0, 2);
         // Repeated enable is normal for held-key bindings; it must not stall a clock.
         game.add_to_main_loop(game.sprites.enable_composite_animation(meta, 0));
         let rom = engine_rom(&game);
@@ -2403,7 +2449,7 @@ fn animation_callbacks_run_once_after_all_metasprite_parts_and_can_chain() {
             .sprites
             .add_composite_animation(meta, "Idle", 0, 1, AnimationType::Loop);
         game.sprites.set_composite_initial_animation(meta, once);
-        game.sprites.set_composite_animation_delay(meta, once, 2);
+        game.sprites.set_composite_animation_period(meta, once, 2);
         game.sprites
             .set_composite_animation_callback(meta, once, "AnimationDone");
         let calls = game.vars.create_u8("wCalls", 0);
@@ -2482,7 +2528,7 @@ fn a_once_callback_can_restart_itself_without_duplicate_terminal_notifications()
     let once = game
         .sprites
         .add_animation(sprite, "Once", 0, 2, AnimationType::Once);
-    game.sprites.set_animation_delay(sprite, once, 3);
+    game.sprites.set_animation_period(sprite, once, 3);
     game.sprites.set_initial_animation(sprite, once);
     game.sprites
         .set_animation_callback(sprite, once, "RestartOnce");
@@ -2564,6 +2610,28 @@ fn typed_sprite_flags_reach_oam_and_runtime_changes_preserve_position() {
             ]
         );
     }
+}
+
+#[test]
+fn composite_x_flip_swaps_halves_and_sets_flags_on_both() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.set_sprite_size(SpriteSize::Size8x16);
+    let left = TileSource::from_raw(&[["$ff"; 8], ["$00"; 8]]);
+    let right = TileSource::from_raw(&[["$00"; 8], ["$ff"; 8]]);
+    let id = game.add_sprite_16x16("Player", left, right, 40, 48, 0);
+    let flags = SpriteFlags::new()
+        .flip_x(true)
+        .palette(ObjectPalette::Palette1);
+    game.on_vblank(game.sprites.set_composite_flags(id, flags));
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(2);
+    assert_eq!(gb.oam_entry(0), [64, 48, 2, flags.bits()]);
+    assert_eq!(gb.oam_entry(1), [64, 56, 0, flags.bits()]);
 }
 
 #[test]

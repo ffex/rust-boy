@@ -280,13 +280,15 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
-- [ ] Follow-up of the sprite attributes (from the review of #49): a composite-level `set_flags`, and an X flip of a
-      16x16 composite that also swaps its halves (today per member sprite; documented)
 - [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
       lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
-- [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
-      off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
+- [x] Follow-up of the metasprites (review of #50): metasprite parts may begin partly off-screen at the left/top;
+      creation and re-showing accept screen X -8..=247, Y -16..=239 for every part,
+      and encoded OAM coordinate 0 hides that part.
+- [x] Follow-up of the sprite attributes (from the review of #49): `SpriteManager::set_composite_flags` sets every
+      member's flags; two horizontal neighbours swap creation-time tile assignments on X flip
+      (clearing it restores them). Other layouts get flags only; Y flip never reorders parts.
 - [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
       static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
       with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
@@ -301,13 +303,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       tables (`BgAnim{name}Targets`, `…Frames`, `…Frame{i}`) passes `build()` and fails in rgbasm ("already defined"); the
       name-conflict check should cover these raw labels, as it does for functions
 
+
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
 - [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
       overrides, independent selection clocks, default/global fallback, composite setters)
-- [ ] Follow-up of the per-animation speed (from the review of the #50 chain, maintainer decision): the name
-      `SpriteManager::set_animation_delay(sprite, index, frames)` is the global `RustBoy::set_animation_delay(frames)`'s,
-      with another meaning; `set_animation_period` would tell them apart (an API rename)
+- [x] Follow-up of the per-animation speed (review of the #50 chain): distinguish per-animation
+      overrides from global `RustBoy::set_animation_delay` (renamed to `set_animation_period`
+      and the composite/clear counterparts).
 - [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
       coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
 - [ ] Follow-up of the animation events (from the review of the #50 chain, maintainer decision): re-enabling a finished
@@ -316,6 +319,7 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Follow-up of the animation events (from review 2 of the #50 chain): `build()` could reject restart snippets
       generated before the sprite's timing or events changed (today documented: configure first; a cleared period
       leaves an undefined `wAnim_{name}_Timer` for rgbasm)
+
 
 ### Audio
 - [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in
@@ -447,6 +451,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Hardware notes: VBlank & OAM timing, 8×16 rules, coordinate offsets (+8 / +16)
 - [x] `CHANGELOG.md` (the release notes of the refactoring, branch `refactor-p2-engine-api-prelude`; keep it up to date)
 - [ ] Keep `AGENTS.md`, `CLAUDE.md` and `CONTEXT.md` up to date as phases land
+
+- [ ] Consolidate consecutive-entry batching shared by engine startup and `stdlib::graphics::sprites::draw_sprites`.
 
 ## Future
 

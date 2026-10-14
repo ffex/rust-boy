@@ -152,17 +152,25 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
   existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
-  runtime, preserving coordinates and tile indices. Default/example output is unchanged.
+  runtime, preserving coordinates and tile indices. `sprites.set_composite_flags(id, flags)`
+  updates every member. For two horizontal neighbours, X flip swaps creation-time tiles and clearing
+  it restores them; this resets animated tiles rather than mirroring their current frame. Other layouts
+  get flags only, and Y flip never reorders parts. Default/example output is unchanged.
 - **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
   per-part tiles/flags and OAM entries in creation order. Composite movement and animation
-  apply to the whole group. Existing 16x16 calls retain names and generated output.
-- **Per-animation timing** (Phase 3): `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's
+  apply to the whole group. Parts may start partly off-screen at X -8 or Y -16; OAM coordinate zero hides a part.
+  Engine `show_at` and `show_composite_at` also accept signed positions (X -8..=247, Y -16..=239
+  for every part), preserving tile/flags. These engine show methods now take `i16` instead of `u8`;
+  convert existing byte variables with `i16::from(value)`. Existing 16x16 calls retain names and generated output.
+- **Per-animation timing** (Phase 3): `sprites.set_animation_period(sprite, index, frames)` overrides one animation's
   period (1..=255). Sprites with overrides get their own clock; their other animations use the global period.
   Selection changes reset the clock, repeated enable calls keep it, disabled frames stop it. The composite setters
-  configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
+  configure every part; `clear_animation_period` removes an override. Each timed sprite uses two WRAM bytes; BC is
   preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
   global default.
+  The per-animation methods use `set_animation_period` and `set_composite_animation_period` to distinguish them from
+  the global setter.
 - **Animation completion** (Phase 3): `enable_animation_events` / `take_animation_event` give coalescing completion
   flags (Once reaches its last frame, Loop wraps, PingPong returns to its first frame); `set_animation_callback` binds
   a named function called after all sprite parts stepped, with BC/DE/HL preserved; the composite APIs give one

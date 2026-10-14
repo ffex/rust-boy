@@ -362,6 +362,36 @@ impl Sprite {
         code.into_instrs()
     }
 
+    /// Hide this entry by setting Y=0, preserving X/tile/flags. Changes A only.
+    /// Direct OAM requires a safe LCD phase; shadow OAM is always writable.
+    pub fn hide(&self) -> Vec<Instr> {
+        let mut code = Block::new();
+        code.ld_a(0)
+            .ld_addr_def_a(self.oam.entry(self.id, hw::OAMA_Y));
+        code.into_instrs()
+    }
+
+    /// Show/place this entry at screen pixels. Writes Y last, keeping tile/flags.
+    /// Changes A only.
+    ///
+    /// # Panics
+    /// If the position is outside X 0..=247 / Y 0..=239.
+    #[track_caller]
+    pub fn show_at(&self, x: u8, y: u8) -> Vec<Instr> {
+        let x = x
+            .checked_add(hw::OAM_X_OFFSET)
+            .expect("sprite screen X is too large");
+        let y = y
+            .checked_add(hw::OAM_Y_OFFSET)
+            .expect("sprite screen Y is too large");
+        let mut code = Block::new();
+        code.ld_a(x)
+            .ld_addr_def_a(self.oam.entry(self.id, hw::OAMA_X))
+            .ld_a(y)
+            .ld_addr_def_a(self.oam.entry(self.id, hw::OAMA_Y));
+        code.into_instrs()
+    }
+
     /// Move the sprite left by `distance` pixels, with no limit
     ///
     /// The plain moves emit no labels, so they can be used any number of times and

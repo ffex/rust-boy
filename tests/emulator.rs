@@ -2436,6 +2436,68 @@ fn typed_sprite_flags_reach_oam_and_runtime_changes_preserve_position() {
 }
 
 #[test]
+fn random_u8_advances_a_nonzero_state_and_returns_it_in_a() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wRandomOutput", 0);
+    let random = rust_boy::stdlib::random::random_u8();
+    let mut call = game.call_routine(&random);
+    let mut store = rust_boy::asm::Block::new();
+    store.ld_addr_def_a("wRandomOutput");
+    call.extend(store.into_instrs());
+    game.add_to_main_loop(call);
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(3);
+    let seed = gb.read_symbol("wRandomSeed");
+    assert_ne!(
+        seed, 0,
+        "a zero initial state is replaced by the default seed"
+    );
+    assert_eq!(gb.read_symbol("wRandomOutput"), seed);
+    assert_eq!(seed, 0xDE, "three LFSR steps from the default $A7 seed");
+}
+
+#[test]
+fn random_u8_cycles_custom_seeds_and_recovers_a_runtime_zero() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for seed in [1, 0x42, 0xA7] {
+        let mut game = RustBoy::new();
+        game.vars.create_u8("wRandomSeed", seed);
+        let call = game.call_routine(&rust_boy::stdlib::random::random_u8());
+        game.add_to_main_loop(call);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        assert_eq!(gb.read_symbol("wRandomSeed"), seed);
+        let mut seen = std::collections::BTreeSet::new();
+        seen.insert(seed);
+        for step in 1..=255 {
+            gb.run_frames(1);
+            let state = gb.read_symbol("wRandomSeed");
+            assert_ne!(state, 0);
+            if step < 255 {
+                assert!(seen.insert(state), "seed {seed}: repeated at step {step}");
+            } else {
+                assert_eq!(state, seed);
+            }
+        }
+        assert_eq!(seen.len(), 255);
+        gb.write_ram(gb.symbol("wRandomSeed"), 0);
+        gb.run_frames(1);
+        assert_eq!(
+            gb.read_symbol("wRandomSeed"),
+            0xEB,
+            "default seed is stepped after runtime zero"
+        );
+    }
+}
+
+#[test]
 fn palettes_and_nonblocking_fades_follow_progress_in_vblank() {
     if !rgbds_enabled() {
         return;

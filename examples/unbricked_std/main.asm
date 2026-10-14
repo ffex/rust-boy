@@ -69,6 +69,7 @@
     ld [wFrameCounter], a
     ld [wNewKeys], a
     ld [wCurKeys], a
+    ld [wReleasedKeys], a
     ld [wScore], a
     Main:
     call WaitNotVBlank
@@ -245,9 +246,14 @@
     ld a, P1F_GET_NONE
     ldh [rP1], a
     ld a, [wCurKeys]
+    ld c, a
     xor a, b
     and a, b
     ld [wNewKeys], a
+    ld a, b
+    cpl
+    and a, c
+    ld [wReleasedKeys], a
     ld a, b
     ld [wCurKeys], a
     ret
@@ -661,6 +667,7 @@
     SECTION "Input Variables", WRAM0
     wCurKeys: db
     wNewKeys: db
+    wReleasedKeys: db
     SECTION "Ball Data", WRAM0
     wBallMomentumX: db
     wBallMomentumY: db

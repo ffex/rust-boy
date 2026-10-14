@@ -91,7 +91,8 @@ pub fn multiply_u8() -> Routine {
 ///
 /// On success, return the quotient in `hl`, remainder in `a`, and clear carry. Division
 /// by zero returns `$FFFF` in `hl`, zero in `a`, and sets carry. Reads: `hl`, `c`.
-/// Returns: `hl`, `a`, flags. Clobbers: `b`, `de`.
+/// Returns: `hl`, `a`, flags. Clobbers: `b`, `de`, flags. Carry signals a zero divisor;
+/// `$FFFF` alone is not an error (it is also the quotient of `$FFFF / 1`).
 pub fn divide_u16_by_u8() -> Routine {
     let mut code = Block::new();
     code.label("DivideU16ByU8")
@@ -193,6 +194,47 @@ mod tests {
         assert!(cpu.zero);
         assert!(!cpu.carry);
         assert_eq!(hl(&cpu), 0xABCD);
+    }
+
+    #[test]
+    fn all_routines_link_together() {
+        let mut asm = crate::asm::Asm::new();
+        asm.section(crate::asm::Section::rom0("Math"));
+        for routine in routines() {
+            asm.emit_all(routine);
+        }
+        crate::asm::label_check::assert_links(&asm.to_asm());
+    }
+
+    #[test]
+    fn subtract_without_borrow_and_greater_comparison() {
+        let mut cpu = TestCpu::default();
+        set_hl(&mut cpu, 0x1200);
+        set_de(&mut cpu, 0x0101);
+        run(&sub_u16(), &mut cpu);
+        assert_eq!(hl(&cpu), 0x10FF);
+        assert!(!cpu.carry);
+        set_de(&mut cpu, 0x1000);
+        run(&compare_u16(), &mut cpu);
+        assert!(!cpu.carry);
+        assert!(!cpu.zero);
+    }
+
+    #[test]
+    fn asymmetric_multiply_and_nine_bit_division_remainder() {
+        let mut cpu = TestCpu::default();
+        cpu.a = 3;
+        cpu.b = 5;
+        run(&multiply_u8(), &mut cpu);
+        assert_eq!(hl(&cpu), 15);
+        for (dividend, quotient, remainder) in [(0xFFFF, 257, 0), (0xFFFE, 256, 254)] {
+            set_hl(&mut cpu, dividend);
+            cpu.c = 255;
+            run(&divide_u16_by_u8(), &mut cpu);
+            assert_eq!(hl(&cpu), quotient);
+            assert_eq!(cpu.a, remainder);
+            assert!(!cpu.carry);
+        }
     }
 
     #[test]

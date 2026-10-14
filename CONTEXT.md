@@ -1526,10 +1526,11 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
   Initial presses and repeats share one emitted action body, so local labels in bounded movement and
   other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
-- **Engine:** scene dispatch is available through `SceneManager`; no sprite collision, loops/switch; screen-pixel solid-tile checks exist as
+- **Engine:** scene dispatch is available through `SceneManager`; no sprite collision; screen-pixel solid-tile checks exist as
   `TileCollision` (`refactor-p3-tile-collision`) (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
+  `stdlib::flow` provides `While`, fixed-count `For` and `SwitchA`; For saves BC around its body.
   Unsigned 16-bit add/subtract/compare, 8×8 multiply and 16÷8 divide are available in `stdlib::math`.
   Deterministic pseudo-random bytes are available through `stdlib::random::random_u8` (an 8-bit LFSR).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,

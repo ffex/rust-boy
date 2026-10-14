@@ -378,7 +378,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       8×8 multiply and 16÷8 divide with documented register/flag contracts. Regression tests
       link all routines and cover borrow-free subtraction, greater-than comparison, asymmetric
       multiplication and nine-bit shifted division remainders.
-- [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
+- [x] Control flow: `While`, fixed-count `For`, `SwitchA` (`refactor-p3-control-flow`); nested loops
+      preserve their BC counters, with assembled label-nesting and hardware execution regressions.
+- [ ] Functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
       `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads
       `wCurKeys` after `UpdateKeys` at the end of each frame and jumps to `$0100`, so the whole start-up runs again;

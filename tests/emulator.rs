@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
 use rust_boy::stdlib::banking;
+use rust_boy::stdlib::flow::{For, IfConst, SwitchA, While};
 use rust_boy::stdlib::graphics::vram_queue;
 use rust_boy::stdlib::math;
 use rust_boy::stdlib::sram;
@@ -1076,6 +1077,79 @@ fn stdlib_math_routines_run_on_the_gameboy() {
     assert_eq!(gb.read_symbol("wMathQuotientLo"), 142);
     assert_eq!(gb.read_symbol("wMathQuotientHi"), 0);
     assert_eq!(gb.read_symbol("wMathRemainder"), 6);
+}
+
+#[test]
+fn flow_loops_and_switch_execute_on_the_gameboy() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    let count = game.vars.create_u8("wFlowCount", 0);
+    game.vars.create_u8("wFlowCase", 0);
+
+    let mut increment = Block::new();
+    increment
+        .ld_a_addr_def("wFlowCount")
+        .inc(R8::A)
+        .ld_addr_def_a("wFlowCount");
+    game.add_to_main_loop(For::times(5, increment));
+
+    let mut truth = Block::new();
+    truth.ld_a(1);
+    let mut falsehood = Block::new();
+    falsehood.ld_a(0);
+    let condition = IfConst::lt(count.get(), 8, truth).or_else(falsehood);
+    game.add_to_main_loop(While::new(condition, {
+        let mut code = Block::new();
+        code.ld_a_addr_def("wFlowCount")
+            .inc(R8::A)
+            .ld_addr_def_a("wFlowCount");
+        code
+    }));
+
+    let mut case = Block::new();
+    case.ld_a(0xA2).ld_addr_def_a("wFlowCase");
+    let mut fallback = Block::new();
+    fallback.ld_a(0xFF).ld_addr_def_a("wFlowCase");
+    let mut setup_switch = Block::new();
+    setup_switch.ld_a(2);
+    game.add_to_main_loop(setup_switch);
+    game.add_to_main_loop(SwitchA::new().case(2, case).default(fallback));
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(1);
+    assert_eq!(gb.read_symbol("wFlowCount"), 8);
+    assert_eq!(gb.read_symbol("wFlowCase"), 0xA2);
+}
+
+#[test]
+fn nested_for_and_switch_default_execute_once() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    for name in ["wNested", "wZero", "wDefault"] {
+        game.vars.create_u8(name, 0);
+    }
+    game.add_to_main_loop(For::times(3, For::times(4, count("wNested"))));
+    game.add_to_main_loop(For::times(0, count("wZero")));
+    let mut select = Block::new();
+    select.ld_a(9);
+    game.add_to_main_loop(select);
+    game.add_to_main_loop(
+        SwitchA::new()
+            .case(1, count("wZero"))
+            .default(count("wDefault")),
+    );
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(1);
+    assert_eq!(gb.read_symbol("wNested"), 12);
+    assert_eq!(gb.read_symbol("wZero"), 0);
+    assert_eq!(gb.read_symbol("wDefault"), 1);
 }
 
 #[test]

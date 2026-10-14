@@ -315,10 +315,15 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       generated before the sprite's timing or events changed (today documented: configure first; a cleared period
       leaves an undefined `wAnim_{name}_Timer` for rgbasm)
 
-### Audio *(nothing exists today)*
-- [ ] APU init (sound on/off at boot), register constants in `hw`
-- [ ] Sound-effect API for channels 1–4 (`play_sfx`)
-- [ ] Music: integrate a driver (e.g. hUGEDriver)
+### Audio
+- [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in
+      inherited/off/on startup policy, validated mixer, shared stateless power snippets)
+- [x] Sound-effect API for channels 1–4 (`play_sfx`; `refactor-p3-sfx`): typed pulse/sweep,
+      wave patterns/levels and noise effects, hardware one-shot length/envelope, channel stop,
+      powered-off rejection; mixer and other channels preserved
+- [x] Music: integrate a driver (`refactor-p3-music`, hUGEDriver 6.1.1 pinned/vendored
+      offline; multiple exports, allocator-accounted state, main-frame/VBlank clocks,
+      start/pause/resume/stop and channel reservation with wave-cache restoration)
 
 ### Input
 - [x] Just-pressed (`wNewKeys`), released (`wReleasedKeys`), and held as separate bindings

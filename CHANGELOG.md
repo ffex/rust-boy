@@ -52,7 +52,27 @@ together: every breaking change of the refactoring is in this release, so a prog
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
 - **Scenes** (Phase 3): `SceneManager` builds a dispatcher for byte-sized scene IDs. Add its dispatcher through
   `RustBoy::call_routine`, register scene update routines, and use `switch_to` to select the state for the next frame.
-  Scene routines and their dependencies are included automatically; an unknown state does nothing.
+  Scene routines and their dependencies are included automatically; unknown states and empty dispatchers
+  do nothing. `switch_to` requires registering the dispatcher so its state byte is declared.
+- **Audio initialization** (Phase 3): `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or
+  powered-on audio before user initialization, including soft resets. Inherit preserves old output.
+  `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.
+  Power-on resets channels without triggering sound or changing wave RAM. `hw` exports NR registers, wave RAM,
+  routing and audio flags.
+- **Sound effects** (Phase 3): `RustBoy::play_sfx` / `stdlib::audio::play_sfx` trigger typed one-shot effects on
+  channels 1–4. Length, period, envelope, sweep and noise settings are validated;
+  wave samples are packed and uploaded with CH3 stopped. The APU and mixer stay unchanged.
+  Carry reports an off APU; `stop_channel` stops the selected DAC. Snippets use AF only
+  and preserve IME. Configure `AudioConfig::On` and serialize audio writers before use.
+- **Tracker music** (Phase 3): `Song` imports self-contained hUGETracker 1.0.1 RGBDS exports with namespaced
+  internal symbols. `RustBoy::enable_music` embeds pinned public-domain hUGEDriver
+  6.1.1, starts a song at boot/reset and reserves 102 WRAM0 bytes through the allocator.
+  Main-frame or VBlank clocks, multiple songs, start/pause/resume/stop and SFX channel
+  reservation are available. With music enabled, `play_sfx` requires a reserved channel;
+  CH3 release invalidates the driver wave cache. An inherited audio policy becomes On.
+  `music` demonstrates offline assembly/ROM generation. Driver controls are main-only;
+  song banks must stay mapped, callbacks must not reenter controls, and complex VBlank
+  ticks can overrun its budget. The other examples' output is unchanged.
 - **Sprites** (Phase 3): every sprite of a `RustBoy` program lives in a shadow OAM in WRAM, which the VBlank handler
   copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
   The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,

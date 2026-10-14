@@ -17,7 +17,7 @@ use super::tiles::TilemapArea;
 /// gives the same program as before the configuration existed. Change it with the builder
 /// methods (one per field), or set the fields of a default value; the `RustBoy` setters
 /// (`set_sprite_size`, `set_background_tilemap`, `set_palettes`, `set_animation_delay`,
-/// `use_function`, `set_soft_reset`, and `on_stat` / `on_timer` for `stat` / `timer`)
+/// `set_source_comments`, `use_function`, `set_soft_reset`, and `on_stat` / `on_timer` for `stat` / `timer`)
 /// change the same settings later.
 ///
 /// # Example
@@ -70,6 +70,9 @@ pub struct RustBoyConfig {
     /// The timer the start-up code starts; stopped by default.
     /// [`RustBoy::on_timer`](super::RustBoy::on_timer) sets it with its handler.
     pub timer: Option<Timer>,
+    /// Add Rust file and line comments before user-provided `init`, main-loop, and
+    /// interrupt-handler code. Off by default so generated assembly stays unchanged.
+    pub source_comments: bool,
     /// APU startup policy; Inherit leaves legacy boot state unchanged.
     pub audio: AudioConfig,
 }
@@ -87,6 +90,7 @@ impl Default for RustBoyConfig {
             soft_reset: false,
             stat: None,
             timer: None,
+            source_comments: false,
             audio: AudioConfig::Inherit,
         }
     }
@@ -164,6 +168,14 @@ impl RustBoyConfig {
     /// With `timer` started at start-up
     pub fn timer(mut self, timer: Timer) -> Self {
         self.timer = Some(timer);
+        self
+    }
+
+    /// Include Rust source locations in comments before user-provided code.
+    /// Paths are kept as rustc reports them and may depend on the machine or path remapping.
+    /// These comments are unsuitable for committed snapshots.
+    pub fn source_comments(mut self, enabled: bool) -> Self {
+        self.source_comments = enabled;
         self
     }
 }

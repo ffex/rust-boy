@@ -222,6 +222,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
     macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
 
+- **Source comments** (Phase 3): opt-in `RustBoyConfig::source_comments(true)` /
+  `RustBoy::set_source_comments(true)` adds Rust file and line comments before non-empty init,
+  main-loop and interrupt snippets. Paths stay as rustc reports them and can be machine-dependent
+  or remapped; do not use these comments in committed snapshots. Default output is unchanged.
+
 ### Toolchain
 
 - RGBDS 0.9 or later (the generated code writes `0x05`-style numbers). RGBDS 1.0.4 is tested, and

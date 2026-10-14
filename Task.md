@@ -428,11 +428,19 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Asm comments pointing back to the Rust source (`#[track_caller]`)
 - [ ] ROM-size and cycle-budget report (e.g. "main loop exceeds VBlank")
 - [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
-- [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
-      [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
-      `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
-      functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
-      "`Player` already defined" in rgbasm)
+- [x] Validate user-supplied symbol names (branch `refactor-p3-symbol-validation`): constants and
+      functions reject RGBDS keywords at registration; sprite/composite/animation/tile labels use the
+      same symbol rules; `build()` returns `Error::NameConflict` for duplicate global definitions across
+      `hardware.inc`, generated code, tile labels, constants, raw code and variables (including
+      `Coin`/`CoinEnd`, `Main`, and `add_sprite_tiles(player, "Player", ..)` collisions).
+      PR #81 review coverage also checks keyword rejection for external symbols, hexadecimal constants,
+      and plain sprites; animation fixtures use non-keyword names. Raw RGBDS conditional definitions
+      are conservatively deferred to the assembler, and `PURGE` ends a symbol lifetime; regression
+      programs cover conditional branches, conditional purge, multiple purged symbols and later duplicates.
+      Unexpanded macro bodies are skipped, including definitions split across instructions.
+      Raw `REPT`/`FOR` definitions, including tails skipped by `BREAK`, are also deferred; nesting
+      persists across instructions and chunks, possible purges forget prior definitions, and definite
+      duplicates after iterations are still rejected. Linked regressions cover zero iterations and breaks.
 - [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
       after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
       branch `refactor-p3-vram-queue-followups`.

@@ -1547,6 +1547,17 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
   one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and
   `.2bpp` files with a derived tile count exist since `refactor-p3-png-assets` (see §2).
+  `refactor-p3-symbol-validation` also rejects RGBDS keywords in user symbols and reports duplicate emitted global
+  definitions as `Error::NameConflict` before rgbasm runs. Regression tests cover keyword rejection through
+  external symbols, hexadecimal constants and plain sprites; animation test fixtures avoid `LOW`/`HIGH`.
+  The duplicate scan does not evaluate raw RGBDS conditionals: definitions within them are deferred to
+  rgbasm, and any conditional `PURGE` conservatively forgets the prior definition. Unconditional `PURGE`
+  permits a fresh definition while later definite duplicates are still rejected. Unexpanded macro bodies
+  are skipped, including their conditional and purge directives. Conditional and macro nesting
+  persists across chunks; regression programs assemble with RGBDS.
+  `REPT`/`FOR` bodies are likewise deferred, covering zero iterations and tails skipped by `BREAK`.
+  Iteration nesting persists across instructions and chunks; possible purges conservatively forget prior
+  definitions, while definite duplicates after the iteration remain errors. Linked regressions cover these cases.
 
 ---
 

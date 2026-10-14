@@ -443,6 +443,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] `CHANGELOG.md` (the release notes of the refactoring, branch `refactor-p2-engine-api-prelude`; keep it up to date)
 - [ ] Keep `AGENTS.md`, `CLAUDE.md` and `CONTEXT.md` up to date as phases land
 
+- [ ] Consolidate consecutive-entry batching shared by engine startup and `stdlib::graphics::sprites::draw_sprites`.
+
 ## Future
 
 - [ ] **Move the examples to a separate repository** (e.g. `rust-boy-examples`): the example binaries,

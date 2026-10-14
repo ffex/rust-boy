@@ -243,8 +243,9 @@ pub(crate) fn move_coord_var(coord: &Expr, var_name: &str) -> Vec<Instr> {
 /// `hl` starts at the first sprite's entry and walks through the bytes (`ld [hli], a`), so
 /// sprites in consecutive entries are written one after the other; `hl` is loaded again
 /// for a sprite that is not in the entry after the previous one, or in the other OAM. Changes `a`, `hl` and
-/// nothing else (no flag). Both the `stdlib` programs and `RustBoy` (the sprites it
-/// writes at start-up) use it.
+/// nothing else (no flag). Standalone and `stdlib` programs can use this batch helper.
+/// `RustBoy` startup traverses its entries separately and shares the lower-level
+/// `draw_at_oam` emitter.
 ///
 /// # Panics
 /// If two sprites have the same id in the same OAM: the later one would overwrite the

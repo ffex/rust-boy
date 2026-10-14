@@ -85,10 +85,26 @@ pub struct RustBoy {
     vram_queue: bool,
     main_only_routines: Vec<String>,
 
+    /// Optional pinned driver and imported songs.
+    music: Option<MusicState>,
+
     /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
     /// builtins, animation delay. The sprite size is also the sprite manager's, which
     /// needs it when a sprite is added: `with_config` and `set_sprite_size` set both
     config: RustBoyConfig,
+}
+
+/// Music scheduling. MainFrame runs once per completed game frame; VBlank runs in
+/// the handler after DMA/VRAM flush and may extend beyond VBlank on complex songs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MusicClock {
+    #[default]
+    MainFrame,
+    VBlank,
+}
+struct MusicState {
+    songs: Vec<crate::stdlib::audio::music::Song>,
+    clock: MusicClock,
 }
 
 /// The code of an interrupt handler, as the program gives it, and the registers it saves
@@ -131,6 +147,7 @@ impl RustBoy {
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
             vram_queue: false,
+            music: None,
             main_only_routines: Vec::new(),
             config,
         }
@@ -139,6 +156,96 @@ impl RustBoy {
     /// The settings of this program
     pub fn config(&self) -> &RustBoyConfig {
         &self.config
+    }
+
+    /// Set the audio startup policy. Runtime power helpers are in `stdlib::audio`.
+    pub fn set_audio(&mut self, audio: crate::stdlib::audio::AudioConfig) -> &mut Self {
+        self.config.audio = audio;
+        self
+    }
+
+    /// Replace a channel's sound; AF only, carry set if APU is off or music owns this
+    /// unreserved channel. Serialize audio writers.
+    pub fn play_sfx(&self, effect: &crate::stdlib::audio::Sfx) -> Vec<Instr> {
+        if self.music.is_some() {
+            crate::stdlib::audio::music::play_sfx(self.labels(), effect)
+        } else {
+            crate::stdlib::audio::play_sfx(self.labels(), effect)
+        }
+    }
+
+    /// Enable the pinned hUGEDriver and start this song before user init. An inherited
+    /// audio policy becomes On(default mixer); explicit On/Off policies are retained.
+    /// Call once. Music controls are main-only; generated ticks are the single consumer.
+    pub fn enable_music(
+        &mut self,
+        song: crate::stdlib::audio::music::Song,
+        clock: MusicClock,
+    ) -> &mut Self {
+        assert!(self.music.is_none(), "music is already enabled");
+        for routine in crate::stdlib::audio::music::controls() {
+            self.define_routine(routine);
+        }
+        if self.config.audio == crate::stdlib::audio::AudioConfig::Inherit {
+            self.config.audio =
+                crate::stdlib::audio::AudioConfig::On(crate::stdlib::audio::Mixer::default());
+        }
+        self.music = Some(MusicState {
+            songs: vec![song],
+            clock,
+        });
+        self
+    }
+    /// Add another export, emitted in insertion order. Descriptors must be unique.
+    pub fn add_music_song(&mut self, song: crate::stdlib::audio::music::Song) -> &mut Self {
+        let music = self.music.as_mut().expect("enable music first");
+        assert!(
+            !music
+                .songs
+                .iter()
+                .any(|s| s.descriptor() == song.descriptor()),
+            "duplicate music descriptor"
+        );
+        music.songs.push(song);
+        self
+    }
+    /// Change/restart the song. Resets driver mute ownership; serialize game audio code.
+    pub fn start_music(&self, descriptor: &str) -> Vec<Instr> {
+        let music = self.music.as_ref().expect("enable music first");
+        let song = music
+            .songs
+            .iter()
+            .find(|s| s.descriptor() == descriptor)
+            .expect("song not imported");
+        crate::stdlib::audio::music::start(song)
+    }
+    /// Freeze song position and silence only music-owned channels; reserved SFX continue.
+    pub fn pause_music(&self) -> Vec<Instr> {
+        self.music_control(crate::stdlib::audio::music::PAUSE)
+    }
+    /// Resume a paused song. Carry set if stopped. Cut notes return at the next note row.
+    pub fn resume_music(&self) -> Vec<Instr> {
+        self.music_control(crate::stdlib::audio::music::RESUME)
+    }
+    /// Stop playback; resume is rejected until start_music. Reserved channels are retained.
+    pub fn stop_music(&self) -> Vec<Instr> {
+        self.music_control(crate::stdlib::audio::music::STOP)
+    }
+    fn music_control(&self, routine: &str) -> Vec<Instr> {
+        assert!(self.music.is_some(), "enable music first");
+        let mut b = Block::new();
+        b.call(routine);
+        b.into_instrs()
+    }
+    /// Mute this channel in the driver before SFX playback. Main-only; changes all registers.
+    pub fn reserve_music_channel(&self, channel: crate::stdlib::audio::Channel) -> Vec<Instr> {
+        assert!(self.music.is_some(), "enable music first");
+        crate::stdlib::audio::music::reserve(channel)
+    }
+    /// Release SFX ownership. CH3 wave cache is invalidated so its song wave is restored.
+    pub fn release_music_channel(&self, channel: crate::stdlib::audio::Channel) -> Vec<Instr> {
+        assert!(self.music.is_some(), "enable music first");
+        crate::stdlib::audio::music::release(channel)
     }
 
     /// Set the animation delay value in frames (higher = slower animations)
@@ -788,6 +895,7 @@ impl RustBoy {
         startup.label("EntryPoint");
         startup.di();
         startup.ld(R16::SP, Expr::hex(hw::STACK_TOP));
+        startup.emit_all(crate::stdlib::audio::initialize(self.config.audio));
         startup.call("WaitVBlank");
 
         // Turn off screen for safe VRAM access
@@ -865,6 +973,9 @@ impl RustBoy {
                 window.wx, window.wy,
             ));
         }
+        if let Some(music) = &self.music {
+            finish.emit_all(crate::stdlib::audio::music::start(&music.songs[0]));
+        }
         finish.emit_all(self.init_code.clone());
         finish.emit_all(self.raw_chunk(Chunk::Init));
 
@@ -905,6 +1016,13 @@ impl RustBoy {
         // starts in VBlank
         asm.label("Main");
         asm.call(BuiltinFunction::WaitFrame.label());
+        if self
+            .music
+            .as_ref()
+            .is_some_and(|m| m.clock == MusicClock::MainFrame)
+        {
+            asm.call(crate::stdlib::audio::music::TICK);
+        }
 
         // Generate animation calls at start of main loop
         if self.sprites.has_animations() {
@@ -954,6 +1072,14 @@ impl RustBoy {
         // code is part of the program now
         let raw_functions = self.raw_chunk(Chunk::Functions);
         let raw_data = self.raw_chunk(Chunk::Data);
+        let music_data: Vec<Instr> = self
+            .music
+            .iter()
+            .flat_map(|m| m.songs.iter())
+            .map(|song| Instr::Raw {
+                line: song.assembly().to_owned(),
+            })
+            .collect();
 
         // The variables of this program: the program's, and the ones `build()` adds (on a
         // copy: building changes nothing in `self`)
@@ -963,6 +1089,10 @@ impl RustBoy {
         // created here too, since the handler needs it even if the program replaced
         // WaitFrame with its own)
         vars.create_needed(interrupts::VBLANK_FLAG, 0)?;
+        if self.music.is_some() {
+            vars.create_needed(crate::stdlib::audio::music::PLAYING, 0)?;
+            vars.create_needed(crate::stdlib::audio::music::READY, 0)?;
+        }
 
         // Add animation variables if animations are used
         if self.sprites.has_animations() {
@@ -998,6 +1128,7 @@ impl RustBoy {
             finish.as_slice(),
             raw_functions.as_slice(),
             raw_data.as_slice(),
+            music_data.as_slice(),
         ]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
         code.extend(handlers.iter().map(Routine::body));
@@ -1040,9 +1171,52 @@ impl RustBoy {
                 }
             }
         }
+        if self.music.is_some() {
+            for (interrupt, handler) in &self.handlers {
+                for routine in [
+                    crate::stdlib::audio::music::START,
+                    crate::stdlib::audio::music::PAUSE,
+                    crate::stdlib::audio::music::RESUME,
+                    crate::stdlib::audio::music::STOP,
+                    crate::stdlib::audio::music::RESERVE,
+                    crate::stdlib::audio::music::RELEASE,
+                    crate::stdlib::audio::music::TICK,
+                    "RustBoyHuge_hUGE_init",
+                    "RustBoyHuge_hUGE_dosound",
+                    "RustBoyHuge_hUGE_mute_channel",
+                ] {
+                    if self.functions.reaches(&handler.code, routine) {
+                        return Err(Error::MainLoopOnly {
+                            routine: routine.into(),
+                            handler: interrupt.handler_label().into(),
+                        });
+                    }
+                }
+            }
+        }
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
+        if self.music.is_some() {
+            let name = crate::stdlib::audio::music::RAM_BASE;
+            let first = if let Some((_, kind)) = vars.names().find(|(var, _)| *var == name) {
+                Some(super::error::Definition::Variable(kind))
+            } else if self.functions.is_external_symbol(name) {
+                Some(super::error::Definition::ExternalSymbol)
+            } else if code.iter().any(|body| defines(body, name)) || defines(&functions.code, name)
+            {
+                Some(super::error::Definition::CodeSymbol)
+            } else {
+                None
+            };
+            if let Some(first) = first {
+                return Err(Error::NameConflict {
+                    name: name.into(),
+                    first,
+                    second: super::error::Definition::BuiltinLabel,
+                });
+            }
+        }
         let mut buffers = Vec::new();
         if self.uses_shadow_oam()
             || functions
@@ -1091,6 +1265,15 @@ impl RustBoy {
                     0,
                 ),
             ]);
+        }
+        if self.music.is_some() {
+            buffers.push((
+                crate::stdlib::audio::music::BUFFER,
+                "Music driver WRAM",
+                MemoryRegion::Wram0,
+                crate::stdlib::audio::music::BUFFER_BYTES,
+                0,
+            ));
         }
         {
             // Generated RAM buffers cannot also be user-defined symbols: a reference
@@ -1157,6 +1340,7 @@ impl RustBoy {
             asm.emit_all(handler);
         }
         asm.emit_all(raw_functions);
+        asm.emit_all(music_data);
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
         // The variables of the emitted routines (`wCurKeys`, `wNewKeys` for UpdateKeys, and
@@ -1173,6 +1357,15 @@ impl RustBoy {
         }
         // Every variable now: they must fit
         vars.check_layout()?;
+        if self.music.is_some() {
+            asm.chunk(Chunk::Constants);
+            asm.def(
+                crate::stdlib::audio::music::RAM_BASE,
+                vars.buffer_address(crate::stdlib::audio::music::BUFFER)
+                    .expect("music buffer allocated")
+                    .to_string(),
+            );
+        }
 
         asm.chunk(Chunk::Init);
         asm.emit_all(startup);
@@ -1222,6 +1415,17 @@ impl RustBoy {
                     target: JumpTarget::Label(vram_queue::flush().name().to_string()),
                 });
                 saves |= vram_queue::flush().changes();
+            }
+            if interrupt == Interrupt::VBlank
+                && self
+                    .music
+                    .as_ref()
+                    .is_some_and(|m| m.clock == MusicClock::VBlank)
+            {
+                code.push(Instr::Call {
+                    target: JumpTarget::Label(crate::stdlib::audio::music::TICK.into()),
+                });
+                saves |= Regs::ALL;
             }
             if let Some(handler) = given {
                 code.extend(handler.code.iter().cloned());

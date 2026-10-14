@@ -53,6 +53,46 @@ impl TileSource {
         TileSource::File(path.to_string(), tile_count)
     }
 
+    /// Read a .2bpp file now, validating a nonempty multiple of sixteen bytes. Tile
+    /// count comes from the bytes; the returned source owns them, so assembly requires
+    /// no INCBIN include path and later file changes cannot alter its allocation.
+    /// Paths are relative to the generating program's working directory.
+    pub fn from_2bpp(path: impl AsRef<std::path::Path>) -> Result<Self, super::AssetError> {
+        Self::from_2bpp_bytes(&super::assets::read_file(path.as_ref())?)
+    }
+
+    /// Build a source from binary tile bytes, with its count derived automatically.
+    /// Rejects empty/partial tiles. Little-endian DW pairs preserve both bitplanes.
+    pub fn from_2bpp_bytes(bytes: &[u8]) -> Result<Self, super::AssetError> {
+        if bytes.is_empty() || bytes.len() % usize::from(hw::TILE_SIZE) != 0 {
+            return Err(super::AssetError::Invalid2bppLength(bytes.len()));
+        }
+        Ok(Self::Raw(
+            bytes
+                .chunks_exact(usize::from(hw::TILE_SIZE))
+                .map(|tile| {
+                    std::array::from_fn(|row| {
+                        format!(
+                            "${:04X}",
+                            u16::from_le_bytes([tile[row * 2], tile[row * 2 + 1]])
+                        )
+                    })
+                })
+                .collect(),
+        ))
+    }
+
+    /// Read and convert a static PNG into owned tile data, deriving its tile count
+    /// from the image dimensions. See [`super::png_to_2bpp`] for format/color rules.
+    /// Paths are relative to the generating program's working directory.
+    pub fn from_png(
+        path: impl AsRef<std::path::Path>,
+        options: &super::PngOptions,
+    ) -> Result<Self, super::AssetError> {
+        let bytes = super::assets::read_file(path.as_ref())?;
+        Self::from_2bpp_bytes(&super::png_to_2bpp(&bytes, options)?)
+    }
+
     /// Calculate the size in bytes (16 bytes per tile)
     ///
     /// # Panics
@@ -560,5 +600,53 @@ mod tests {
         let id = tm.add_background("Tiles", TileSource::from_raw(&tiles_data));
 
         assert_eq!(tm.get_address(id), Some(0x9000));
+    }
+}
+
+#[cfg(test)]
+mod binary_asset_tests {
+    use super::*;
+    #[test]
+    fn bytes_validate_and_derive_counts_without_an_extra_enum_variant() {
+        for len in [0, 1, 15, 17, 31] {
+            assert!(
+                matches!(TileSource::from_2bpp_bytes(&vec![0;len]),Err(super::super::AssetError::Invalid2bppLength(actual)) if actual==len)
+            );
+        }
+        let bytes: Vec<_> = (0..32).collect();
+        let source = TileSource::from_2bpp_bytes(&bytes).unwrap();
+        assert_eq!(source.tile_count(), 2);
+        assert_eq!(source.size_bytes(), 32);
+        let mut manager = TileManager::new();
+        let id = manager.add_background("Binary", source);
+        assert_eq!(manager.get_address(id), Some(hw::VRAM_BG_TILES));
+        let emitted: Vec<_> = manager
+            .generate_tile_data()
+            .into_iter()
+            .map(|i| i.to_string())
+            .collect();
+        assert_eq!(emitted[1], "dw $0100");
+        assert_eq!(emitted[16], "dw $1F1E");
+        let next = manager.add_background("Next", TileSource::from_raw(&[["$00"; 8]]));
+        assert_eq!(manager.get_address(next), Some(hw::VRAM_BG_TILES + 32));
+    }
+    #[test]
+    fn file_sources_own_their_bytes_and_return_path_errors() {
+        // The system's temporary directory: the source tree may be read-only
+        let path = std::env::temp_dir().join(format!("rust-boy-asset-{}.2bpp", std::process::id()));
+        std::fs::write(&path, [0x55, 0x33].repeat(8)).unwrap();
+        let source = TileSource::from_2bpp(&path).unwrap();
+        std::fs::write(&path, [0; 32]).unwrap();
+        assert_eq!(source.tile_count(), 1);
+        let TileSource::Raw(tiles) = source else {
+            panic!("owned source expected")
+        };
+        assert_eq!(tiles[0][0], "$3355");
+        std::fs::write(&path, [0; 17]).unwrap();
+        assert!(TileSource::from_2bpp(&path).is_err());
+        std::fs::remove_file(&path).unwrap();
+        let err = TileSource::from_2bpp(&path).unwrap_err();
+        assert!(std::error::Error::source(&err).is_some());
+        assert!(matches!(err,super::super::AssetError::Io{path:failed,..} if failed==path));
     }
 }

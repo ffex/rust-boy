@@ -8,6 +8,12 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
+  select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
+
+- **ROM bank selection** (`stdlib::banking`): low-level routines select MBC1 7-bit and MBC5
+  9-bit ROM banks for explicitly banked `ROMX` sections.
+
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.
@@ -44,12 +50,53 @@ together: every breaking change of the refactoring is in this release, so a prog
   (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
   conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
+- **Audio initialization** (Phase 3): `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or
+  powered-on audio before user initialization, including soft resets. Inherit preserves old output.
+  `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.
+  Power-on resets channels without triggering sound or changing wave RAM. `hw` exports NR registers, wave RAM,
+  routing and audio flags.
+- **Sound effects** (Phase 3): `RustBoy::play_sfx` / `stdlib::audio::play_sfx` trigger typed one-shot effects on
+  channels 1–4. Length, period, envelope, sweep and noise settings are validated;
+  wave samples are packed and uploaded with CH3 stopped. The APU and mixer stay unchanged.
+  Carry reports an off APU; `stop_channel` stops the selected DAC. Snippets use AF only
+  and preserve IME. Configure `AudioConfig::On` and serialize audio writers before use.
+- **Tracker music** (Phase 3): `Song` imports self-contained hUGETracker 1.0.1 RGBDS exports with namespaced
+  internal symbols. `RustBoy::enable_music` embeds pinned public-domain hUGEDriver
+  6.1.1, starts a song at boot/reset and reserves 102 WRAM0 bytes through the allocator.
+  Main-frame or VBlank clocks, multiple songs, start/pause/resume/stop and SFX channel
+  reservation are available. With music enabled, `play_sfx` requires a reserved channel;
+  CH3 release invalidates the driver wave cache. An inherited audio policy becomes On.
+  `music` demonstrates offline assembly/ROM generation. Driver controls are main-only;
+  song banks must stay mapped, callbacks must not reenter controls, and complex VBlank
+  ticks can overrun its budget. The other examples' output is unchanged.
 - **Sprites** (Phase 3): every sprite of a `RustBoy` program lives in a shadow OAM in WRAM, which the VBlank handler
   copies to OAM with an OAM DMA, so a sprite update is never lost, whatever the main loop does (B12).
   The generated buffer names `wShadowOAM` and `hOAMDMA` are reserved: competing variables,
   constants, raw labels, emitted routine labels or external symbols produce `Error::NameConflict`.
   With the builtin `InitOamDma`, so are the labels of the code it copies, `OamDmaCode` and `OamDmaCodeEnd`
   (`Definition::BuiltinLabel`).
+- **Runtime entities** (Phase 3): `RustBoy::create_entity_pool` reserves reusable OAM slots;
+  `EntityPool::spawn` claims a hidden slot, `set_sprite` shows or updates it, `hide` keeps it
+  alive, and `despawn` clears and frees it. Each entity is one hardware sprite, and its index
+  is a runtime value in `A`.
+- **Text and scores** (Phase 3): `load_font` loads a contiguous ASCII tile font; `create_text_printer` prints a
+  string, with newlines and wrapping, on either map; `TextPrinter::step` resumes when the VBlank queue is full (carry
+  clear: every glyph is queued); `reset` prints it again. `create_number_printer` shows a five-digit unsigned decimal
+  or four-digit packed-BCD score with leading zeros; `NumberPrinter::set_value(labels)` reads DE and restarts the job,
+  and invalid BCD returns carry without changing the buffer. Fonts use the background tile capacity; each printer adds
+  a WRAM cursor word, a score four or five bytes. Example output is unchanged.
+- **Background tile animation** (Phase 3): `BackgroundAnimationConfig` (fixed cells, preloaded tile-ID frames, either
+  map) and `create_background_animation`, a main-loop animator with loop, ping-pong or once playback and a hold per
+  frame. `step` finishes a frame the full queue held back before advancing; `pause`, `resume`, `restart` and `finished`.
+  Seven WRAM bytes and ROM tables per animator. Frames of several cells can show in pieces while the twelve-write VBlank
+  queue drains; `finished` means queued, not flushed. Example output is unchanged.
+- **PNG and binary tile assets** (Phase 3): `TileSource::from_png(path, options)` converts a PNG in Rust;
+  `PngOptions` sets the four RGB colours, exact or nearest matching, the transparent pixel index and row-major or 8×16
+  pair order; partial alpha and animated PNGs are rejected. `from_2bpp(path)` / `from_2bpp_bytes(bytes)` check whole
+  16-byte tiles and derive the count. All three return `AssetError`, own their data, resolve paths in the generating
+  process, and need no RGBDS include path. `from_file(path, count)` keeps its deferred INCBIN and manual count.
+  FOSDEM loads its PNG, FOSDEM and coin use derived counts: their snapshots inline the tiles as byte-equal `dw` data.
+  New dependency: the pure-Rust `png` crate (host side only).
 - **VRAM write queue** (Phase 3): opt-in `RustBoy::queue_vram_write` and
   `queue_vram_write_from_registers` defer byte writes to VBlank, after OAM DMA and before user
   handler code. Twelve pending writes fit in 41 WRAM bytes; carry reports rejected writes (full or
@@ -57,6 +104,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   retain entries for the next VBlank. Queue code belongs only in init/main: handler code that reaches
   it makes `build()` return `Error::MainLoopOnly`. A full queue leaves the main loop little VBlank time
   (about 150 M-cycles instead of 920): direct VRAM access from the main loop then misses VBlank.
+  Writes queued while the LCD is off wait for a VBlank after it turns on. The flush reads `rLY` with
+  `ldh`, saving one M-cycle per queued entry.
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
   at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
@@ -80,7 +129,8 @@ together: every breaking change of the refactoring is in this release, so a prog
   runtime `RustBoy::set_palette`, and four-stage `PaletteFade` through `fade_palette`.
   Load progress into A and apply in VBlank; the game controls speed, and progress >=3
   holds the final stage. Fade from/to a solid shade without blocking the main loop.
-  Existing startup `Palettes` bytes and example output remain compatible. `Shade` is ordered from white to black.
+  Startup `Palettes` accepts typed palettes or raw hardware bytes. Startup uses the shared `set_palette` routine's
+  `ldh` writes; generated example assembly changes accordingly. `Shade` is ordered from white to black.
   A fade leaves the palette byte in A: load the progress again before each fade.
 - **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
@@ -96,8 +146,30 @@ together: every breaking change of the refactoring is in this release, so a prog
   configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
   preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
   global default.
+- **Animation completion** (Phase 3): `enable_animation_events` / `take_animation_event` give coalescing completion
+  flags (Once reaches its last frame, Loop wraps, PingPong returns to its first frame); `set_animation_callback` binds
+  a named function called after all sprite parts stepped, with BC/DE/HL preserved; the composite APIs give one
+  notification per group. `restart_animation` shows the first frame and resets completion, direction and timing state:
+  configure timing and events first, then generate restart snippets. Flags describe the shadow OAM, visible at the
+  next DMA; polling events survive callback delivery. Unknown callback names fail `build()`; event-producing animation
+  calls from interrupt handlers are rejected. Programs without subscriptions, the examples too, are unchanged.
+- **WRAM arrays** (Phase 3): `vars.create_array` with `ArrayElement` and `WramArray`
+  supports contiguous signed/unsigned bytes and words. Static access checks indices and values;
+  runtime BC-indexed access sets carry on bounds failure and performs no array access.
+  Arrays share WRAM0 allocation, initialize through compact loops and keep little-endian words.
+  `VarType` gains an `Array` variant; exhaustive downstream matches must handle it.
+- **Visibility and OAM pools** (Phase 3): sprite/composite hide and show-at snippets;
+  `create_sprite_pool` reserves reusable runtime slots alongside static sprites. Pool allocation,
+  release, hide and register-driven writes report carry on rejection and preserve IME.
+  `set_sprite_size` panics after the first pool as after the first sprite (a pool's Write routine checks 8x16
+  tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
+  Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
+  Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
+- **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
+  validation and the late-VBlank queue test.
 - **Pseudo-random bytes** (Phase 3): `stdlib::random::random_u8` returns the next byte of a
   repeatable 8-bit LFSR sequence in A and stores its state in `wRandomSeed`; zero state falls back to `$A7`.
+  Custom nonzero seeds retain their initial value; runtime zero states recover on the next call.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -127,7 +199,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 
@@ -148,6 +220,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `SECTION "Variables", WRAM0` (floating) | `SECTION "Variables", WRAM0[$C000]`: each variable section is at its address. A `raw()` section fixed where the variables are now overlaps them; let it float |
 | `get_address`: creation order across sections | section by section, in first-use order: the address the variable has when linked, once the program's variables are created (`build()` puts its own at the end of the last section) |
 | no HRAM variables | `gb.vars.create_hram_u8("hSpeed", 0)` (also `u16`, `i8`, `i16`): `Var::set` / `get` use `ldh`; HRAM gives variables $FF80-$FFBF, and the stack keeps the rest |
+| `VarType` matched exhaustively | it has `Array { element, len }` (WRAM arrays, `create_array`): add its arm |
 | `MemoryRegion` matched exhaustively | `MemoryRegion` is `#[non_exhaustive]`, and it has `SpriteTiles`, `BackgroundTiles`, `Wram0`, `Hram`: add a `_` arm |
 
 ### 3. Engine behaviour (Phase 1 fixes that change what a program does)
@@ -221,7 +294,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `asm.get_chunk(chunk)`, `asm.get_main_instrs()` | `layout.get_chunk(chunk)`; `asm.instrs()` |
 | a fresh `Asm` used as a scratch buffer | `Block` (the same builder methods), `block.into_instrs()` |
 | the `If` counter (`.end_if_N`), and fixed labels for the snippets | every generated label comes from the program's `asm::LabelAllocator`, `asm.labels()` / `gb.labels()` (B7) |
-| generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N` (with per-animation periods: `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`), `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
+| generated labels `ClearOam`, `AnimEnd`, `.animEnd_{sprite}`, `.skip_{animation}`, `CheckLeft` / `CheckLeftEnd`, `Sprite{N}LeftLimitStore` / `…End`, `Left` / `LeftEnd` | `.clear_oam_N`, `.anim_end_N`, `.anim_{sprite}_end_N`, `.skip_{sprite}_{animation}_N` (with per-animation periods or events: `.anim_global_not_due_N`, `.anim_sprite_end_N`, `.anim_selection_same_N`, `.anim_selection_skip_N`, `.anim_callback_end_N`), `.check_left_N` / `.check_left_end_N`, `.spriteK_left_limit_store_N` / `_end_N` (the plain moves have none); `Anim_{animation}` is `Anim_{sprite}_{animation}` |
 | a `jr` out of range (or to an external symbol) failed in rgbasm | it is printed as `jp`, one byte longer. Code of fixed size or timing must write jumps that reach. A target `Label + 2`, or `@` used elsewhere than `ds N - @`, leaves the program unrelaxed |
 
 ### 6. Frames and interrupts (Phase 3, `refactor-p3-interrupts`)

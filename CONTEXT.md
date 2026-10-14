@@ -73,6 +73,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 | Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
 | Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address once the program's variables are created (the variables `build()` adds go at the end of the last `WRAM0` section and move none; checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
 | Snapshot tests | ✅ since Phase 3 (`refactor-p3-tooling`) the asm each example prints is committed as `examples/<bin>/main.asm` (the old files were stale snapshots from `main`, regenerated), and `tests/snapshots.rs` fails with a unified diff when the output differs; `UPDATE_SNAPSHOTS=1 cargo test --test snapshots` rewrites them |
+| Peephole optimization | ✅ opt-in `Asm::peephole_optimized()` rewrites `ld a, 0` / `cp a, 0` only if the next instruction unconditionally overwrites every flag (without reading carry for `ld a, 0` → `xor a`); default assembly stays unchanged, and the CPU-model tests compare visible registers and flags |
 | Headless-emulator tests | ✅ since Phase 3 (`refactor-p3-tooling-emulator`) `tests/emulator.rs` builds ROMs with RGBDS and runs them on a DMG emulator written for the tests (`tests/support/gameboy.rs`, no dependency: the SM83 M-cycle by M-cycle, interrupts with the `ei` delay, `halt` and the halt bug, timer, PPU timing without pixels, OAM DMA, joypad (its interrupt only from a selected group of keys, since `refactor-p3-interrupts`), MBC1/MBC5 ROM banking; OAM blocked in modes 2-3 and VRAM in mode 3, as on the hardware; its known limits are listed at its top), checked against Blargg's `cpu_instrs` (11), `instr_timing` and `mem_timing` (3) ROMs and by its own tests of interrupts (VBlank with a `halt` loop, `ei; halt` and `halt` with one pending, `ei; di`, the `ei` delay, STAT on `LYC`, timer), the first line after LCD on and the OAM DMA window; a test runs frames with scripted input and reads WRAM, HRAM, VRAM, OAM, the registers and every OAM write with its PPU mode. One test per example (the Unbricked ball moves and bounces, bricks break, the paddle stops at its limit; the FOSDEM player walks as one block with its animation; the coin animates on A, stops on B; `basic_usage` loops), each also checking that every OAM write lands in VBlank (since `refactor-codex-p3-sprites`, for the 4 examples with a shadow OAM: that the sprites reach OAM only through OAM DMAs in VBlank; the emulator logs each DMA), and [B12](#b12) (today's behaviour until `refactor-codex-p3-sprites` fixed it). They run with `RGBDS_LINK_CHECK` (in CI); cross-checked once against PyBoy 2.6.0 (identical OAM traces over 390 frames with input for the 3 Unbricked examples) |
 | Build & run | ✅ since Phase 3 (`refactor-p3-tooling-run`) `scripts/run.sh <bin>` builds `target/examples/<bin>/main.{gb,sym,map}` with RGBDS, and `--run` opens it in an emulator (`$GB_EMULATOR`, or the first found of SameBoy, mGBA, Gambatte, bgb, also through wine, PyBoy; none: it prints the paths); `scripts/assemble-examples.sh` uses it, and CI keeps the `.sym` and `.map` files with the ROMs |
 | Sprites and OAM | ✅ since Phase 3 (`refactor-codex-p3-sprites`) the sprites live in a shadow OAM in WRAM (`wShadowOAM`, the last page of WRAM0), which the VBlank handler copies to OAM with an OAM DMA from HRAM (`hOAMDMA`), so a sprite moves whatever the main loop does before the move (it was lost in modes 2 and 3, fixed — [B12](#b12)); the buffers are allocated at the top of their region, and no variable moves. Tests on the test emulator: the B12 sprite after 0 to 2300 `Delay` iterations, every example's DMAs (one a frame, from `wShadowOAM`, in VBlank, no CPU write to OAM with the LCD on), the handler's length |
@@ -198,7 +199,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   calls, jumps to or reads, given as values, so a routine brings what it needs: `Routine::with_deps` lists it and every
   dependency, each once, dependencies first (a name is one routine: two different routines with one name panic), and
   `code_with_deps` is their code, the routine first. Its **variables** are the WRAM bytes it needs (`UpdateKeys`:
-  `wCurKeys`, `wNewKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
+  `wCurKeys`, `wNewKeys`, `wReleasedKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
   the flags `f`, printed `a, bc, f`): the registers it **reads**, **returns** and **clobbers**; every other register is
   **preserved**. A routine whose convention is not given may change every register (`Regs::ALL`). Every `gb_std`
   routine is a `Routine` (`memcopy()`, `wait_vblank()`, `wait_not_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
@@ -209,7 +210,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   |---|---|---|---|---|
   | `Memcopy` | `bc` (length), `de` (source), `hl` (destination) | `bc` = 0, `de`, `hl` after the bytes | `a`, `f` | |
   | `WaitVBlank`, `WaitNotVBlank` | | | `a`, `f` | |
-  | `UpdateKeys` | | | `a`, `b`, `f` | `wCurKeys`, `wNewKeys` |
+  | `UpdateKeys` | | | `a`, `b`, `c`, `f` | `wCurKeys`, `wNewKeys`, `wReleasedKeys` |
   | `GetTileByPixel` | `b` (X), `c` (Y) | `a` (tile), `hl` (its address) | `bc`, `f` | |
   | `Delay` | `bc` (count) | | `a`, `bc` (`$FFFF`), `f` | |
   | `is_specific_tile` | `a` (tile) | `f` (Z: one of the tiles) | none | |
@@ -326,7 +327,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `rSCX`/`rSCY` at once (init with the LCD off, or VBlank, for a whole-frame camera), wrap at 256, change only A and
   flags, and leave sprites in screen coordinates. `follow_background_point` keeps the world pixel (B, C) at a screen
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
-  Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
+  Start-up resets SCX/SCY to 0 on power-on and soft reset; `init` can set a custom camera. Sprites are screen-space today
+  (world-coordinate sprites are undecided, see Task.md): programs that need world positions track them and use
+  `follow_background_point`.
 
 - **PNG and binary tile assets** (since `refactor-p3-png-assets`): `engine::assets::png_to_2bpp` converts a static PNG
   to tile bytes with the `png` crate (decompression, sample expansion, interlacing, checksums). Palette slots map
@@ -503,7 +506,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
    `use_function` / `keep_function` (`InitOamDma` with sprites, its DMA routine after it, at `OamDmaCode`); then the
    `Anim_*` functions; then the interrupt handlers (`VBlankHandler`, which starts with the OAM DMA with sprites, and
    one for each other interrupt with code, since `refactor-p3-interrupts`). The variables an emitted routine needs (`wCurKeys`,
-   `wNewKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
+   `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
    variable initialisation (step 3) and the Data chunk include them.
 7. **Tiles / Tilemap**: `Label:` + `dw`/`INCBIN` + `LabelEnd:`; **Data**: `SECTION "Variables", WRAM0` + `name: db/dw`
    (since `refactor-p2-engine-api-memory`: `SECTION "HRAM Variables", HRAM[$FF80]` first when the program has HRAM
@@ -832,7 +835,7 @@ use `enable_animation(coin, idx)` / `disable_animation(coin)`.
 **Status: fixed** on `refactor-p0-fix-build` (A starts the animation, B stops it).
 
 #### B3
-**Duplicate labels `wCurKeys` / `wNewKeys` in `unbricked_rustboy`.** The example creates them
+**Duplicate input-state labels in `unbricked_rustboy`.** The example creates `wCurKeys` / `wNewKeys`
 (`src/bin/unbricked_rustboy/main.rs:50-51`) and `RustBoy::add_inputs` creates them again
 (`src/engine/rustboy.rs:487-488`); `VariableManager::create_var` (`src/engine/variables.rs:146`) never
 rejects duplicates, so `wCurKeys: db` is emitted twice → rgbasm "already defined". The same would happen
@@ -1371,7 +1374,7 @@ where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
 **`RustBoy::external_symbol(name)`** (`src/engine/rustboy.rs:361`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
-(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
+(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
 and the Data chunk are emitted (`:743-763`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
@@ -1399,7 +1402,7 @@ calls even when nothing names it (a jump table in an `INCLUDE`d file). The scan 
 `symbols` moved to `gb_asm::labels` and reads typed operands by type. The variables of every emitted routine are
 created (`Routine::variables`; they were the builtins' only). Every behaviour above is unchanged and its tests pass
 (`keep_function`, `external_symbol`, `use_function`, a user function replacing a builtin, second entry points, the
-name conflicts, `wCurKeys`/`wNewKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
+name conflicts, `wCurKeys`/`wNewKeys`/`wReleasedKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
 (each routine once, in a fixed order, linked), `test_a_dependency_nothing_names_is_emitted`,
 `test_a_routine_and_a_function_of_one_name`, `test_define_routine_replaces_a_builtin_with_its_variables`, and in
 `functions.rs` `test_a_routine_brings_its_dependencies`, `test_a_dependency_is_shared_not_replaced`,
@@ -1508,10 +1511,16 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
   background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
-  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+  (see §2); `GetTileByPixel` takes map pixels, while `GetTileByScreenPixel` adds SCX/SCY for screen-space collision
+  checks (Phase 3 follow-up).
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
-- **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
+- **Input:** (p3-input) held/just-pressed/released/repeat bindings. Multiple input managers share
+  one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
+  Initial presses and repeats share one emitted action body, so local labels in bounded movement and
+  other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
+- **Engine:** no scenes, RNG, sprite collision, 16-bit math, loops/switch; screen-pixel solid-tile checks exist as
+  `TileCollision` (`refactor-p3-tile-collision`) (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
@@ -1525,6 +1534,17 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
   one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and
   `.2bpp` files with a derived tile count exist since `refactor-p3-png-assets` (see §2).
+  `refactor-p3-symbol-validation` also rejects RGBDS keywords in user symbols and reports duplicate emitted global
+  definitions as `Error::NameConflict` before rgbasm runs. Regression tests cover keyword rejection through
+  external symbols, hexadecimal constants and plain sprites; animation test fixtures avoid `LOW`/`HIGH`.
+  The duplicate scan does not evaluate raw RGBDS conditionals: definitions within them are deferred to
+  rgbasm, and any conditional `PURGE` conservatively forgets the prior definition. Unconditional `PURGE`
+  permits a fresh definition while later definite duplicates are still rejected. Unexpanded macro bodies
+  are skipped, including their conditional and purge directives. Conditional and macro nesting
+  persists across chunks; regression programs assemble with RGBDS.
+  `REPT`/`FOR` bodies are likewise deferred, covering zero iterations and tails skipped by `BREAK`.
+  Iteration nesting persists across instructions and chunks; possible purges conservatively forget prior
+  definitions, while definite duplicates after the iteration remain errors. Linked regressions cover these cases.
 
 ---
 

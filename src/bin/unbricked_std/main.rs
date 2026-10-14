@@ -77,6 +77,7 @@ fn main() {
     asm.ld_addr_def_a("wFrameCounter");
     asm.ld_addr_def_a("wNewKeys");
     asm.ld_addr_def_a("wCurKeys");
+    asm.ld_addr_def_a("wReleasedKeys");
     asm.ld_addr_def_a("wScore");
 
     // MAIN LOOP START
@@ -211,6 +212,7 @@ fn main() {
     counter_sec.add_data("wFrameCounter", "db");
     input_vars_sec.add_data("wCurKeys", "db");
     input_vars_sec.add_data("wNewKeys", "db");
+    input_vars_sec.add_data("wReleasedKeys", "db");
     ball_data_sec.add_data("wBallMomentumX", "db");
     ball_data_sec.add_data("wBallMomentumY", "db");
     score_sec.add_data("wScore", "db");

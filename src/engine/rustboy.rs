@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::asm::labels::defines;
+use crate::asm::labels::{DefinitionEvent, DefinitionScanner, defines};
 use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, is_identifier};
 use crate::hw;
 use crate::stdlib::flow::Emittable;
@@ -14,7 +14,7 @@ use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
 
 use super::config::{Palettes, RustBoyConfig, Window};
-use super::error::Error;
+use super::error::{Definition, Error};
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
 use super::layout::{Chunk, Layout};
@@ -81,6 +81,9 @@ pub struct RustBoy {
     /// reads the keys it updates
     updates_keys: bool,
 
+    /// Next stable id for per-binding auto-repeat counters.
+    input_binding_count: usize,
+
     /// Whether the program uses the bounded VRAM write queue.
     vram_queue: bool,
     main_only_routines: Vec<String>,
@@ -146,6 +149,7 @@ impl RustBoy {
             handlers: BTreeMap::new(),
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
+            input_binding_count: 0,
             vram_queue: false,
             music: None,
             main_only_routines: Vec::new(),
@@ -299,8 +303,8 @@ impl RustBoy {
 
     /// Set the background viewport's top-left world pixel, wrapping at 256.
     /// Returns code to put in `init` or `on_vblank`; main-loop writes can tear.
-    /// Changes A and flags. Sprites stay in screen coordinates. Start-up code does not write
-    /// SCX/SCY, so a soft reset keeps the scroll: set it in init to start from a known camera.
+    /// Changes A and flags. Sprites stay in screen coordinates. Start-up sets SCX/SCY to 0;
+    /// this code in `init` sets a custom camera position on power-on and soft reset.
     ///
     /// ```
     /// use rust_boy::prelude::*;
@@ -389,14 +393,18 @@ impl RustBoy {
     }
 
     /// Define a constant value
+    #[track_caller]
     pub fn define_const(&mut self, name: &str, value: impl std::fmt::Display) -> &mut Self {
+        super::sprites::check_label("constant", name);
         self.constants
             .push((name.to_string(), format!("{}", value)));
         self
     }
 
     /// Define a constant with a hex value
+    #[track_caller]
     pub fn define_const_hex(&mut self, name: &str, value: u16) -> &mut Self {
+        super::sprites::check_label("constant", name);
         self.constants
             .push((name.to_string(), format!("${:04X}", value)));
         self
@@ -536,7 +544,7 @@ impl RustBoy {
     /// the ones those functions refer to, and so on. A function is found by its name
     /// anywhere in an instruction's code: `call`, `jp`, `IfCall`, `Call`, `ld hl, Name`,
     /// `dw Name`, raw lines (`raw`, one or several lines); not in comments or strings.
-    /// The variables a builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are created
+    /// The variables a builtin needs (`wCurKeys`, `wNewKeys`, and `wReleasedKeys` for `UpdateKeys`) are created
     /// with it. So keep only a function that is called from code `build()` does not see:
     /// asm added to its output afterwards, or an `INCLUDE`d file. For the opposite, a
     /// routine *defined* where `build()` does not see, use [`RustBoy::external_symbol`].
@@ -573,7 +581,7 @@ impl RustBoy {
     /// `INCLUDE`d files. A program that includes its own `UpdateKeys` (or another routine
     /// with a builtin's name) declares it here, so the builtin is not emitted as well (that
     /// would be a duplicate label), and neither are the variables that builtin needs
-    /// (`wCurKeys`, `wNewKeys`): the included code defines what it uses. The opposite of
+    /// (`wCurKeys`, `wNewKeys`, `wReleasedKeys`): the included code defines what it uses. The opposite of
     /// [`RustBoy::keep_function`], which emits a function that only outside code calls.
     ///
     /// # Panics
@@ -596,7 +604,7 @@ impl RustBoy {
     /// # Ok::<(), rust_boy::engine::Error>(())
     /// ```
     pub fn external_symbol(&mut self, name: &str) -> &mut Self {
-        if !is_identifier(name) {
+        if !is_identifier(name) || crate::asm::expr::check_symbol(name).is_err() {
             panic!(
                 "invalid external symbol \"{}\": it must be a valid RGBDS identifier",
                 name
@@ -836,6 +844,12 @@ impl RustBoy {
     /// ([`Error::MemoryFull`]), code or data in a RAM section or a section name used twice
     /// ([`Error::Section`]).
     ///
+    /// Raw RGBDS conditionals and `REPT`/`FOR` iterations are not evaluated: their
+    /// definitions (including tails skipped by `BREAK`) are left to rgbasm. A
+    /// `PURGE` in either conservatively forgets a prior definition.
+    /// Macros and symbols defined only by included user files are also checked by
+    /// rgbasm. Definite duplicate definitions outside conditionals are rejected here.
+    ///
     /// # Example
     /// ```
     /// use rust_boy::engine::{Error, RustBoy};
@@ -901,6 +915,9 @@ impl RustBoy {
         // Turn off screen for safe VRAM access
         startup.ld_a(hw::LCDCF_OFF.value);
         startup.ld_addr_def_a(hw::LCDC);
+
+        // Start from a known camera on power-on and soft reset; user init can choose another.
+        startup.emit_all(crate::stdlib::graphics::scroll::set_scroll(0, 0));
 
         // Copy the tile data to VRAM (empty blobs are skipped, B27)
         startup.emit_all(self.tiles.generate_memcopy_calls());
@@ -1340,7 +1357,7 @@ impl RustBoy {
         asm.emit_all(music_data);
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
-        // The variables of the emitted routines (`wCurKeys`, `wNewKeys` for UpdateKeys, and
+        // The variables of the emitted routines (`wCurKeys`, `wNewKeys`, and `wReleasedKeys` for UpdateKeys, and
         // those of the user's routines), however the program calls them, unless it defines
         // them already (as variables or in raw code)
         for name in functions.variables {
@@ -1375,6 +1392,7 @@ impl RustBoy {
         asm.emit_all(vars.generate_sections());
         asm.emit_all(raw_data);
 
+        validate_unique_definitions(&asm, &vars, &functions.names, &generated)?;
         Ok(asm)
     }
 
@@ -1471,7 +1489,7 @@ impl RustBoy {
     ///
     /// This method takes an InputManager and generates the complete input
     /// handling code, including:
-    /// 1. Calling UpdateKeys to poll the controller
+    /// 1. Calling UpdateKeys once per frame, before the first manager’s bindings
     /// 2. Checking each registered button binding
     /// 3. Executing associated actions when buttons are pressed
     ///
@@ -1494,15 +1512,23 @@ impl RustBoy {
         // Auto-create input variables required by UpdateKeys
         self.vars.create_u8("wCurKeys", 0);
         self.vars.create_u8("wNewKeys", 0);
+        self.vars.create_u8("wReleasedKeys", 0);
+        let first_id = self.input_binding_count;
+        for name in inputs.repeat_variable_names(first_id) {
+            self.vars.create_u8(&name, 0);
+        }
 
-        // Add call to UpdateKeys
-        self.main_loop_code.push(Instr::Call {
-            target: JumpTarget::Label("UpdateKeys".to_string()),
-        });
+        // All managers share one sample, including its press and release edges.
+        if !self.updates_keys {
+            self.main_loop_code.push(Instr::Call {
+                target: JumpTarget::Label("UpdateKeys".to_string()),
+            });
+        }
 
         // Add the input handling code (the actions are the user's code)
         self.main_loop_code
-            .extend(checked(inputs.generate_code(self.asm.labels())));
+            .extend(checked(inputs.generate_code(self.asm.labels(), first_id)));
+        self.input_binding_count += inputs.binding_count();
         self.updates_keys = true;
 
         self
@@ -2137,13 +2163,63 @@ fn check_routine(routine: &Routine) {
 
 /// Panics unless `name` can be a function's label
 fn check_function_name(name: &str) {
-    if !is_identifier(name) {
+    if !is_identifier(name) || crate::asm::expr::check_symbol(name).is_err() {
         panic!(
-            "invalid function name \"{}\": it must be a valid RGBDS identifier (a letter or \
-             `_`, then letters, digits, `_`, `#`, `$` or `@`)",
+            "invalid function name \"{}\": it must be a valid RGBDS symbol, not a register \
+             or keyword",
             name
         );
     }
+}
+
+/// Reject duplicate global definitions before rgbasm reports an opaque duplicate-label
+/// error. `REDEF` is left to RGBDS because it intentionally updates an existing constant.
+fn validate_unique_definitions(
+    layout: &Layout,
+    vars: &VariableManager,
+    functions: &[String],
+    generated: &[String],
+) -> Result<(), Error> {
+    let mut seen = crate::hw::SYMBOLS
+        .iter()
+        .map(|(name, _)| ((*name).to_string(), Definition::ExternalSymbol))
+        .collect::<BTreeMap<_, _>>();
+    let mut scanner = DefinitionScanner::default();
+    for chunk in Chunk::ORDER {
+        let Some(code) = layout.get_chunk(chunk) else {
+            continue;
+        };
+        for event in scanner.scan(code) {
+            let name = match event {
+                DefinitionEvent::Define(name) => name,
+                DefinitionEvent::Purge(name) => {
+                    seen.remove(&name);
+                    continue;
+                }
+            };
+            let current = if chunk == Chunk::Data {
+                vars.names()
+                    .find(|(variable, _)| *variable == name)
+                    .map(|(_, kind)| Definition::Variable(kind))
+                    .unwrap_or(Definition::CodeSymbol)
+            } else if chunk == Chunk::Functions && functions.iter().any(|item| item == &name) {
+                Definition::Function
+            } else if chunk == Chunk::Functions && generated.iter().any(|item| item == &name) {
+                Definition::GeneratedFunction
+            } else {
+                Definition::CodeSymbol
+            };
+            if let Some(first) = seen.get(&name) {
+                return Err(Error::NameConflict {
+                    name,
+                    first: *first,
+                    second: current,
+                });
+            }
+            seen.insert(name, current);
+        }
+    }
+    Ok(())
 }
 
 impl Default for RustBoy {
@@ -2184,6 +2260,187 @@ mod tests {
         let output = gb.build().unwrap();
         assert!(output.contains("DEF BRICK_LEFT EQU 0x05"));
         assert!(output.contains("DEF SCORE_ADDR EQU $9870"));
+    }
+
+    #[test]
+    fn test_raw_conditional_and_purged_definitions_are_left_to_rgbds() {
+        for raw in [
+            "IF 1\nChoice: db 1\nELSE\nChoice: db 2\nENDC",
+            "IF 0\nMain: db 1\nENDC",
+            "MACRO unused\nMain: db 1\nENDM",
+            "MACRO unused\nIF 1\nMain: db 1\nENDC\nENDM",
+            "    DEF TEMP EQU 1\n    PURGE TEMP\n    DEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nIF 1\nPURGE TEMP\nENDC\nDEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nDEF OTHER EQU 2\nPURGE TEMP, OTHER\nDEF TEMP EQU 3\nDEF OTHER EQU 4",
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(|asm| {
+                asm.raw(raw);
+            });
+            let output = gb.build().unwrap();
+            // The lightweight label checker does not evaluate IF/PURGE either;
+            // use RGBDS directly when link checks are enabled.
+            crate::asm::label_check::rgbds_rom(&output);
+        }
+
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("DEF TEMP EQU 1\nPURGE TEMP\nDEF TEMP EQU 2\nDEF TEMP EQU 3");
+        });
+        assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "TEMP"));
+    }
+
+    #[test]
+    fn test_raw_iterations_defer_definitions_but_keep_later_duplicate_checks() {
+        for raw in [
+            "REPT 0\nMain: db 1\nENDR",
+            "FOR idx, 0\nMain: db 1\nENDR",
+            "REPT 1\nBREAK\nMain: db 1\nENDR",
+            "FOR idx, 1\nBREAK\nMain: db 1\nENDR",
+            "REPT 1\nFOR idx, 0\nMain: db 1\nENDR\nENDR",
+            "DEF TEMP EQU 1\nREPT 1\nPURGE TEMP\nENDR\nDEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nFOR idx, 1\nPURGE TEMP\nENDR\nDEF TEMP EQU 2",
+            "MACRO unused\nREPT 0\nPURGE rLCDC\nENDR\nENDM",
+        ] {
+            let mut gb = RustBoy::new();
+            // Separate instructions exercise nesting across raw instruction boundaries.
+            gb.raw(|asm| {
+                for line in raw.lines() {
+                    asm.raw(line);
+                }
+            });
+            crate::asm::label_check::rgbds_rom(&gb.build().unwrap());
+            gb.raw(|asm| {
+                asm.raw("Definite: db 1\nDefinite: db 2");
+            });
+            assert!(
+                matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "Definite")
+            );
+        }
+    }
+
+    #[test]
+    fn test_macro_scan_state_spans_instructions_without_hiding_later_collisions() {
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("MACRO unused");
+            asm.raw("Main: db 1");
+            asm.raw("ENDM");
+        });
+        let out = gb.build().unwrap();
+        crate::asm::label_check::rgbds_rom(&out);
+        gb.raw(|asm| {
+            asm.raw("Definite: db 1\nDefinite: db 2");
+        });
+        assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "Definite"));
+    }
+
+    #[test]
+    fn test_symbol_collisions_are_reported_by_build() {
+        let mut gb = RustBoy::new();
+        gb.tiles.add_background("Coin", tiles(1));
+        gb.tiles.add_background("CoinEnd", tiles(1));
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "CoinEnd".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Main", tiles(1), 40, 40, 0);
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "Main".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+
+        let mut gb = RustBoy::new();
+        let player = gb.add_sprite("Player", tiles(1), 40, 40, 0);
+        gb.add_sprite_tiles(player, "Player", tiles(1));
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "Player".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid constant name \"ld\"")]
+    fn test_constant_names_reject_rgbds_keywords() {
+        RustBoy::new().define_const("ld", 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid external symbol \"LOW\"")]
+    fn test_external_symbol_names_reject_rgbds_keywords() {
+        RustBoy::new().external_symbol("LOW");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid constant name \"HIGH\"")]
+    fn test_hex_constant_names_reject_rgbds_keywords() {
+        RustBoy::new().define_const_hex("HIGH", 0x1234);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid tile name \"ld\"")]
+    fn test_plain_sprite_names_reject_rgbds_keywords() {
+        RustBoy::new().add_sprite("ld", tiles(1), 40, 40, 0);
+    }
+
+    #[test]
+    fn test_function_animation_and_composite_names_reject_keywords() {
+        let message = panic_message(|| {
+            RustBoy::new().define_function_from("ld", Vec::<Instr>::new());
+        });
+        assert!(
+            message.contains("invalid function name \"ld\""),
+            "{message}"
+        );
+
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Ball", tiles(1), 40, 40, 0);
+        let message = panic_message(|| {
+            gb.sprites
+                .add_animation(sprite, "ld", 0, 0, AnimationType::Loop);
+        });
+        assert!(
+            message.contains("invalid animation name \"ld\""),
+            "{message}"
+        );
+
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let message = panic_message(|| {
+            gb.add_sprite_16x16("ld", tiles(2), tiles(2), 40, 40, 0);
+        });
+        assert!(
+            message.contains("invalid composite sprite name \"ld\""),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_user_symbols_cannot_redefine_hardware_inc_names() {
+        let mut gb = RustBoy::new();
+        gb.define_const("rLCDC", 1);
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "rLCDC".to_string(),
+                first: Definition::ExternalSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
     }
 
     #[test]
@@ -2336,6 +2593,7 @@ mod tests {
         let out = gb.build().unwrap();
         assert_eq!(out.matches("wCurKeys: db").count(), 1);
         assert_eq!(out.matches("wNewKeys: db").count(), 1);
+        assert_eq!(out.matches("wReleasedKeys: db").count(), 1);
     }
 
     #[test]
@@ -3235,6 +3493,44 @@ mod tests {
     }
 
     #[test]
+    fn test_repeat_action_with_local_labels_links() {
+        let mut gb = RustBoy::new();
+        let (paddle, _) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        // Bounded movement contains local branch labels. The initial press and
+        // subsequent repeats must share one copy of those definitions.
+        inputs.on_repeat(
+            PadButton::Left,
+            3,
+            2,
+            gb.sprites.move_left_limit(paddle, 1, 8),
+        );
+        gb.add_inputs(inputs);
+        assert_links(&gb.build().unwrap());
+    }
+
+    #[test]
+    fn test_multiple_input_managers_poll_once_before_all_bindings() {
+        let mut gb = RustBoy::new();
+        for (button, marker) in [
+            (PadButton::A, ".first_input_action"),
+            (PadButton::B, ".second_input_action"),
+        ] {
+            let mut inputs = InputManager::new();
+            let mut action = Block::new();
+            action.label(marker).nop();
+            inputs.on_just_pressed(button, action.into_instrs());
+            gb.add_inputs(inputs);
+        }
+        let out = gb.build().unwrap();
+        assert_eq!(out.matches("call UpdateKeys").count(), 1, "{out}");
+        let poll = out.find("call UpdateKeys").unwrap();
+        assert!(poll < out.find(".first_input_action:").unwrap());
+        assert!(poll < out.find(".second_input_action:").unwrap());
+        assert_links(&out);
+    }
+
+    #[test]
     fn test_one_move_on_two_buttons() {
         // B7: each copy of a move emitted the same Sprite0LeftLimitStore / ...End labels
         let mut gb = RustBoy::new();
@@ -3588,6 +3884,7 @@ mod tests {
             Event::Ime(true) => "interrupts on",
             Event::Call(name) if name == "WaitVBlank" => "wait for VBlank",
             Event::Write(reg, 0) if reg == "rLCDC" => "LCD off",
+            Event::Write(reg, 0) if ["rSCX", "rSCY"].contains(&reg.as_str()) => "camera reset",
             Event::Call(name) if name == "Memcopy" => "copy to VRAM",
             Event::Call(name) if name == "InitOamDma" || name == oam::OAM_DMA => "OAM",
             Event::Write(addr, _) if addr.starts_with(oam::SHADOW_OAM) => "OAM",
@@ -3610,6 +3907,7 @@ mod tests {
                 "interrupts off",
                 "wait for VBlank",
                 "LCD off",
+                "camera reset",
                 "copy to VRAM",
                 "OAM",
                 "palettes",
@@ -4385,7 +4683,7 @@ mod tests {
         function_of(&mut gb, "SetSpeed", vars[3].set(7));
         function_of(&mut gb, "GetSpeed", vars[3].get());
         // An animated sprite and inputs: build() adds wFrameCounter, wAnim_Coin_Current
-        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys and wNewKeys (called through a
+        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys, wNewKeys, and wReleasedKeys (called through a
         // function, so they are build()'s, not add_inputs'). The review of #32 found they
         // went into the first section and moved the second one: `wHigh` was at $C001 by
         // get_address, $C003 once linked
@@ -4414,7 +4712,7 @@ mod tests {
                  SECTION \"Variables\", WRAM0[$C000]\n    wLives: db\n    wScore: dw\n    \
                  SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    wVBlankFlag: db\n    \
                  wFrameCounter: db\n    wAnim_Coin_Current: db\n    wAnim_Coin_Dir: db\n    \
-                 wCurKeys: db\n    wNewKeys: db\n    SECTION \"Buffer\", WRAM0\n"
+                 wCurKeys: db\n    wNewKeys: db\n    wReleasedKeys: db\n    SECTION \"Buffer\", WRAM0\n"
             ),
             "{}",
             data
@@ -4444,6 +4742,7 @@ mod tests {
             ("wFrameCounter", 0xC006),
             ("wAnim_Coin_Current", 0xC007),
             ("wNewKeys", 0xC00A),
+            ("wReleasedKeys", 0xC00B),
             // The sprite's shadow OAM on the last page of WRAM0, and the OAM DMA routine at
             // the top of the variables' HRAM (B12): no variable moved for them
             ("wShadowOAM", 0xCF00),

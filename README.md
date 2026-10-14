@@ -69,6 +69,11 @@ fn main() -> Result<(), Error> {
 }
 ```
 
+`on_press` keeps its original meaning: the action runs every frame the button is held. For edge-triggered actions,
+use `on_just_pressed` or `on_release`; several bindings can target the same button. `on_repeat(button, delay, interval,
+action)` runs once on press, then repeats after `delay` held frames and every `interval` frames. Both repeat counts must
+be between 1 and 255.
+
 ## Routines
 
 A routine is a value, `stdlib::routine::Routine`: its name, its code, the routines it depends on, the WRAM variables
@@ -231,6 +236,17 @@ stays behind the sprite. These flips affect individual hardware sprites, not the
 arrangement of a whole composite: a 16x16 composite flipped in X mirrors each
 half in place, so swap the halves' tiles too. Change a composite's attributes per member sprite
 (`get_composite_sprites`).
+
+For tile collision after scrolling, use `GetTileByScreenPixel` with a screen-space position. It adds the current
+SCX/SCY values and then performs the same active-map lookup as `GetTileByPixel`; call it in VBlank or with the LCD
+off so VRAM is readable:
+
+```rust,ignore
+gb.call_args("GetTileByScreenPixel", gb.sprites.get_pivot(ball, 0, 1));
+```
+
+Startup resets the camera to (0, 0), including after soft reset. Put a custom `set_background_scroll` call in `init`
+when the game should start elsewhere.
 
 ### Arbitrary metasprites
 

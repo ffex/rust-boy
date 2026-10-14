@@ -253,10 +253,12 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Background scrolling (`SCX`/`SCY`), camera helpers (branch `refactor-p3-scrolling`: immediate
       set, signed relative movement and world-point following with a screen anchor; stateless
       `stdlib::graphics::scroll` snippets reused by `RustBoy`, wrapping at 256; emit in init or VBlank)
-- [ ] Follow-ups of the background camera (from the review of #43): collisions while scrolled (a screen-to-map
-      helper that adds SCX/SCY before `GetTileByPixel`, or a scroll-aware variant); whether sprites should get world
-      coordinates or a "follow sprite" helper (today `follow_background_point` needs world positions kept by the program);
-      whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today)
+- [ ] Follow-ups of the background camera (from the review of #43):
+      - [x] `GetTileByScreenPixel` adds SCX/SCY to screen coordinates before the shared `GetTileByPixel` lookup.
+      - [ ] Decide whether engine sprites get world coordinates or a "follow sprite" helper. Open: no decision is
+            recorded (the review of #43 left it as a maintainer question). Today sprites stay in screen coordinates and
+            callers that need world positions track them and use `follow_background_point`; no code changed here.
+      - [x] Start-up resets SCX/SCY to zero on power-on and soft reset; user init can choose another position.
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
 - [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
@@ -326,9 +328,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       start/pause/resume/stop and channel reservation with wave-cache restoration)
 
 ### Input
-- [ ] Just-pressed (`wNewKeys`), released, and held as separate bindings
-- [ ] Auto-repeat
-- [ ] Multiple bindings for the same button
+- [x] Just-pressed (`wNewKeys`), released (`wReleasedKeys`), and held as separate bindings
+      (`InputManager::on_just_pressed`, `on_release`, and `on_held`; `on_press` remains a
+      backwards-compatible alias for held actions)
+- [x] Auto-repeat (`on_repeat(button, delay, interval, action)` runs on press immediately,
+      then after the delay and at each interval while held; counters are per binding;
+      label-bearing actions share one emitted body for initial presses and repeats)
+- [x] Multiple bindings for the same button (all bindings run in registration order); multiple
+      managers share one `UpdateKeys` sample per frame (PR #61 review F5).
 
 ### Engine
 - [x] VBlank interrupt + `halt` main loop (instead of busy-polling `LY`) (branch `refactor-p3-interrupts`: the vector
@@ -355,7 +362,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
       Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG
-- [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
+- [ ] Sprite-vs-sprite collision (AABB)
+- [x] Generalised tile collision (`refactor-p3-tile-collision`):
+      `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using
+      the active map and current SCX/SCY; sample multiple points for larger objects.
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
@@ -406,12 +416,21 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       M-cycle ranges against their hardware budgets, using the headless emulator over ten frames.
       The VBlank share includes interrupt dispatch and the vector jump (9 M-cycles); a linked
       empty-handler regression checks the full 26 M-cycles. All seven examples, including music, are covered.
-- [ ] Peephole optimisations (`ld a, 0` → `xor a`, `cp 0` → `and a`, …)
-- [ ] Validate user-supplied symbol names (sprite, composite and animation names are checked since
-      [B25](CONTEXT.md#b25), but not against RGBDS keywords, nor against the other global labels: sprites
-      `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
-      functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
-      "`Player` already defined" in rgbasm)
+- [x] Opt-in flag-safe peephole optimisations via `Asm::peephole_optimized()`:
+      `ld a, 0` → `xor a` and `cp a, 0` → `and a` only when the next instruction overwrites all flags; the zero-load rewrite additionally requires that it does not read carry. Carry-reading regressions and full AF equivalence are checked on the emulator
+- [x] Validate user-supplied symbol names (branch `refactor-p3-symbol-validation`): constants and
+      functions reject RGBDS keywords at registration; sprite/composite/animation/tile labels use the
+      same symbol rules; `build()` returns `Error::NameConflict` for duplicate global definitions across
+      `hardware.inc`, generated code, tile labels, constants, raw code and variables (including
+      `Coin`/`CoinEnd`, `Main`, and `add_sprite_tiles(player, "Player", ..)` collisions).
+      PR #81 review coverage also checks keyword rejection for external symbols, hexadecimal constants,
+      and plain sprites; animation fixtures use non-keyword names. Raw RGBDS conditional definitions
+      are conservatively deferred to the assembler, and `PURGE` ends a symbol lifetime; regression
+      programs cover conditional branches, conditional purge, multiple purged symbols and later duplicates.
+      Unexpanded macro bodies are skipped, including definitions split across instructions.
+      Raw `REPT`/`FOR` definitions, including tails skipped by `BREAK`, are also deferred; nesting
+      persists across instructions and chunks, possible purges forget prior definitions, and definite
+      duplicates after iterations are still rejected. Linked regressions cover zero iterations and breaks.
 - [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
       after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
       branch `refactor-p3-vram-queue-followups`.

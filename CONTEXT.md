@@ -1508,7 +1508,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
   background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
-  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+  (see §2); `GetTileByPixel` takes map pixels, while `GetTileByScreenPixel` adds SCX/SCY for screen-space collision
+  checks (Phase 3 follow-up).
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Input:** (p3-input) held/just-pressed/released/repeat bindings. Multiple input managers share

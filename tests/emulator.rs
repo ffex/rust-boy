@@ -3962,3 +3962,34 @@ fn sprite_pool_rejects_free_invalid_and_unrepresentable_writes_without_mutation(
         assert_eq!(gb.read(gb.symbol("wPoolCheckedUsed") + 1), 0);
     }
 }
+
+#[test]
+fn get_tile_by_screen_pixel_adds_background_scroll_before_lookup() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut map = [[17; 32]; 32];
+    map[2][1] = 93;
+    game.tiles
+        .add_tilemap_at("CollisionMap", TilemapArea::Map9800, &map);
+    game.init(game.set_background_scroll(8, 16));
+    game.vars.create_u8("wUnscrolledTile", 0);
+    game.vars.create_u8("wScrolledTile", 0);
+    let mut probe = Block::new();
+    probe
+        .ld(R8::B, 3)
+        .ld(R8::C, 4)
+        .call("GetTileByPixel")
+        .ld_addr_def_a("wUnscrolledTile")
+        .ld(R8::B, 3)
+        .ld(R8::C, 4)
+        .call("GetTileByScreenPixel")
+        .ld_addr_def_a("wScrolledTile");
+    game.on_vblank(probe);
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wUnscrolledTile"), 17);
+    assert_eq!(gb.read_symbol("wScrolledTile"), 93);
+}

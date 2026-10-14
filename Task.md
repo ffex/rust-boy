@@ -326,9 +326,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       start/pause/resume/stop and channel reservation with wave-cache restoration)
 
 ### Input
-- [ ] Just-pressed (`wNewKeys`), released, and held as separate bindings
-- [ ] Auto-repeat
-- [ ] Multiple bindings for the same button
+- [x] Just-pressed (`wNewKeys`), released (`wReleasedKeys`), and held as separate bindings
+      (`InputManager::on_just_pressed`, `on_release`, and `on_held`; `on_press` remains a
+      backwards-compatible alias for held actions)
+- [x] Auto-repeat (`on_repeat(button, delay, interval, action)` runs on press immediately,
+      then after the delay and at each interval while held; counters are per binding;
+      label-bearing actions share one emitted body for initial presses and repeats)
+- [x] Multiple bindings for the same button (all bindings run in registration order); multiple
+      managers share one `UpdateKeys` sample per frame (PR #61 review F5).
 
 ### Engine
 - [x] VBlank interrupt + `halt` main loop (instead of busy-polling `LY`) (branch `refactor-p3-interrupts`: the vector

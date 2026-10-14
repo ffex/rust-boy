@@ -169,6 +169,13 @@ together: every breaking change of the refactoring is in this release, so a prog
   tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
   Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
   Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
+- **Input bindings** (Phase 3): held (`on_press` / `on_held`), just-pressed, released, repeat, and multiple actions
+  per button. `on_press` keeps its existing held behavior. Multiple managers poll once per frame,
+  preserving press/release events and initial repeats in later managers (PR #61 F5).
+  Initial presses and repeats now share one emitted action body, allowing actions with local labels
+  (such as bounded sprite movement) to assemble without duplicate definitions.
+- **Input migration**: standalone users of `stdlib::inputs::update_keys()` must provide the new one-byte
+  `wReleasedKeys` variable. `RustBoy::add_inputs` creates it automatically.
 - **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
   validation and the late-VBlank queue test.
 - **Tooling**:

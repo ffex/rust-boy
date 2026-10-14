@@ -69,6 +69,11 @@ fn main() -> Result<(), Error> {
 }
 ```
 
+`on_press` keeps its original meaning: the action runs every frame the button is held. For edge-triggered actions,
+use `on_just_pressed` or `on_release`; several bindings can target the same button. `on_repeat(button, delay, interval,
+action)` runs once on press, then repeats after `delay` held frames and every `interval` frames. Both repeat counts must
+be between 1 and 255.
+
 ## Routines
 
 A routine is a value, `stdlib::routine::Routine`: its name, its code, the routines it depends on, the WRAM variables

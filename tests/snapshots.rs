@@ -81,6 +81,7 @@ snapshot_tests! {
     snapshot_unbricked_rustboy: "unbricked_rustboy";
     snapshot_fosdem: "fosdem";
     snapshot_coin_anim: "coin-anim";
+    snapshot_music: "music";
 }
 
 /// The binaries in `src/bin`, sorted: `name.rs` files and `name/main.rs` directories

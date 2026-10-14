@@ -11,3 +11,4 @@ keywords = ["gameboy", "gamedev", "assembly", "rgbds", "codegen"]
 categories = ["game-development", "development-tools"]
 
 [dependencies]
+png = "0.18.1"

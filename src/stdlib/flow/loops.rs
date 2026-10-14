@@ -1,6 +1,6 @@
 //! Repeating control flow for Game Boy programs.
 
-use crate::asm::{Block, Condition, LabelAllocator, R8};
+use crate::asm::{Block, Condition, LabelAllocator, R8, R16Stack};
 
 use super::Emittable;
 
@@ -39,7 +39,10 @@ impl Emittable for While {
 
 /// Execute a body a fixed number of times, from zero through 255.
 ///
-/// Clobbers `b` (the iteration counter). A zero count skips the body.
+/// Clobbers A, B and flags plus the body’s changes outside BC. A zero count skips the body.
+/// Saves BC around each iteration, so bodies may use both registers and nested loops work.
+/// Body changes to BC are discarded. Each active iteration uses two stack bytes; the body
+/// must preserve stack balance.
 pub struct For {
     count: u8,
     body: Box<dyn Emittable>,
@@ -63,7 +66,9 @@ impl Emittable for For {
             .or(R8::A)
             .jr_cond(Condition::Z, &end)
             .label(&start)
+            .push(R16Stack::BC)
             .emit_all(self.body.emit(labels))
+            .pop(R16Stack::BC)
             .dec(R8::B)
             .jr_cond(Condition::NZ, &start)
             .label(&end);
@@ -134,12 +139,40 @@ mod tests {
     fn for_times_handles_zero_one_and_multiple_iterations() {
         for (count, expected) in [(0, 0), (1, 1), (5, 5)] {
             let mut body = Block::new();
-            body.inc(R8::C);
+            body.inc(R8::D);
             let mut loop_code = For::times(count, body);
             let mut cpu = TestCpu::default();
             cpu.run(&loop_code.emit(&LabelAllocator::new()));
-            assert_eq!(cpu.c, expected);
+            assert_eq!(cpu.d, expected);
         }
+    }
+
+    #[test]
+    fn nested_for_and_a_body_writing_b_keep_the_outer_count() {
+        let mut increment = Block::new();
+        increment.inc(R8::D).ld_b(99);
+        let mut code = For::times(3, For::times(4, increment));
+        let mut cpu = TestCpu::default();
+        cpu.run(&code.emit(&LabelAllocator::new()));
+        assert_eq!(cpu.d, 12);
+    }
+
+    #[test]
+    fn mixed_nested_control_flow_has_unique_local_labels() {
+        use crate::asm::{Asm, Section};
+        use crate::stdlib::flow::IfA;
+        let mut condition = Block::new();
+        condition.ld_a(0);
+        let mut action = Block::new();
+        action.nop();
+        let switch = SwitchA::new().case(1, action);
+        let nested = IfA::eq(1, For::times(2, While::new(condition, switch)));
+        let mut asm = Asm::new();
+        asm.section(Section::rom0("Flow"))
+            .label("Main")
+            .emit_code(nested)
+            .ret();
+        crate::asm::label_check::assert_links(&asm.to_asm());
     }
 
     #[test]

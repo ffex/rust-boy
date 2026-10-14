@@ -1530,7 +1530,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   external symbols, hexadecimal constants and plain sprites; animation test fixtures avoid `LOW`/`HIGH`.
   The duplicate scan does not evaluate raw RGBDS conditionals: definitions within them are deferred to
   rgbasm, and any conditional `PURGE` conservatively forgets the prior definition. Unconditional `PURGE`
-  permits a fresh definition while later definite duplicates are still rejected. Conditional nesting
+  permits a fresh definition while later definite duplicates are still rejected. Unexpanded macro bodies
+  are skipped, including their conditional and purge directives. Conditional and macro nesting
   persists across chunks; regression programs assemble with RGBDS.
 
 ---

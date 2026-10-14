@@ -174,7 +174,7 @@ together: every breaking change of the refactoring is in this release, so a prog
     (including plain sprites) reject RGBDS keywords; `build()` reports collisions with `hardware.inc`
     and duplicate global definitions as `Error::NameConflict` before assembly. Raw RGBDS conditional
     definitions are deferred to the assembler, and `PURGE` permits a fresh definition; a conditional
-    purge conservatively forgets the previous definition.
+    purge conservatively forgets the previous definition. Unexpanded macro bodies are skipped.
   - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
     macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
 

@@ -412,6 +412,7 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       and plain sprites; animation fixtures use non-keyword names. Raw RGBDS conditional definitions
       are conservatively deferred to the assembler, and `PURGE` ends a symbol lifetime; regression
       programs cover conditional branches, conditional purge, multiple purged symbols and later duplicates.
+      Unexpanded macro bodies are skipped, including definitions split across instructions.
 - [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
       after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
       branch `refactor-p3-vram-queue-followups`.

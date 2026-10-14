@@ -561,6 +561,7 @@ pub(crate) enum DefinitionEvent {
 #[derive(Default)]
 pub(crate) struct DefinitionScanner {
     conditional_depth: usize,
+    macro_depth: usize,
 }
 
 impl DefinitionScanner {
@@ -576,6 +577,19 @@ impl DefinitionScanner {
             let rest = rest.trim_start();
             let mut words = rest.split_whitespace();
             let keyword = words.next().unwrap_or("");
+            if keyword.eq_ignore_ascii_case("MACRO") {
+                self.macro_depth += 1;
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("ENDM") {
+                self.macro_depth = self.macro_depth.saturating_sub(1);
+                continue;
+            }
+            // Macro bodies define symbols only on expansion. In particular, neither
+            // conditional directives nor PURGE inside an unused body take effect.
+            if self.macro_depth != 0 {
+                continue;
+            }
             if keyword.eq_ignore_ascii_case("IF") {
                 self.conditional_depth += 1;
                 continue;

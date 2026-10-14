@@ -2251,6 +2251,8 @@ mod tests {
         for raw in [
             "IF 1\nChoice: db 1\nELSE\nChoice: db 2\nENDC",
             "IF 0\nMain: db 1\nENDC",
+            "MACRO unused\nMain: db 1\nENDM",
+            "MACRO unused\nIF 1\nMain: db 1\nENDC\nENDM",
             "    DEF TEMP EQU 1\n    PURGE TEMP\n    DEF TEMP EQU 2",
             "DEF TEMP EQU 1\nIF 1\nPURGE TEMP\nENDC\nDEF TEMP EQU 2",
             "DEF TEMP EQU 1\nDEF OTHER EQU 2\nPURGE TEMP, OTHER\nDEF TEMP EQU 3\nDEF OTHER EQU 4",
@@ -2270,6 +2272,22 @@ mod tests {
             asm.raw("DEF TEMP EQU 1\nPURGE TEMP\nDEF TEMP EQU 2\nDEF TEMP EQU 3");
         });
         assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "TEMP"));
+    }
+
+    #[test]
+    fn test_macro_scan_state_spans_instructions_without_hiding_later_collisions() {
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("MACRO unused");
+            asm.raw("Main: db 1");
+            asm.raw("ENDM");
+        });
+        let out = gb.build().unwrap();
+        crate::asm::label_check::rgbds_rom(&out);
+        gb.raw(|asm| {
+            asm.raw("Definite: db 1\nDefinite: db 2");
+        });
+        assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "Definite"));
     }
 
     #[test]

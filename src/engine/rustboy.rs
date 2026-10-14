@@ -817,20 +817,26 @@ impl RustBoy {
             startup.emit_all(clear_objects_screen(&labels));
         }
 
-        // The palettes, every one of them (OBP1 too, B28); `a` is loaded again only for
-        // another value
+        // The palettes, every one of them (OBP1 too, B28), through the stdlib writer
         let palettes = self.config.palettes;
-        let mut loaded = None;
         for (register, palette) in [
-            (hw::BGP, palettes.bgp),
-            (hw::OBP0, palettes.obp0),
-            (hw::OBP1, palettes.obp1),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Background,
+                palettes.bgp,
+            ),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Object0,
+                palettes.obp0,
+            ),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Object1,
+                palettes.obp1,
+            ),
         ] {
-            if loaded != Some(palette) {
-                startup.ld_a(palette);
-                loaded = Some(palette);
-            }
-            startup.ld_addr_def_a(register);
+            startup.emit_all(crate::stdlib::graphics::palette::set_palette(
+                register,
+                crate::stdlib::graphics::palette::Palette::from(palette),
+            ));
         }
 
         // Then the variables (below), then the interrupt sources and `rIE`, then the user
@@ -1265,7 +1271,7 @@ impl RustBoy {
     ///
     /// This method takes an InputManager and generates the complete input
     /// handling code, including:
-    /// 1. Calling UpdateKeys to poll the controller
+    /// 1. Calling UpdateKeys once per frame, before the first manager’s bindings
     /// 2. Checking each registered button binding
     /// 3. Executing associated actions when buttons are pressed
     ///
@@ -1294,10 +1300,12 @@ impl RustBoy {
             self.vars.create_u8(&name, 0);
         }
 
-        // Add call to UpdateKeys
-        self.main_loop_code.push(Instr::Call {
-            target: JumpTarget::Label("UpdateKeys".to_string()),
-        });
+        // All managers share one sample, including its press and release edges.
+        if !self.updates_keys {
+            self.main_loop_code.push(Instr::Call {
+                target: JumpTarget::Label("UpdateKeys".to_string()),
+            });
+        }
 
         // Add the input handling code (the actions are the user's code)
         self.main_loop_code
@@ -1542,6 +1550,9 @@ impl RustBoy {
     /// before user VBlank code. Writes appear at the next flush. On return, carry is
     /// clear if accepted, set if full or outside VRAM; rejected writes must be retried
     /// by the caller if required. Changes all registers and flags, preserving IME.
+    /// If called with the LCD off (for example from `init()`), accepted entries stay
+    /// queued until a VBlank after the LCD is on; the queue does not poll or flush them
+    /// during initialization.
     ///
     /// Do not call the generated code from interrupt handlers: the queue has one
     /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it
@@ -3033,6 +3044,27 @@ mod tests {
     }
 
     #[test]
+    fn test_multiple_input_managers_poll_once_before_all_bindings() {
+        let mut gb = RustBoy::new();
+        for (button, marker) in [
+            (PadButton::A, ".first_input_action"),
+            (PadButton::B, ".second_input_action"),
+        ] {
+            let mut inputs = InputManager::new();
+            let mut action = Block::new();
+            action.label(marker).nop();
+            inputs.on_just_pressed(button, action.into_instrs());
+            gb.add_inputs(inputs);
+        }
+        let out = gb.build().unwrap();
+        assert_eq!(out.matches("call UpdateKeys").count(), 1, "{out}");
+        let poll = out.find("call UpdateKeys").unwrap();
+        assert!(poll < out.find(".first_input_action:").unwrap());
+        assert!(poll < out.find(".second_input_action:").unwrap());
+        assert_links(&out);
+    }
+
+    #[test]
     fn test_one_move_on_two_buttons() {
         // B7: each copy of a move emitted the same Sprite0LeftLimitStore / ...End labels
         let mut gb = RustBoy::new();
@@ -3990,8 +4022,8 @@ mod tests {
                 out
             );
         }
-        // And the code it writes for these settings is the code written before
-        let palettes = "    ld a, 228\n    ld [rBGP], a\n    ld [rOBP0], a\n    ld [rOBP1], a\n";
+        // And the generated start-up palette writes use the shared ldh-based stdlib writer
+        let palettes = "    ld a, 228\n    ldh [rBGP], a\n    ld a, 228\n    ldh [rOBP0], a\n    ld a, 228\n    ldh [rOBP1], a\n";
         assert!(out.contains(palettes), "{}", out);
         assert_eq!(
             lcdc_on(&out),
@@ -4053,12 +4085,12 @@ mod tests {
 
     #[test]
     fn test_palettes_from_the_config() {
-        // Each register gets its palette, at start-up; `a` is loaded once per value
-        for (palettes, loads) in [
-            (Palettes::all(0x1B), 1),
-            (Palettes::all(0x1B).obp0(0xE4), 3),
-            (Palettes::all(0xE4).obp1(0x00), 2),
-            (Palettes::default().bgp(0xFF).obp0(0x00).obp1(0x55), 3),
+        // Each register gets its palette at startup through set_palette's ldh write.
+        for palettes in [
+            Palettes::all(0x1B),
+            Palettes::all(0x1B).obp0(0xE4),
+            Palettes::all(0xE4).obp1(0x00),
+            Palettes::default().bgp(0xFF).obp0(0x00).obp1(0x55),
         ] {
             let mut gb = RustBoy::new();
             gb.set_palettes(palettes);
@@ -4067,14 +4099,10 @@ mod tests {
             assert_mem(&cpu, "rOBP0", palettes.obp0);
             assert_mem(&cpu, "rOBP1", palettes.obp1);
             let out = gb.build().unwrap();
-            let start = out.find("ld [rBGP], a").unwrap() - 20;
-            let end = out.find("ld [rOBP1], a").unwrap();
-            assert_eq!(
-                out[start..end].matches("ld a, ").count(),
-                loads,
-                "{}",
-                &out[start..end]
-            );
+            for register in ["rBGP", "rOBP0", "rOBP1"] {
+                assert_eq!(out.matches(&format!("ldh [{register}], a")).count(), 1);
+                assert!(!out.contains(&format!("ld [{register}], a")));
+            }
         }
     }
 

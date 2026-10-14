@@ -253,10 +253,12 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Background scrolling (`SCX`/`SCY`), camera helpers (branch `refactor-p3-scrolling`: immediate
       set, signed relative movement and world-point following with a screen anchor; stateless
       `stdlib::graphics::scroll` snippets reused by `RustBoy`, wrapping at 256; emit in init or VBlank)
-- [ ] Follow-ups of the background camera (from the review of #43): collisions while scrolled (a screen-to-map
-      helper that adds SCX/SCY before `GetTileByPixel`, or a scroll-aware variant); whether sprites should get world
-      coordinates or a "follow sprite" helper (today `follow_background_point` needs world positions kept by the program);
-      whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today)
+- [ ] Follow-ups of the background camera (from the review of #43):
+      - [x] `GetTileByScreenPixel` adds SCX/SCY to screen coordinates before the shared `GetTileByPixel` lookup.
+      - [ ] Decide whether engine sprites get world coordinates or a "follow sprite" helper. Open: no decision is
+            recorded (the review of #43 left it as a maintainer question). Today sprites stay in screen coordinates and
+            callers that need world positions track them and use `follow_background_point`; no code changed here.
+      - [x] Start-up resets SCX/SCY to zero on power-on and soft reset; user init can choose another position.
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
 - [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
@@ -360,11 +362,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
       Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG
-- [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
-- [x] 16-bit math helpers (add/sub/compare, multiply/divide) (branch `refactor-p3-math`): stateless
-      Review regressions link all routines and cover asymmetric multiplication and division remainders.
-      `stdlib::math` routines for unsigned 16-bit add, subtract and compare, 8×8 multiply and
-      16÷8 divide; register contracts and carry/borrow/zero-divisor behavior are documented and tested.
+- [ ] Sprite-vs-sprite collision (AABB)
+- [x] Generalised tile collision (`refactor-p3-tile-collision`):
+      `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using
+      the active map and current SCX/SCY; sample multiple points for larger objects.
+- [x] 16-bit math helpers (branch `refactor-p3-math`): unsigned 16-bit add/subtract/compare,
+      8×8 multiply and 16÷8 divide with documented register/flag contracts. Regression tests
+      link all routines and cover borrow-free subtraction, greater-than comparison, asymmetric
+      multiplication and nine-bit shifted division remainders.
 - [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
       `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads

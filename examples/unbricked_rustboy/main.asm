@@ -62,9 +62,11 @@
     ld a, HIGH(wShadowOAM)
     call hOAMDMA
     ld a, 228
-    ld [rBGP], a
-    ld [rOBP0], a
-    ld [rOBP1], a
+    ldh [rBGP], a
+    ld a, 228
+    ldh [rOBP0], a
+    ld a, 228
+    ldh [rOBP1], a
     ld a, 0
     ld [wFrameCounter], a
     ld a, 1
@@ -77,6 +79,8 @@
     ld [wCurKeys], a
     ld a, 0
     ld [wNewKeys], a
+    ld a, 0
+    ld [wReleasedKeys], a
     ld a, 0
     ld [wVBlankFlag], a
     ld a, IEF_VBLANK
@@ -240,9 +244,14 @@
     ld a, P1F_GET_NONE
     ldh [rP1], a
     ld a, [wCurKeys]
+    ld c, a
     xor a, b
     and a, b
     ld [wNewKeys], a
+    ld a, b
+    cpl
+    and a, c
+    ld [wReleasedKeys], a
     ld a, b
     ld [wCurKeys], a
     ret
@@ -716,6 +725,7 @@
     wScore: db
     wCurKeys: db
     wNewKeys: db
+    wReleasedKeys: db
     wVBlankFlag: db
 
 

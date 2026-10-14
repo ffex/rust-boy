@@ -314,10 +314,11 @@ impl SpriteManager {
     /// # Panics
     /// If sprites were already added with another size: their tile indices depend on it.
     pub(crate) fn set_size(&mut self, size: SpriteSize) {
-        if size != self.size && !self.sprites.is_empty() {
+        // Sprite pools count too: their Write routine checks 8x16 tiles when it is created
+        if size != self.size && !self.is_empty() {
             panic!(
-                "set_sprite_size({:?}) must be called before the first sprite is added \
-                 (the sprites already added use {:?})",
+                "set_sprite_size({:?}) must be called before the first sprite or sprite pool is \
+                 added (those already added use {:?})",
                 size, self.size
             );
         }
@@ -583,10 +584,159 @@ impl SpriteManager {
             anim_type,
             index,
             delay: None,
+            events: false,
+            callback: None,
             frame_step,
         };
         sprite.animations.push(animation);
         index
+    }
+
+    /// Enable coalescing completion events for this animation. Once reports reaching
+    /// its last frame once per activation/restart; Loop reports last→first wrap;
+    /// PingPong reports returning to its first frame. Entering a Loop or PingPong from a tile
+    /// outside its frames is not a completion; single-frame ones report every update after that.
+    /// A single-frame Once entered from another tile is on its last frame at once: it reports
+    /// on that update. Events describe shadow state; visibility follows at the next DMA.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`.
+    pub fn enable_animation_events(&mut self, id: SpriteId, index: u8) {
+        let sprite = self.sprite_mut(id);
+        sprite.check_animation_index(index);
+        sprite.animations[usize::from(index)].events = true;
+    }
+
+    /// Bind a function to completion and enable polling events too. The function is
+    /// called after all sprites step, once per completion. It may change selections
+    /// or restart a whole composite; BC/DE/HL are preserved around it. Main-loop only.
+    /// The function must be defined (or declared external) by build time.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`, or `callback` cannot be a label.
+    pub fn set_animation_callback(&mut self, id: SpriteId, index: u8, callback: &str) {
+        check_label("animation callback", callback);
+        let sprite = self.sprite_mut(id);
+        sprite.check_animation_index(index);
+        let animation = &mut sprite.animations[usize::from(index)];
+        animation.events = true;
+        animation.callback = Some(callback.to_string());
+    }
+
+    /// Load A with the pending event (0/1) and clear it. Z means none; changes AF only.
+    /// Multiple unconsumed completions coalesce into one flag. Main-loop consumer only.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`, or its events are not enabled.
+    pub fn take_animation_event(&self, id: SpriteId, index: u8) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        sprite.check_animation_index(index);
+        let animation = &sprite.animations[usize::from(index)];
+        assert!(animation.events, "animation events are not enabled");
+        let mut code = Block::new();
+        code.ld_a_addr_def(animation.event_var(&sprite.name))
+            .push(R16Stack::AF)
+            .xor(R8::A)
+            .ld_addr_def_a(animation.event_var(&sprite.name))
+            .pop(R16Stack::AF)
+            .and(R8::A);
+        code.into_instrs()
+    }
+
+    /// Display the first frame immediately and select this animation. Reset its event,
+    /// completion latch and pending callback, plus direction/timer where present.
+    /// Changes AF only. Timed sprites wait a full period before their next step;
+    /// shared-clock sprites use the next global tick. Main-loop/init only.
+    ///
+    /// The snippet writes the state the sprite has **when it is generated**: set periods,
+    /// events and callbacks first. A snippet generated before `enable_animation_events` skips
+    /// the event state, and one generated before `clear_animation_period` writes a timer that
+    /// no longer exists (rgbasm then fails on the undefined `wAnim_{name}_Timer`).
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or it has no animation `index`.
+    pub fn restart_animation(&self, id: SpriteId, index: u8) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        sprite.check_animation_index(index);
+        let animation = &sprite.animations[usize::from(index)];
+        let mut code = Block::new();
+        code.ld_a(index).ld_addr_def_a(sprite.current_var());
+        if sprite
+            .animations
+            .iter()
+            .any(|anim| anim.delay.is_some() || anim.events)
+        {
+            code.ld_addr_def_a(format!("wAnim_{}_Previous", sprite.name));
+        }
+        code.xor(R8::A);
+        if sprite.animations.iter().any(|anim| anim.delay.is_some()) {
+            code.ld_addr_def_a(format!("wAnim_{}_Timer", sprite.name));
+        }
+        if sprite.animations.iter().any(|anim| anim.needs_direction()) {
+            code.ld_addr_def_a(direction_var(&sprite.name));
+        }
+        if animation.events {
+            code.ld_addr_def_a(animation.event_var(&sprite.name));
+            if matches!(animation.anim_type, super::AnimationType::Once) {
+                code.ld_addr_def_a(animation.done_var(&sprite.name));
+            }
+            if animation.callback.is_some() {
+                code.ld_addr_def_a(animation.pending_var(&sprite.name));
+            }
+        }
+        code.ld_a(animation.base_tile + animation.start_frame * animation.frame_step)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_TILEID));
+        code.into_instrs()
+    }
+
+    // A logical group reports one event, from its last-created hardware part. All
+    // members have stepped before deferred callbacks run, regardless of this choice.
+    fn composite_event_member(&self, id: CompositeSpriteId, index: u8) -> SpriteId {
+        let parts = &self.composite(id).sprites;
+        for part in parts {
+            self.sprite(*part).check_animation_index(index);
+        }
+        *parts.last().expect("composites have parts")
+    }
+    /// Enable one coalescing event per logical composite, reported by its last part.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`.
+    pub fn enable_composite_animation_events(&mut self, id: CompositeSpriteId, index: u8) {
+        let member = self.composite_event_member(id, index);
+        self.enable_animation_events(member, index);
+    }
+    /// Bind one deferred callback per logical composite completion.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`, or `callback` cannot be a label.
+    pub fn set_composite_animation_callback(
+        &mut self,
+        id: CompositeSpriteId,
+        index: u8,
+        callback: &str,
+    ) {
+        let member = self.composite_event_member(id, index);
+        self.set_animation_callback(member, index, callback);
+    }
+    /// Consume the logical composite event; changes AF only.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`, or its events are not enabled.
+    pub fn take_composite_animation_event(&self, id: CompositeSpriteId, index: u8) -> Vec<Instr> {
+        self.take_animation_event(self.composite_event_member(id, index), index)
+    }
+    /// Restart all members together, validating every member before generating code.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part has no animation `index`.
+    pub fn restart_composite_animation(&self, id: CompositeSpriteId, index: u8) -> Vec<Instr> {
+        self.composite_event_member(id, index);
+        self.composite(id)
+            .sprites
+            .iter()
+            .flat_map(|part| self.restart_animation(*part, index))
+            .collect()
     }
 
     /// Override this animation's period in game frames (1..=255).
@@ -597,7 +747,7 @@ impl SpriteManager {
     /// # Panics
     /// If `sprite_id` is not a sprite of this manager, it has no animation `animation_index`,
     /// or `delay` is 0.
-    pub fn set_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8, delay: u8) {
+    pub fn set_animation_period(&mut self, sprite_id: SpriteId, animation_index: u8, delay: u8) {
         assert!(delay > 0, "per-animation delay must be 1..=255");
         let sprite = self.sprite_mut(sprite_id);
         sprite.check_animation_index(animation_index);
@@ -609,7 +759,7 @@ impl SpriteManager {
     ///
     /// # Panics
     /// If `sprite_id` is not a sprite of this manager, or it has no animation `animation_index`.
-    pub fn clear_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8) {
+    pub fn clear_animation_period(&mut self, sprite_id: SpriteId, animation_index: u8) {
         let sprite = self.sprite_mut(sprite_id);
         sprite.check_animation_index(animation_index);
         sprite.animations[usize::from(animation_index)].delay = None;
@@ -622,7 +772,7 @@ impl SpriteManager {
     /// # Panics
     /// If `composite_id` is unknown, a part has no animation `animation_index`, or `delay` is 0;
     /// no part is changed then.
-    pub fn set_composite_animation_delay(
+    pub fn set_composite_animation_period(
         &mut self,
         composite_id: CompositeSpriteId,
         animation_index: u8,
@@ -634,7 +784,7 @@ impl SpriteManager {
             self.sprite(*id).check_animation_index(animation_index);
         }
         for id in ids {
-            self.set_animation_delay(id, animation_index, delay);
+            self.set_animation_period(id, animation_index, delay);
         }
     }
 
@@ -643,7 +793,7 @@ impl SpriteManager {
     /// # Panics
     /// If `composite_id` is unknown or a part has no animation `animation_index`; no part is
     /// changed then.
-    pub fn clear_composite_animation_delay(
+    pub fn clear_composite_animation_period(
         &mut self,
         composite_id: CompositeSpriteId,
         animation_index: u8,
@@ -653,7 +803,7 @@ impl SpriteManager {
             self.sprite(*id).check_animation_index(animation_index);
         }
         for id in ids {
-            self.clear_animation_delay(id, animation_index);
+            self.clear_animation_period(id, animation_index);
         }
     }
 
@@ -1062,6 +1212,130 @@ impl SpriteManager {
         code.into_instrs()
     }
 
+    /// Hide this sprite by setting shadow OAM Y=0. Tile/flags/X are kept.
+    /// Show it again with show_at; moving its Y can make it visible again.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager.
+    pub fn hide(&self, id: SpriteId) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        let mut code = Block::new();
+        code.ld_a(0)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_Y));
+        code.into_instrs()
+    }
+
+    /// Show/place this sprite at signed screen pixels, keeping tile/flags. Changes A only.
+    /// Screen X -8 or Y -16 encodes OAM coordinate zero, hiding the part.
+    ///
+    /// # Panics
+    /// If `id` is not a sprite of this manager, or the position is outside X -8..=247 / Y -16..=239.
+    pub fn show_at(&self, id: SpriteId, x: i16, y: i16) -> Vec<Instr> {
+        let sprite = self.sprite(id);
+        let x = u8::try_from(i32::from(x) + i32::from(hw::OAM_X_OFFSET))
+            .expect("sprite OAM X is outside byte range");
+        let y = u8::try_from(i32::from(y) + i32::from(hw::OAM_Y_OFFSET))
+            .expect("sprite OAM Y is outside byte range");
+        let mut code = Block::new();
+        code.ld_a(x)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_X));
+        code.ld_a(y)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_Y));
+        code.into_instrs()
+    }
+
+    /// Hide all composite parts by setting their shadow OAM Y to zero.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager.
+    pub fn hide_composite(&self, id: CompositeSpriteId) -> Vec<Instr> {
+        self.composite(id)
+            .sprites
+            .iter()
+            .flat_map(|&id| self.hide(id))
+            .collect()
+    }
+
+    /// Show/place a composite with its first registered part at screen (x, y), preserving
+    /// the original offsets and every tile/attribute. Changes A only.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager, or a part would be outside
+    /// X -8..=247 / Y -16..=239. OAM coordinate zero hides that part.
+    pub fn show_composite_at(&self, id: CompositeSpriteId, x: i16, y: i16) -> Vec<Instr> {
+        let members = &self.composite(id).sprites;
+        let first = self.sprite(members[0]);
+        members
+            .iter()
+            .flat_map(|&id| {
+                let sprite = self.sprite(id);
+                let coordinate = |anchor: i16, value: i16, first: i16| {
+                    i16::try_from(i32::from(anchor) + i32::from(value) - i32::from(first))
+                        .expect("composite part position is outside screen coordinate range")
+                };
+                self.show_at(
+                    id,
+                    coordinate(x, sprite.x, first.x),
+                    coordinate(y, sprite.y, first.y),
+                )
+            })
+            .collect()
+    }
+
+    #[track_caller]
+    pub(crate) fn reserve_pool_slots(&mut self, count: u8) -> u8 {
+        assert!(
+            count > 0 && count <= hw::OAM_COUNT.value,
+            "invalid sprite pool capacity"
+        );
+        let address = self
+            .oam
+            .allocate(u16::from(count) * u16::from(hw::OAM_ENTRY_SIZE.value))
+            .expect("sprite pool does not fit in available OAM");
+        ((address - hw::OAMRAM.value) / u16::from(hw::OAM_ENTRY_SIZE.value)) as u8
+    }
+
+    /// Set runtime flags for every hardware sprite in a composite. For two horizontal
+    /// neighbours (same Y and one sprite width apart), X flip exchanges their creation-time
+    /// tile assignments; clearing X flip restores those assignments. Other layouts, including
+    /// composites of three or more parts, receive flags only. Y flip never reorders parts.
+    ///
+    /// Changes A only. For horizontal pairs this resets tile bytes to creation-time values,
+    /// including on animated composites; animation updates can overwrite them again. This
+    /// method does not mirror the current animation frame.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager.
+    pub fn set_composite_flags(
+        &self,
+        id: CompositeSpriteId,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Vec<Instr> {
+        let flags = flags.into();
+        let composite = self.composite(id);
+        let horizontal_pair = composite.sprites.len() == 2 && {
+            let left = self.sprite(composite.sprites[0]);
+            let right = self.sprite(composite.sprites[1]);
+            left.y == right.y && left.x.abs_diff(right.x) == u16::from(hw::TILE_WIDTH)
+        };
+        let mut code = Block::new();
+        for (index, sprite_id) in composite.sprites.iter().enumerate() {
+            let sprite = self.sprite(*sprite_id);
+            if horizontal_pair {
+                let tile = if flags.bits() & hw::OAMF_XFLIP.value != 0 {
+                    self.sprite(composite.sprites[1 - index]).tile_index
+                } else {
+                    sprite.tile_index
+                };
+                code.ld_a(tile)
+                    .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_TILEID));
+            }
+            code.ld_a(flags.bits())
+                .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_FLAGS));
+        }
+        code.into_instrs()
+    }
+
     /// Generate movement code for a specific sprite: add the value of the variable
     /// `var_name` to its X (changes `a`, `b` and the flags)
     ///
@@ -1174,9 +1448,10 @@ impl SpriteManager {
         asm.into_instrs()
     }
 
-    /// Check if any sprites have been added
+    /// Whether no OAM entry is reserved: no static sprite and no sprite pool (a program with
+    /// only a pool is not empty)
     pub fn is_empty(&self) -> bool {
-        self.sprites.is_empty()
+        self.oam.current_address() == hw::OAMRAM.value
     }
 
     /// Check if any animations have been added to any sprite
@@ -1197,6 +1472,27 @@ impl SpriteManager {
             .collect()
     }
 
+    pub(crate) fn animation_event_function_names(&self) -> Vec<String> {
+        self.sprites
+            .values()
+            .flat_map(|sprite| {
+                sprite
+                    .animations
+                    .iter()
+                    .filter(|anim| anim.events)
+                    .map(|anim| animation_label(&sprite.name, &anim.name))
+            })
+            .collect()
+    }
+
+    pub(crate) fn animation_callback_names(&self) -> Vec<&str> {
+        self.sprites
+            .values()
+            .flat_map(|sprite| sprite.animations.iter())
+            .filter_map(|animation| animation.callback.as_deref())
+            .collect()
+    }
+
     /// Generate animation functions for all sprites with animations
     /// Returns a list of (function_name, function_body) pairs
     pub(crate) fn generate_animation_functions(&self) -> Vec<(String, Vec<Instr>)> {
@@ -1208,8 +1504,14 @@ impl SpriteManager {
                 let func_name = animation_label(&sprite.name, &animation.name);
 
                 asm.label(&func_name);
-                asm.emit_all(animation.generate_func(&direction_var(&sprite.name)));
-                asm.ret();
+                if animation.events {
+                    asm.emit_all(
+                        animation.generate_event_func(&sprite.name, &direction_var(&sprite.name)),
+                    );
+                } else {
+                    asm.emit_all(animation.generate_func(&direction_var(&sprite.name)));
+                    asm.ret();
+                }
 
                 functions.push((func_name, asm.into_instrs()));
             }
@@ -1221,7 +1523,7 @@ impl SpriteManager {
     /// Generate the main loop animation code with frame-based timing
     ///
     /// This is the shared-clock dispatcher, for programs where no animation has a period of
-    /// its own; otherwise the per-sprite one, `generate_independent_animation_calls`, is
+    /// its own or completion events; otherwise the per-sprite one, `generate_independent_animation_calls`, is
     /// generated instead (its labels are listed there).
     /// Uses wFrameCounter for non-blocking animation updates
     /// - Increments frame counter each frame
@@ -1241,11 +1543,12 @@ impl SpriteManager {
         labels: &LabelAllocator,
         delay_value: u8,
     ) -> Vec<Instr> {
-        if self
-            .sprites
-            .values()
-            .any(|sprite| sprite.animations.iter().any(|anim| anim.delay.is_some()))
-        {
+        if self.sprites.values().any(|sprite| {
+            sprite
+                .animations
+                .iter()
+                .any(|anim| anim.delay.is_some() || anim.events)
+        }) {
             return self.generate_independent_animation_calls(labels, delay_value);
         }
         let mut asm = Block::new();
@@ -1304,14 +1607,15 @@ impl SpriteManager {
         asm.into_instrs()
     }
 
-    /// The dispatcher when an animation has a period of its own: the global `wFrameCounter`
+    /// The dispatcher when an animation has a period of its own or completion events: the global `wFrameCounter`
     /// still sets the shared tick (kept in C), and a timed sprite has `wAnim_{name}_Timer`,
     /// reset when its selection (`wAnim_{name}_Current` against `wAnim_{name}_Previous`) changes.
     /// BC is preserved around the AF-only animation functions; B holds a timed sprite's selection.
     ///
     /// Its labels are local: `.anim_global_not_due_N`, `.anim_sprite_end_N` after a sprite's
-    /// part, `.anim_selection_same_N` (timed sprites) and `.anim_selection_skip_N` after an
-    /// animation's call.
+    /// part, `.anim_selection_same_N` (timed sprites and sprites with events),
+    /// `.anim_selection_skip_N` after an animation's call, and `.anim_callback_end_N` after a
+    /// pending callback's check.
     fn generate_independent_animation_calls(
         &self,
         labels: &LabelAllocator,
@@ -1338,7 +1642,8 @@ impl SpriteManager {
             let end = labels.local("anim_sprite_end");
             let timed = sprite.animations.iter().any(|anim| anim.delay.is_some());
             let timer = format!("wAnim_{}_Timer", sprite.name);
-            if timed {
+            let tracked = timed || sprite.animations.iter().any(|anim| anim.events);
+            if tracked {
                 let previous = format!("wAnim_{}_Previous", sprite.name);
                 let same = labels.local("anim_selection_same");
                 asm.ld_a_addr_def(sprite.current_var())
@@ -1348,10 +1653,20 @@ impl SpriteManager {
                     .jr_cond(Condition::Z, &same)
                     .ld(R8::A, R8::B)
                     .ld_addr_def_a(&previous)
-                    .xor(R8::A)
-                    .ld_addr_def_a(&timer)
-                    .label(&same)
-                    .ld(R8::A, R8::B);
+                    .xor(R8::A);
+                if timed {
+                    asm.ld_addr_def_a(&timer);
+                }
+                for anim in &sprite.animations {
+                    if anim.events && matches!(anim.anim_type, super::AnimationType::Once) {
+                        asm.ld_addr_def_a(anim.done_var(&sprite.name));
+                    }
+                }
+                asm.label(&same);
+                if !timed {
+                    asm.ld(R8::A, R8::C).and(R8::A).jp_cond(Condition::Z, &end);
+                }
+                asm.ld(R8::A, R8::B);
             } else {
                 asm.ld(R8::A, R8::C)
                     .and(R8::A)
@@ -1361,7 +1676,7 @@ impl SpriteManager {
             asm.cp(ANIM_DISABLED).jp_cond(Condition::Z, &end);
             for animation in &sprite.animations {
                 let skip = labels.local("anim_selection_skip");
-                if timed {
+                if tracked {
                     asm.ld(R8::A, R8::B);
                 }
                 asm.cp(animation.index).jp_cond(Condition::NZ, &skip);
@@ -1381,6 +1696,26 @@ impl SpriteManager {
             asm.label(&end);
         }
         asm.pop(R16Stack::BC);
+        for sprite in self.sprites.values() {
+            for animation in &sprite.animations {
+                if let Some(callback) = &animation.callback {
+                    let end = labels.local("anim_callback_end");
+                    asm.ld_a_addr_def(animation.pending_var(&sprite.name))
+                        .and(R8::A)
+                        .jr_cond(Condition::Z, &end)
+                        .xor(R8::A)
+                        .ld_addr_def_a(animation.pending_var(&sprite.name))
+                        .push(R16Stack::BC)
+                        .push(R16Stack::DE)
+                        .push(R16Stack::HL)
+                        .call(callback)
+                        .pop(R16Stack::HL)
+                        .pop(R16Stack::DE)
+                        .pop(R16Stack::BC)
+                        .label(&end);
+                }
+            }
+        }
         asm.into_instrs()
     }
 
@@ -1402,7 +1737,29 @@ impl SpriteManager {
             }
             if sprite.animations.iter().any(|anim| anim.delay.is_some()) {
                 vars.push((format!("wAnim_{}_Timer", sprite.name), 0));
-                vars.push((format!("wAnim_{}_Previous", sprite.name), ANIM_DISABLED));
+            }
+            if sprite
+                .animations
+                .iter()
+                .any(|anim| anim.delay.is_some() || anim.events)
+            {
+                let previous = if sprite.animations.iter().any(|anim| anim.events) {
+                    sprite.initial_animation
+                } else {
+                    ANIM_DISABLED
+                };
+                vars.push((format!("wAnim_{}_Previous", sprite.name), previous));
+            }
+            for animation in &sprite.animations {
+                if animation.events {
+                    vars.push((animation.event_var(&sprite.name), 0));
+                    if matches!(animation.anim_type, super::AnimationType::Once) {
+                        vars.push((animation.done_var(&sprite.name), 0));
+                    }
+                    if animation.callback.is_some() {
+                        vars.push((animation.pending_var(&sprite.name), 0));
+                    }
+                }
             }
         }
 
@@ -1456,6 +1813,125 @@ mod tests {
             1,
             "only the attribute byte is written"
         );
+    }
+
+    #[test]
+    fn composite_flags_swap_horizontal_tiles_and_restore_them() {
+        let mut game = RustBoy::new();
+        let parts = [
+            MetaspritePart::new(TileSource::from_raw(&[["$ff"; 8]]), 0, 0, 0),
+            MetaspritePart::new(TileSource::from_raw(&[["$00"; 8]]), 8, 0, 0),
+        ];
+        let id = game.add_metasprite("Pair", 40, 48, &parts);
+        let sm = &game.sprites;
+        let members = sm.get_composite_sprites(id).unwrap();
+        let tiles: Vec<_> = members.iter().map(|&id| sm.sprite(id).tile_index).collect();
+        assert_ne!(tiles[0], tiles[1]);
+        let mut cpu = TestCpu::default();
+        for flipped in [false, true, false] {
+            let flags = crate::stdlib::graphics::sprites::SpriteFlags::new().flip_x(flipped);
+            cpu.run(&sm.set_composite_flags(id, flags));
+            for index in 0..2 {
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_TILEID).to_string()],
+                    tiles[if flipped { 1 - index } else { index }],
+                );
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_FLAGS).to_string()],
+                    flags.bits(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn composite_flags_leave_other_layout_tiles_untouched() {
+        for offsets in [
+            vec![(0, 0), (0, 8)],
+            vec![(0, 0), (16, 0)],
+            vec![(0, 0), (8, 0), (16, 0)],
+        ] {
+            let mut game = RustBoy::new();
+            let parts: Vec<_> = offsets
+                .iter()
+                .map(|&(x, y)| MetaspritePart::new(TileSource::from_raw(&[["$ff"; 8]]), x, y, 0))
+                .collect();
+            let id = game.add_metasprite("Layout", 40, 48, &parts);
+            let mut cpu = TestCpu::default();
+            // Runtime tiles differ from creation-time ones: non-horizontal pairs
+            // and larger layouts must not reset them while changing flags.
+            for index in 0..parts.len() {
+                cpu.mem.insert(
+                    SHADOW.entry(index as u8, hw::OAMA_TILEID).to_string(),
+                    10 + index as u8,
+                );
+            }
+            let flags = crate::stdlib::graphics::sprites::SpriteFlags::new()
+                .flip_x(true)
+                .flip_y(true);
+            cpu.run(&game.sprites.set_composite_flags(id, flags));
+            for index in 0..parts.len() {
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_TILEID).to_string()],
+                    10 + index as u8
+                );
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_FLAGS).to_string()],
+                    flags.bits()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "composite")]
+    fn composite_flags_reject_unknown_id() {
+        SpriteManager::new(LabelAllocator::new()).set_composite_flags(CompositeSpriteId(0), 0);
+    }
+
+    #[test]
+    fn clipped_composite_can_be_hidden_and_reshown_at_signed_positions() {
+        let mut game = RustBoy::new();
+        let parts = [
+            MetaspritePart::new(TileSource::from_raw(&[["$ff"; 8]]), 0, 0, 0),
+            MetaspritePart::new(TileSource::from_raw(&[["$00"; 8]]), -4, -8, 0x20),
+        ];
+        let id = game.add_metasprite("Clipped", 0, 0, &parts);
+        let sm = &game.sprites;
+        let mut cpu = TestCpu::default();
+        for index in 0..2 {
+            cpu.mem
+                .insert(SHADOW.entry(index, hw::OAMA_TILEID).to_string(), 10 + index);
+            cpu.mem
+                .insert(SHADOW.entry(index, hw::OAMA_FLAGS).to_string(), 0x20);
+        }
+        cpu.run(&sm.hide_composite(id));
+        for (x, y, expected) in [(0, 0, [(16, 8), (8, 4)]), (-4, -8, [(8, 4), (0, 0)])] {
+            cpu.run(&sm.show_composite_at(id, x, y));
+            for (index, (y, x)) in expected.into_iter().enumerate() {
+                let index = index as u8;
+                assert_eq!(cpu.mem[&SHADOW.entry(index, hw::OAMA_Y).to_string()], y);
+                assert_eq!(cpu.mem[&SHADOW.entry(index, hw::OAMA_X).to_string()], x);
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index, hw::OAMA_TILEID).to_string()],
+                    10 + index
+                );
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index, hw::OAMA_FLAGS).to_string()],
+                    0x20
+                );
+            }
+        }
+        let first = sm.get_composite_sprites(id).unwrap()[0];
+        cpu.run(&sm.show_at(first, 247, 239));
+        assert_eq!(cpu.mem[&SHADOW.entry(0, hw::OAMA_X).to_string()], 255);
+        assert_eq!(cpu.mem[&SHADOW.entry(0, hw::OAMA_Y).to_string()], 255);
+        for (x, y) in [(-9, 0), (248, 0), (0, -17), (0, 240), (i16::MAX, i16::MIN)] {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sm.show_at(first, x, y)))
+                    .is_err()
+            );
+        }
     }
 
     type LimitMove = fn(&SpriteManager, SpriteId, u8, u8) -> Vec<Instr>;
@@ -2287,7 +2763,7 @@ mod tests {
             let sprite = sm.add_for_test("Timed", 0, 0, 0, 2);
             sm.add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
             sm.set_initial_animation(sprite, 0);
-            sm.set_animation_delay(sprite, 0, delay);
+            sm.set_animation_period(sprite, 0, delay);
             let mut cpu = animation_cpu(&sm);
             cpu.b = 0xab;
             cpu.c = 0xcd;
@@ -2315,7 +2791,7 @@ mod tests {
         sm.add_animation(shared, "Shared", 0, 1, AnimationType::Loop);
         sm.set_initial_animation(timed, 0);
         sm.set_initial_animation(shared, 0);
-        sm.set_animation_delay(timed, 0, 2);
+        sm.set_animation_period(timed, 0, 2);
         let code = animation_program(&sm, 4);
         let mut cpu = animation_cpu(&sm);
         cpu.run(&code);
@@ -2353,8 +2829,8 @@ mod tests {
         sm.add_animation(timed, "Slow", 0, 1, AnimationType::Loop);
         sm.add_animation(timed, "Quick", 0, 1, AnimationType::Loop);
         sm.set_initial_animation(timed, 0);
-        sm.set_animation_delay(timed, 0, 200);
-        sm.set_animation_delay(timed, 1, 3);
+        sm.set_animation_period(timed, 0, 200);
+        sm.set_animation_period(timed, 1, 3);
         let code = animation_program(&sm, 1);
         let mut cpu = animation_cpu(&sm);
         for _ in 0..5 {
@@ -2379,19 +2855,19 @@ mod tests {
             .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
         let before = gb.build().unwrap();
         for message in [
-            panic_message(|| gb.sprites.set_animation_delay(sprite, 0, 0)),
-            panic_message(|| gb.sprites.set_animation_delay(sprite, 1, 2)),
-            panic_message(|| gb.sprites.set_animation_delay(SpriteId(999), 0, 2)),
-            panic_message(|| gb.sprites.clear_animation_delay(sprite, 1)),
+            panic_message(|| gb.sprites.set_animation_period(sprite, 0, 0)),
+            panic_message(|| gb.sprites.set_animation_period(sprite, 1, 2)),
+            panic_message(|| gb.sprites.set_animation_period(SpriteId(999), 0, 2)),
+            panic_message(|| gb.sprites.clear_animation_period(sprite, 1)),
         ] {
             assert!(!message.is_empty());
         }
         assert_eq!(before, gb.build().unwrap());
-        gb.sprites.set_animation_delay(sprite, 0, 2);
+        gb.sprites.set_animation_period(sprite, 0, 2);
         let timed = gb.build().unwrap();
         assert_eq!(timed, gb.build().unwrap());
         assert!(timed.contains("wAnim_Actor_Timer"));
-        gb.sprites.clear_animation_delay(sprite, 0);
+        gb.sprites.clear_animation_period(sprite, 0);
         assert_eq!(before, gb.build().unwrap());
     }
     #[test]
@@ -2404,7 +2880,7 @@ mod tests {
             let sprite = sm.add_for_test("Actor", 0, 0, 0, 3);
             sm.add_animation(sprite, "Play", 0, 2, kind);
             sm.set_initial_animation(sprite, 0);
-            sm.set_animation_delay(sprite, 0, 3);
+            sm.set_animation_period(sprite, 0, 3);
             let code = animation_program(&sm, 1);
             let mut cpu = animation_cpu(&sm);
             let mut previous = 0;
@@ -2430,7 +2906,7 @@ mod tests {
                 .add_animation(sprite, &format!("Pose{index}"), 0, 1, AnimationType::Loop);
         }
         gb.sprites.set_initial_animation(sprite, 254);
-        gb.sprites.set_animation_delay(sprite, 254, 2);
+        gb.sprites.set_animation_period(sprite, 254, 2);
         crate::asm::label_check::assert_links(&gb.build().unwrap());
         let code = animation_program(&gb.sprites, 1);
         let mut cpu = animation_cpu(&gb.sprites);
@@ -2438,5 +2914,372 @@ mod tests {
         assert_eq!(shown_frame(&gb.sprites, &cpu, sprite), 0);
         cpu.run(&code);
         assert_eq!(shown_frame(&gb.sprites, &cpu, sprite), 1);
+    }
+    #[test]
+    fn a_restart_clears_an_unpolled_completion() {
+        // A Loop wraps (a completion) and is restarted before the game polls it: the
+        // restart forgets that completion
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Walker", 0, 0, 0, 2);
+        sm.add_animation(sprite, "Walk", 0, 1, AnimationType::Loop);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        cpu.run(&code);
+        cpu.run(&code);
+        assert_eq!(cpu.mem["wAnim_Walker_Walk_Event"], 1, "wrapped, not polled");
+        cpu.run(&sm.restart_animation(sprite, 0));
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 0);
+    }
+
+    #[test]
+    fn a_once_put_back_on_an_earlier_frame_reports_again() {
+        // After a Once completes, a raw write puts its first frame back (no selection change
+        // the dispatcher sees): stepping off the last frame clears its latch, so reaching the
+        // last frame again is a new completion
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Door", 0, 0, 0, 3);
+        sm.add_animation(sprite, "Open", 0, 2, AnimationType::Once);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        let tile = format!("wShadowOAM+{}", hw::OAMA_TILEID.value);
+        let first = cpu.mem[&tile];
+        for expected in [0, 1, 0] {
+            cpu.run(&code);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, expected);
+        }
+        cpu.mem.insert(tile, first);
+        for expected in [0, 1] {
+            cpu.run(&code);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, expected);
+        }
+    }
+
+    #[test]
+    fn completion_flags_cover_cycles_once_and_explicit_restart() {
+        for (kind, expected) in [
+            (AnimationType::Loop, vec![0, 0, 1, 0, 0, 1, 0, 0]),
+            (AnimationType::PingPong, vec![0, 0, 0, 1, 0, 0, 0, 1]),
+            (AnimationType::Once, vec![0, 1, 0, 0, 0, 0, 0, 0]),
+        ] {
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            let sprite = sm.add_for_test("Event", 0, 0, 0, 3);
+            sm.add_animation(sprite, "Play", 0, 2, kind);
+            sm.set_initial_animation(sprite, 0);
+            sm.enable_animation_events(sprite, 0);
+            let mut cpu = animation_cpu(&sm);
+            let code = animation_program(&sm, 1);
+            for event in expected {
+                cpu.run(&code);
+                cpu.run(&sm.take_animation_event(sprite, 0));
+                assert_eq!(cpu.a, event);
+                assert_eq!(cpu.zero, event == 0);
+            }
+            cpu.run(&sm.restart_animation(sprite, 0));
+            assert_eq!(shown_frame(&sm, &cpu, sprite), 0);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, 0);
+            for _ in 0..4 {
+                cpu.run(&code);
+            }
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, 1);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, 0);
+        }
+    }
+
+    #[test]
+    fn events_keep_a_shared_clock_sprite_on_the_global_period() {
+        // Enabling events moves a sprite to the per-sprite dispatcher; without a period of its
+        // own it must still step on the global tick (delay 3), not every frame
+        let frames = |events: bool| {
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            let sprite = sm.add_for_test("Shared", 0, 0, 0, 3);
+            sm.add_animation(sprite, "Walk", 0, 2, AnimationType::Loop);
+            sm.set_initial_animation(sprite, 0);
+            if events {
+                sm.enable_animation_events(sprite, 0);
+            }
+            let code = animation_program(&sm, 3);
+            let mut cpu = animation_cpu(&sm);
+            (0..9)
+                .map(|_| {
+                    cpu.run(&code);
+                    shown_frame(&sm, &cpu, sprite)
+                })
+                .collect::<Vec<u8>>()
+        };
+        let shared = frames(false);
+        assert_eq!(
+            shared,
+            [0, 0, 1, 1, 1, 2, 2, 2, 0],
+            "one step every 3 frames"
+        );
+        assert_eq!(frames(true), shared);
+    }
+
+    #[test]
+    fn entering_a_cycle_from_outside_its_frames_is_not_a_completion() {
+        // A sprite showing a tile below or above the frames of a Loop or PingPong (one frame
+        // or several), switched to it: the first step puts the first frame back, which is not
+        // the end of a cycle; a one-frame animation reports every update after that
+        for (kind, frames) in [
+            (AnimationType::PingPong, (2, 4)),
+            (AnimationType::Loop, (2, 4)),
+            (AnimationType::PingPong, (3, 3)),
+            (AnimationType::Loop, (3, 3)),
+        ] {
+            for (from, from_frames) in [("Low", (0, 1)), ("High", (5, 6))] {
+                let case = format!("{kind:?} {frames:?} from {from}");
+                let mut sm = SpriteManager::new(LabelAllocator::new());
+                let sprite = sm.add_for_test("Actor", 0, 0, 0, 7);
+                let before = sm.add_animation(
+                    sprite,
+                    from,
+                    from_frames.0,
+                    from_frames.1,
+                    AnimationType::Loop,
+                );
+                let cycle = sm.add_animation(sprite, "Cycle", frames.0, frames.1, kind.clone());
+                sm.set_initial_animation(sprite, before);
+                sm.enable_animation_events(sprite, cycle);
+                let code = animation_program(&sm, 1);
+                let mut cpu = animation_cpu(&sm);
+                cpu.run(&code);
+                let shown = shown_frame(&sm, &cpu, sprite);
+                assert!(
+                    (from_frames.0..=from_frames.1).contains(&shown),
+                    "{case}: {shown}"
+                );
+                cpu.run(&sm.enable_animation(sprite, cycle));
+                cpu.run(&code);
+                assert_eq!(
+                    shown_frame(&sm, &cpu, sprite),
+                    frames.0,
+                    "{case}: first frame"
+                );
+                cpu.run(&sm.take_animation_event(sprite, cycle));
+                assert_eq!(cpu.a, 0, "{case}: no completion");
+                if frames.0 == frames.1 {
+                    cpu.run(&code);
+                    cpu.run(&sm.take_animation_event(sprite, cycle));
+                    assert_eq!(cpu.a, 1, "{case}: one frame, a completion per update");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_restart_mid_period_waits_a_full_period() {
+        // Restarting a timed sprite in the middle of its period (the selection does not change,
+        // so only the restart's timer write starts the count again)
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Timed", 0, 0, 0, 3);
+        sm.add_animation(sprite, "Walk", 0, 2, AnimationType::Loop);
+        sm.set_initial_animation(sprite, 0);
+        sm.set_animation_period(sprite, 0, 4);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        for _ in 0..6 {
+            cpu.run(&code);
+        }
+        assert_eq!(
+            shown_frame(&sm, &cpu, sprite),
+            1,
+            "stepped on frame 4, 2 into the next"
+        );
+        cpu.run(&sm.restart_animation(sprite, 0));
+        let shown: Vec<u8> = (0..4)
+            .map(|_| {
+                cpu.run(&code);
+                shown_frame(&sm, &cpu, sprite)
+            })
+            .collect();
+        assert_eq!(shown, [0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn restarting_a_single_frame_once_reports_it_again() {
+        // A single-frame Once never steps away from its last frame, so only the restart's
+        // clear of its latch lets it report completion again
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Flash", 0, 0, 0, 1);
+        sm.add_animation(sprite, "Hit", 0, 0, AnimationType::Once);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        let code = animation_program(&sm, 1);
+        let mut cpu = animation_cpu(&sm);
+        for expected in [1, 0, 0] {
+            cpu.run(&code);
+            cpu.run(&sm.take_animation_event(sprite, 0));
+            assert_eq!(cpu.a, expected);
+        }
+        cpu.run(&sm.restart_animation(sprite, 0));
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1, "reported again after the restart");
+    }
+
+    #[test]
+    fn single_frame_events_and_terminal_tile_255_are_not_lost() {
+        for kind in [
+            AnimationType::Loop,
+            AnimationType::PingPong,
+            AnimationType::Once,
+        ] {
+            let once = matches!(kind, AnimationType::Once);
+            let mut sm = SpriteManager::new(LabelAllocator::new());
+            let sprite = sm.add_for_test("Last", 0, 0, 255, 1);
+            sm.add_animation(sprite, "Single", 0, 0, kind);
+            sm.set_initial_animation(sprite, 0);
+            sm.enable_animation_events(sprite, 0);
+            let code = animation_program(&sm, 1);
+            let mut cpu = animation_cpu(&sm);
+            for tick in 0..5 {
+                cpu.run(&code);
+                cpu.run(&sm.take_animation_event(sprite, 0));
+                assert_eq!(cpu.a, u8::from(!once || tick == 0));
+            }
+        }
+    }
+
+    #[test]
+    fn switching_and_disabled_frames_rearm_once_without_clearing_pending_events() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Actor", 0, 0, 0, 2);
+        sm.add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        sm.add_animation(sprite, "Idle", 0, 1, AnimationType::Loop);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        sm.set_animation_period(sprite, 0, 2);
+        let code = animation_program(&sm, 3);
+        let mut cpu = animation_cpu(&sm);
+        cpu.run(&code);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, sprite), 1);
+        cpu.run(&sm.disable_animation(sprite));
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+        cpu.run(&sm.enable_animation(sprite, 0));
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 0);
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+        cpu.run(&sm.enable_animation(sprite, 1));
+        cpu.run(&code);
+        cpu.run(&sm.enable_animation(sprite, 0));
+        cpu.run(&code);
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+    }
+
+    #[test]
+    fn a_restart_from_an_earlier_callback_cancels_a_pending_callback() {
+        // Both Once animations end on the same frame; callbacks run in creation order, and
+        // the first one restarts the second sprite: its completion is gone with the restart,
+        // so its own callback must not run
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let first = sm.add_for_test("First", 0, 0, 0, 2);
+        let second = sm.add_for_test("Second", 0, 0, 2, 2);
+        for (sprite, callback) in [(first, "FirstDone"), (second, "SecondDone")] {
+            sm.add_animation(sprite, "Attack", 0, 1, AnimationType::Once);
+            sm.set_initial_animation(sprite, 0);
+            sm.set_animation_callback(sprite, 0, callback);
+        }
+        let mut code = animation_program(&sm, 1);
+        let mut callbacks = Block::new();
+        callbacks
+            .label("FirstDone")
+            .emit_all(sm.restart_animation(second, 0))
+            .ret()
+            .label("SecondDone")
+            .ld_a(1)
+            .ld_addr_def_a("wSecondCalled")
+            .ret();
+        code.extend(callbacks.into_instrs());
+        let mut cpu = animation_cpu(&sm);
+        cpu.mem.insert("wSecondCalled".to_string(), 0);
+        cpu.run(&code);
+        assert_eq!(shown_frame(&sm, &cpu, first), 1, "the first Once ended");
+        assert_eq!(
+            shown_frame(&sm, &cpu, second),
+            0,
+            "the second one was restarted"
+        );
+        assert_eq!(cpu.mem["wAnim_Second_Attack_Pending"], 0);
+        assert_eq!(cpu.mem["wSecondCalled"], 0);
+    }
+
+    #[test]
+    fn callback_errors_are_checked_without_corrupting_configuration() {
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Actor", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        let before = gb.build().unwrap();
+        for message in [
+            panic_message(|| gb.sprites.set_animation_callback(sprite, 0, "ret")),
+            panic_message(|| gb.sprites.set_animation_callback(sprite, 1, "Finished")),
+            panic_message(|| gb.sprites.enable_animation_events(SpriteId(99), 0)),
+            panic_message(|| gb.sprites.take_animation_event(sprite, 0)),
+        ] {
+            assert!(!message.is_empty());
+        }
+        assert_eq!(before, gb.build().unwrap());
+        gb.sprites
+            .set_animation_callback(sprite, 0, "MissingCallback");
+        assert!(matches!(
+            gb.build(),
+            Err(super::super::Error::UnknownFunction { .. })
+        ));
+    }
+    #[test]
+    fn tracked_steps_in_handlers_are_rejected_transitively() {
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Actor", tiles(2), 0, 0, 0);
+        gb.sprites
+            .add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        gb.sprites.enable_animation_events(sprite, 0);
+        let mut body = Block::new();
+        body.call("Anim_Actor_Once");
+        gb.define_function_from("Tick", body);
+        let mut handler = Block::new();
+        handler.call("Tick");
+        gb.on_vblank(handler);
+        assert!(
+            matches!(gb.build(),Err(super::super::Error::MainLoopOnly{routine,..}) if routine=="Anim_Actor_Once")
+        );
+    }
+    #[test]
+    fn an_initialization_completion_is_not_rearmed_by_the_first_dispatch() {
+        let mut sm = SpriteManager::new(LabelAllocator::new());
+        let sprite = sm.add_for_test("Actor", 0, 0, 0, 2);
+        sm.add_animation(sprite, "Once", 0, 1, AnimationType::Once);
+        sm.set_initial_animation(sprite, 0);
+        sm.enable_animation_events(sprite, 0);
+        let mut cpu = animation_cpu(&sm);
+        let code = animation_program(&sm, 1);
+        let mut init = Block::new();
+        init.call("Anim_Actor_Once").ret();
+        for (_, body) in sm.generate_animation_functions() {
+            init.emit_all(body);
+        }
+        cpu.run(&init.into_instrs());
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 1);
+        cpu.run(&code);
+        cpu.run(&sm.take_animation_event(sprite, 0));
+        assert_eq!(cpu.a, 0);
     }
 }

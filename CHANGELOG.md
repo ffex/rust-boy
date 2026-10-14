@@ -8,6 +8,18 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **AABB collision** (`engine::Aabb`, also exported by the prelude): half-open rectangle
+  overlap checks for byte screen coordinates whose right/bottom edges do not wrap.
+
+- **Register-based function arguments**: `RustBoy::call_args` and `Call::with_args`
+  emit setup immediately before each call, using the callee's register convention.
+
+- **Fixed-point movement** (`stdlib::movement::step_8_8`): integrate signed 8.8 velocity
+  and gravity with fractional accumulation and wrapping arithmetic.
+- **Control flow**: `While`, fixed-count `For` and `SwitchA` compose with existing conditions.
+  `For` saves BC around each body, supporting nesting; each active loop uses two stack bytes.
+- **Unsigned arithmetic routines** (`stdlib::math`): add/subtract/compare 16-bit values,
+  multiply two bytes, and divide a 16-bit value by a byte with explicit register and flag contracts.
 - **Tile collision checks** (`engine::TileCollision`): test screen pixels against a set of
   solid tile IDs using the active background map and current camera scroll.
 
@@ -16,7 +28,6 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 - **ROM bank selection** (`stdlib::banking`): low-level routines select MBC1 7-bit and MBC5
   9-bit ROM banks for explicitly banked `ROMX` sections.
-
 - **New module layout**: `rust_boy::asm` (instructions), `rust_boy::stdlib` (routines, control flow),
   `rust_boy::engine` (`RustBoy`), `rust_boy::hw` (hardware facts), and `rust_boy::prelude`.
   `rust_boy::rust_boy` is gone.
@@ -53,6 +64,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   (`RustBoy::on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `on_interrupt`, `on_interrupt_routine`); the `rSTAT`
   conditions and the timer as settings; `enable_interrupt` / `disable_interrupt`; an opt-in soft reset
   (A + B + Select + Start, `set_soft_reset`). The pieces are in `stdlib::interrupts` for `stdlib` programs.
+- **Scenes** (Phase 3): `SceneManager` builds a dispatcher for byte-sized scene IDs. Add its dispatcher through
+  `RustBoy::call_routine`, register scene update routines, and use `switch_to` to select the state for the next frame.
+  Scene routines and their dependencies are included automatically; unknown states and empty dispatchers
+  do nothing. `switch_to` requires registering the dispatcher so its state byte is declared.
 - **Audio initialization** (Phase 3): `RustBoyConfig::audio` / `RustBoy::set_audio` select inherited, off, or
   powered-on audio before user initialization, including soft resets. Inherit preserves old output.
   `stdlib::audio` supplies power and mixer snippets; `Mixer` validates stereo volume and keeps VIN disconnected.
@@ -120,8 +135,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
   `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded because
   WX=166 glitches on DMG. Raw coordinates are available for clipping/off-screen placement. Window
-  and background share tiles/BGP and require LCDC bit 0 on DMG. `show_window(true)` writes no
-  position: without a configured window, set one first. Existing output is unchanged.
+  and background share tiles/BGP; LCDC bit 0 gates both on DMG. `Window` is non-exhaustive, supports
+  `Window::from_raw`, and can start hidden with `visible_on_startup(false)`. The final LCDC value comes from config;
+  runtime window/LCDC snippets should run in VBlank.
+- **Window migration**: replace external `Window { tilemap, wx, wy }` literals with `Window::from_raw(tilemap, wx, wy)`
+  or `Window::new(tilemap, x, y)`; the type is now `#[non_exhaustive]` for future-compatible settings.
 - **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
   LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
   or `$9C00`; map-pixel coordinates and the calling convention are unchanged.
@@ -141,17 +159,25 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
   existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
-  runtime, preserving coordinates and tile indices. Default/example output is unchanged.
+  runtime, preserving coordinates and tile indices. `sprites.set_composite_flags(id, flags)`
+  updates every member. For two horizontal neighbours, X flip swaps creation-time tiles and clearing
+  it restores them; this resets animated tiles rather than mirroring their current frame. Other layouts
+  get flags only, and Y flip never reorders parts. Default/example output is unchanged.
 - **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
   per-part tiles/flags and OAM entries in creation order. Composite movement and animation
-  apply to the whole group. Existing 16x16 calls retain names and generated output.
-- **Per-animation timing** (Phase 3): `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's
+  apply to the whole group. Parts may start partly off-screen at X -8 or Y -16; OAM coordinate zero hides a part.
+  Engine `show_at` and `show_composite_at` also accept signed positions (X -8..=247, Y -16..=239
+  for every part), preserving tile/flags. These engine show methods now take `i16` instead of `u8`;
+  convert existing byte variables with `i16::from(value)`. Existing 16x16 calls retain names and generated output.
+- **Per-animation timing** (Phase 3): `sprites.set_animation_period(sprite, index, frames)` overrides one animation's
   period (1..=255). Sprites with overrides get their own clock; their other animations use the global period.
   Selection changes reset the clock, repeated enable calls keep it, disabled frames stop it. The composite setters
-  configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
+  configure every part; `clear_animation_period` removes an override. Each timed sprite uses two WRAM bytes; BC is
   preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
   global default.
+  The per-animation methods use `set_animation_period` and `set_composite_animation_period` to distinguish them from
+  the global setter.
 - **Animation completion** (Phase 3): `enable_animation_events` / `take_animation_event` give coalescing completion
   flags (Once reaches its last frame, Loop wraps, PingPong returns to its first frame); `set_animation_callback` binds
   a named function called after all sprite parts stepped, with BC/DE/HL preserved; the composite APIs give one
@@ -183,6 +209,9 @@ together: every breaking change of the refactoring is in this release, so a prog
   `wReleasedKeys` variable. `RustBoy::add_inputs` creates it automatically.
 - **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
   validation and the late-VBlank queue test.
+- **Pseudo-random bytes** (Phase 3): `stdlib::random::random_u8` returns the next byte of a
+  repeatable 8-bit LFSR sequence in A and stores its state in `wRandomSeed`; zero state falls back to `$A7`.
+  Custom nonzero seeds retain their initial value; runtime zero states recover on the next call.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
@@ -195,6 +224,11 @@ together: every breaking change of the refactoring is in this release, so a prog
     no longer cause false conflicts; definite duplicate checks resume after the iteration.
   - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
     macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
+
+- **Source comments** (Phase 3): opt-in `RustBoyConfig::source_comments(true)` /
+  `RustBoy::set_source_comments(true)` adds Rust file and line comments before non-empty init,
+  main-loop and interrupt snippets. Paths stay as rustc reports them and can be machine-dependent
+  or remapped; do not use these comments in committed snapshots. Default output is unchanged.
 
 ### Toolchain
 
@@ -219,7 +253,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `Aabb`, `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 

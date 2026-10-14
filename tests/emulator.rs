@@ -16,6 +16,7 @@ use rust_boy::stdlib::banking;
 use rust_boy::stdlib::flow::{For, IfConst, SwitchA, While};
 use rust_boy::stdlib::graphics::vram_queue;
 use rust_boy::stdlib::math;
+use rust_boy::stdlib::movement;
 use rust_boy::stdlib::sram;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
@@ -4512,4 +4513,40 @@ fn engine_soft_reset_returns_background_camera_to_origin() {
         (3, &[]),
     ]);
     assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (0, 0));
+}
+
+#[test]
+fn fixed_point_velocity_and_gravity_accumulate_on_the_gameboy() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    for name in ["wPositionHi", "wPositionLo", "wVelocityHi", "wVelocityLo"] {
+        game.vars.create_u8(name, 0);
+    }
+
+    let step = game.call_routine(&movement::step_8_8());
+    let mut code = Block::new();
+    code.ld_hl(0x0100)
+        .ld(R16::DE, 0x0080)
+        .ld(R16::BC, 0x0040)
+        .emit_all(step.clone())
+        .emit_all(step)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wPositionHi")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wPositionLo")
+        .ld(R8::A, R8::D)
+        .ld_addr_def_a("wVelocityHi")
+        .ld(R8::A, R8::E)
+        .ld_addr_def_a("wVelocityLo");
+    game.init(code);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wPositionHi"), 2);
+    assert_eq!(gb.read_symbol("wPositionLo"), 0x40);
+    assert_eq!(gb.read_symbol("wVelocityHi"), 1);
+    assert_eq!(gb.read_symbol("wVelocityLo"), 0);
 }

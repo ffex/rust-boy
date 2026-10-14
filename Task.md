@@ -363,7 +363,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
       reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
       `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
-- [ ] Fixed-point sub-pixel movement, velocity, gravity
+- [x] Fixed-point sub-pixel movement, velocity, gravity (`stdlib::movement::step_8_8`):
+      signed 8.8 position plus velocity, then velocity plus gravity, wrapping modulo 65536.
 - [x] WRAM arrays (branch `refactor-p3-wram-arrays`; HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`,
       `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.

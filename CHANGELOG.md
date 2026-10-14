@@ -8,9 +8,10 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Fixed-point movement** (`stdlib::movement::step_8_8`): integrate signed 8.8 velocity
+  and gravity with fractional accumulation and wrapping arithmetic.
 - **Control flow**: `While`, fixed-count `For` and `SwitchA` compose with existing conditions.
   `For` saves BC around each body, supporting nesting; each active loop uses two stack bytes.
-
 - **Unsigned arithmetic routines** (`stdlib::math`): add/subtract/compare 16-bit values,
   multiply two bytes, and divide a 16-bit value by a byte with explicit register and flag contracts.
 - **Tile collision checks** (`engine::TileCollision`): test screen pixels against a set of

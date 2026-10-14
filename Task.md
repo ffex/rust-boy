@@ -261,11 +261,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       - [x] Start-up resets SCX/SCY to zero on power-on and soft reset; user init can choose another position.
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
-- [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
-      `#[non_exhaustive]` like `Lcdc` (its public `wx`/`wy` fields allow raw start-up values today); whether `build()`
-      should reject or warn about a configured window with `Lcdc.background` off (invisible on DMG, documented today);
-      whether a configured window can start hidden (a `Window` flag), or LCDC writes in init survive the LCD-on write
-      (today `build()` replaces them; documented on `show_window`)
+- [x] Follow-ups of the window layer (from the review of #44):
+      - [x] Mark `Window` `#[non_exhaustive]` and add `Window::from_raw` for clipped/off-screen WX/WY values.
+      - [x] Keep a window allowed with `Lcdc.background(false)`; document that LCDC bit 0 disables it on DMG.
+      - [x] Add `Window::visible_on_startup(false)`; runtime `show_window(true)` still works.
+      - [x] Keep `RustBoyConfig` authoritative for the final LCDC value; runtime LCDC snippets belong in VBlank.
 - [x] `GetTileByPixel` for the `$9C00` map (branch `refactor-p3-tilemap-lookup`):
       reads LCDC bit 3 at runtime; follows both configured and runtime background-map selection.
 - [x] Tilemaps kept in ROM only, to copy at runtime (branch `refactor-p3-runtime-tilemaps`):
@@ -280,13 +280,15 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
-- [ ] Follow-up of the sprite attributes (from the review of #49): a composite-level `set_flags`, and an X flip of a
-      16x16 composite that also swaps its halves (today per member sprite; documented)
 - [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
       lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
-- [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
-      off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
+- [x] Follow-up of the metasprites (review of #50): metasprite parts may begin partly off-screen at the left/top;
+      creation and re-showing accept screen X -8..=247, Y -16..=239 for every part,
+      and encoded OAM coordinate 0 hides that part.
+- [x] Follow-up of the sprite attributes (from the review of #49): `SpriteManager::set_composite_flags` sets every
+      member's flags; two horizontal neighbours swap creation-time tile assignments on X flip
+      (clearing it restores them). Other layouts get flags only; Y flip never reorders parts.
 - [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
       static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
       with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
@@ -301,13 +303,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       tables (`BgAnim{name}Targets`, `…Frames`, `…Frame{i}`) passes `build()` and fails in rgbasm ("already defined"); the
       name-conflict check should cover these raw labels, as it does for functions
 
+
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
 - [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
       overrides, independent selection clocks, default/global fallback, composite setters)
-- [ ] Follow-up of the per-animation speed (from the review of the #50 chain, maintainer decision): the name
-      `SpriteManager::set_animation_delay(sprite, index, frames)` is the global `RustBoy::set_animation_delay(frames)`'s,
-      with another meaning; `set_animation_period` would tell them apart (an API rename)
+- [x] Follow-up of the per-animation speed (review of the #50 chain): distinguish per-animation
+      overrides from global `RustBoy::set_animation_delay` (renamed to `set_animation_period`
+      and the composite/clear counterparts).
 - [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
       coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
 - [ ] Follow-up of the animation events (from the review of the #50 chain, maintainer decision): re-enabling a finished
@@ -316,6 +319,7 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Follow-up of the animation events (from review 2 of the #50 chain): `build()` could reject restart snippets
       generated before the sprite's timing or events changed (today documented: configure first; a cleared period
       leaves an undefined `wAnim_{name}_Timer` for rgbasm)
+
 
 ### Audio
 - [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in
@@ -352,7 +356,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `Routine::changes`), `on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `enable_interrupt`, `disable_interrupt`;
       `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
-- [ ] Scenes / game states
+- [x] Scenes / game states (branch `refactor-p3-scenes`): `SceneManager` dispatches the selected byte-sized scene
+      Review regressions cover duplicate IDs, unknown IDs, an empty dispatcher and generated instructions.
+      routine from the main loop, registers scene routines as dependencies, and provides `switch_to` code for changing
+      state; an unknown ID is a no-op.
 - [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
       reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
       `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
@@ -362,13 +369,19 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
       Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
-- [ ] RNG
+- [x] RNG (`stdlib::random::random_u8`): deterministic 255-state LFSR, custom nonzero seeds
+      and recovery from runtime zero states; emulator regressions cover the complete cycle.
 - [ ] Sprite-vs-sprite collision (AABB)
 - [x] Generalised tile collision (`refactor-p3-tile-collision`):
       `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using
       the active map and current SCX/SCY; sample multiple points for larger objects.
-- [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
-- [ ] Control flow: `While`, `For`, `Switch`; functions with parameters
+- [x] 16-bit math helpers (branch `refactor-p3-math`): unsigned 16-bit add/subtract/compare,
+      8×8 multiply and 16÷8 divide with documented register/flag contracts. Regression tests
+      link all routines and cover borrow-free subtraction, greater-than comparison, asymmetric
+      multiplication and nine-bit shifted division remainders.
+- [x] Control flow: `While`, fixed-count `For`, `SwitchA` (`refactor-p3-control-flow`); nested loops
+      preserve their BC counters, with assembled label-nesting and hardware execution regressions.
+- [ ] Functions with parameters
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
       `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads
       `wCurKeys` after `UpdateKeys` at the end of each frame and jumps to `$0100`, so the whole start-up runs again;
@@ -439,6 +452,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Hardware notes: VBlank & OAM timing, 8×16 rules, coordinate offsets (+8 / +16)
 - [x] `CHANGELOG.md` (the release notes of the refactoring, branch `refactor-p2-engine-api-prelude`; keep it up to date)
 - [ ] Keep `AGENTS.md`, `CLAUDE.md` and `CONTEXT.md` up to date as phases land
+
+- [ ] Consolidate consecutive-entry batching shared by engine startup and `stdlib::graphics::sprites::draw_sprites`.
 
 ## Future
 

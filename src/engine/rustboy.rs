@@ -303,8 +303,8 @@ impl RustBoy {
 
     /// Set the background viewport's top-left world pixel, wrapping at 256.
     /// Returns code to put in `init` or `on_vblank`; main-loop writes can tear.
-    /// Changes A and flags. Sprites stay in screen coordinates. Start-up code does not write
-    /// SCX/SCY, so a soft reset keeps the scroll: set it in init to start from a known camera.
+    /// Changes A and flags. Sprites stay in screen coordinates. Start-up sets SCX/SCY to 0;
+    /// this code in `init` sets a custom camera position on power-on and soft reset.
     ///
     /// ```
     /// use rust_boy::prelude::*;
@@ -915,6 +915,9 @@ impl RustBoy {
         // Turn off screen for safe VRAM access
         startup.ld_a(hw::LCDCF_OFF.value);
         startup.ld_addr_def_a(hw::LCDC);
+
+        // Start from a known camera on power-on and soft reset; user init can choose another.
+        startup.emit_all(crate::stdlib::graphics::scroll::set_scroll(0, 0));
 
         // Copy the tile data to VRAM (empty blobs are skipped, B27)
         startup.emit_all(self.tiles.generate_memcopy_calls());
@@ -3881,6 +3884,7 @@ mod tests {
             Event::Ime(true) => "interrupts on",
             Event::Call(name) if name == "WaitVBlank" => "wait for VBlank",
             Event::Write(reg, 0) if reg == "rLCDC" => "LCD off",
+            Event::Write(reg, 0) if ["rSCX", "rSCY"].contains(&reg.as_str()) => "camera reset",
             Event::Call(name) if name == "Memcopy" => "copy to VRAM",
             Event::Call(name) if name == "InitOamDma" || name == oam::OAM_DMA => "OAM",
             Event::Write(addr, _) if addr.starts_with(oam::SHADOW_OAM) => "OAM",
@@ -3903,6 +3907,7 @@ mod tests {
                 "interrupts off",
                 "wait for VBlank",
                 "LCD off",
+                "camera reset",
                 "copy to VRAM",
                 "OAM",
                 "palettes",

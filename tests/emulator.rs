@@ -3962,3 +3962,198 @@ fn sprite_pool_rejects_free_invalid_and_unrepresentable_writes_without_mutation(
         assert_eq!(gb.read(gb.symbol("wPoolCheckedUsed") + 1), 0);
     }
 }
+
+#[test]
+fn get_tile_by_screen_pixel_adds_background_scroll_before_lookup() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let mut map = [[17; 32]; 32];
+    map[2][1] = 93;
+    game.tiles
+        .add_tilemap_at("CollisionMap", TilemapArea::Map9800, &map);
+    game.init(game.set_background_scroll(8, 16));
+    game.vars.create_u8("wUnscrolledTile", 0);
+    game.vars.create_u8("wScrolledTile", 0);
+    let mut probe = Block::new();
+    probe
+        .ld(R8::B, 3)
+        .ld(R8::C, 4)
+        .call("GetTileByPixel")
+        .ld_addr_def_a("wUnscrolledTile")
+        .ld(R8::B, 3)
+        .ld(R8::C, 4)
+        .call("GetTileByScreenPixel")
+        .ld_addr_def_a("wScrolledTile");
+    game.on_vblank(probe);
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wUnscrolledTile"), 17);
+    assert_eq!(gb.read_symbol("wScrolledTile"), 93);
+}
+
+#[test]
+fn tile_collision_checks_solid_ids_after_camera_scroll() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    for (solid_tiles, expected) in [(vec![5], 1), (vec![6], 0), (vec![5, 6], 1)] {
+        let mut game = RustBoy::new();
+        let x = game.vars.create_u8("wCollisionX", 0);
+        let y = game.vars.create_u8("wCollisionY", 0);
+        let hit = game.vars.create_u8("wCollisionHit", 0);
+        let mut init = Block::new();
+        init.emit_all(game.set_background_scroll(8, 0))
+            .ld_a(5)
+            .ld_addr_def_a(Expr::from(hw::SCRN0) + 1);
+        game.init(init);
+        game.add_to_main_loop(TileCollision::new(solid_tiles).at_screen_pixel(
+            x.get(),
+            y.get(),
+            hit.set(1),
+        ));
+
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(5);
+        assert_eq!(gb.read_symbol("wCollisionHit"), expected);
+    }
+}
+
+/// Build a program whose init writes `tile` at `target` and whose main loop checks a
+/// screen pixel with `TileCollision`; returns the hit flag, and the `a` and `hl` seen
+/// inside the body.
+fn run_tile_collision(
+    scroll: (u8, u8),
+    pixel: (u8, u8),
+    area: TilemapArea,
+    target: u16,
+    tile: u8,
+    solid_tiles: impl IntoIterator<Item = u8>,
+) -> (u8, u8, u16) {
+    let mut game = RustBoy::new();
+    game.set_background_tilemap(area);
+    let x = game.vars.create_u8("wCollisionX", pixel.0);
+    let y = game.vars.create_u8("wCollisionY", pixel.1);
+    let hit = game.vars.create_u8("wCollisionHit", 0);
+    game.vars.create_u8("wCollisionTile", 0);
+    game.vars.create_u8("wCollisionMapLow", 0);
+    game.vars.create_u8("wCollisionMapHigh", 0);
+    let mut init = Block::new();
+    init.emit_all(game.set_background_scroll(scroll.0, scroll.1))
+        .ld_a(tile)
+        .ld_addr_def_a(target);
+    game.init(init);
+    // Inside the body `a` is the tile ID and `hl` the map address: record both before
+    // `hit.set` clobbers `a`.
+    let mut body = Block::new();
+    body.ld_addr_def_a("wCollisionTile")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wCollisionMapLow")
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wCollisionMapHigh")
+        .emit_all(hit.set(1));
+    game.add_to_main_loop(TileCollision::new(solid_tiles).at_screen_pixel(x.get(), y.get(), body));
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    (
+        gb.read_symbol("wCollisionHit"),
+        gb.read_symbol("wCollisionTile"),
+        u16::from_le_bytes([
+            gb.read_symbol("wCollisionMapLow"),
+            gb.read_symbol("wCollisionMapHigh"),
+        ]),
+    )
+}
+
+#[test]
+fn tile_collision_wraps_scroll_and_reports_tile_and_map_address() {
+    if !rgbds_enabled() {
+        return;
+    }
+    // SCX=250 + x=10 wraps to map pixel 4: column 0 of row 0.
+    assert_eq!(
+        run_tile_collision((250, 0), (10, 0), TilemapArea::Map9800, 0x9800, 5, [5]),
+        (1, 5, 0x9800)
+    );
+    // Without the wrap the pixel would be at 260 (column 32); a solid tile in column 1 is
+    // not under it.
+    assert_eq!(
+        run_tile_collision((250, 0), (10, 0), TilemapArea::Map9800, 0x9801, 5, [5]).0,
+        0
+    );
+}
+
+#[test]
+fn tile_collision_adds_vertical_scroll_and_reads_the_9c00_map() {
+    if !rgbds_enabled() {
+        return;
+    }
+    // SCY=16 + y=8 is map row 3; SCX=8 + x=0 is column 1.
+    let target = 0x9800 + 3 * 32 + 1;
+    assert_eq!(
+        run_tile_collision((8, 16), (0, 8), TilemapArea::Map9800, target, 7, [7]),
+        (1, 7, target)
+    );
+    // Without SCY the same pixel is row 1, so the solid tile at row 3 is missed.
+    assert_eq!(
+        run_tile_collision((8, 0), (0, 8), TilemapArea::Map9800, target, 7, [7]).0,
+        0
+    );
+    // The second map: the tile is only in $9C00, and the lookup reads it there.
+    let target = 0x9C00 + 3 * 32 + 1;
+    assert_eq!(
+        run_tile_collision((8, 16), (0, 8), TilemapArea::Map9C00, target, 7, [7]),
+        (1, 7, target)
+    );
+}
+
+#[test]
+fn tile_collision_with_forty_solid_ids_assembles_and_hits_the_last() {
+    if !rgbds_enabled() {
+        return;
+    }
+    // Each ID adds 4 bytes before its conditional jump; 40 would overflow a `jr`.
+    assert_eq!(
+        run_tile_collision((0, 0), (0, 0), TilemapArea::Map9800, 0x9800, 40, 1..=40),
+        (1, 40, 0x9800)
+    );
+}
+
+#[test]
+fn engine_soft_reset_returns_background_camera_to_origin() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.set_soft_reset(true);
+    let done = game.labels().local("camera_set_once");
+    let mut set_once = Block::new();
+    set_once
+        .ld_a_addr_def("wCameraWritten")
+        .and(R8::A)
+        .jp_cond(Condition::NZ, &done)
+        .ld_a(1)
+        .ld_addr_def_a("wCameraWritten")
+        .ld_a(64)
+        .ldh(Mem::addr(hw::SCX), R8::A)
+        .ld_a(48)
+        .ldh(Mem::addr(hw::SCY), R8::A)
+        .label(&done);
+    game.add_to_main_loop(set_once);
+    game.raw(|asm| {
+        asm.chunk(Chunk::Data).label("wCameraWritten").ds("1");
+    });
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (64, 48));
+
+    gb.run_script(&[
+        (20, &[Button::A, Button::B, Button::Select, Button::Start]),
+        (3, &[]),
+    ]);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (0, 0));
+}

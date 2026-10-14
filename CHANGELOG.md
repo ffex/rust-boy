@@ -148,7 +148,10 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Typed sprite attributes** (Phase 3): `SpriteFlags` builders for X/Y flips,
   `ObjectPalette` and `SpritePriority`; sprite constructors accept typed flags alongside
   existing raw bytes. `sprites.set_flags(id, flags)` changes shadow-OAM attributes at
-  runtime, preserving coordinates and tile indices. Default/example output is unchanged.
+  runtime, preserving coordinates and tile indices. `sprites.set_composite_flags(id, flags)`
+  updates every member. For two horizontal neighbours, X flip swaps creation-time tiles and clearing
+  it restores them; this resets animated tiles rather than mirroring their current frame. Other layouts
+  get flags only, and Y flip never reorders parts. Default/example output is unchanged.
 - **Arbitrary metasprites** (Phase 3): `MetaspritePart` and `add_metasprite` create
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
   per-part tiles/flags and OAM entries in creation order. Composite movement and animation

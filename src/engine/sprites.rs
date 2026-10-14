@@ -1285,6 +1285,47 @@ impl SpriteManager {
         ((address - hw::OAMRAM.value) / u16::from(hw::OAM_ENTRY_SIZE.value)) as u8
     }
 
+    /// Set runtime flags for every hardware sprite in a composite. For two horizontal
+    /// neighbours (same Y and one sprite width apart), X flip exchanges their creation-time
+    /// tile assignments; clearing X flip restores those assignments. Other layouts, including
+    /// composites of three or more parts, receive flags only. Y flip never reorders parts.
+    ///
+    /// Changes A only. For horizontal pairs this resets tile bytes to creation-time values,
+    /// including on animated composites; animation updates can overwrite them again. This
+    /// method does not mirror the current animation frame.
+    ///
+    /// # Panics
+    /// If `id` is not a composite of this manager.
+    pub fn set_composite_flags(
+        &self,
+        id: CompositeSpriteId,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> Vec<Instr> {
+        let flags = flags.into();
+        let composite = self.composite(id);
+        let horizontal_pair = composite.sprites.len() == 2 && {
+            let left = self.sprite(composite.sprites[0]);
+            let right = self.sprite(composite.sprites[1]);
+            left.y == right.y && left.x.abs_diff(right.x) == hw::TILE_WIDTH
+        };
+        let mut code = Block::new();
+        for (index, sprite_id) in composite.sprites.iter().enumerate() {
+            let sprite = self.sprite(*sprite_id);
+            if horizontal_pair {
+                let tile = if flags.bits() & hw::OAMF_XFLIP.value != 0 {
+                    self.sprite(composite.sprites[1 - index]).tile_index
+                } else {
+                    sprite.tile_index
+                };
+                code.ld_a(tile)
+                    .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_TILEID));
+            }
+            code.ld_a(flags.bits())
+                .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_FLAGS));
+        }
+        code.into_instrs()
+    }
+
     /// Generate movement code for a specific sprite: add the value of the variable
     /// `var_name` to its X (changes `a`, `b` and the flags)
     ///
@@ -1758,6 +1799,80 @@ mod tests {
             1,
             "only the attribute byte is written"
         );
+    }
+
+    #[test]
+    fn composite_flags_swap_horizontal_tiles_and_restore_them() {
+        let mut game = RustBoy::new();
+        let parts = [
+            MetaspritePart::new(TileSource::from_raw(&[["$ff"; 8]]), 0, 0, 0),
+            MetaspritePart::new(TileSource::from_raw(&[["$00"; 8]]), 8, 0, 0),
+        ];
+        let id = game.add_metasprite("Pair", 40, 48, &parts);
+        let sm = &game.sprites;
+        let members = sm.get_composite_sprites(id).unwrap();
+        let tiles: Vec<_> = members.iter().map(|&id| sm.sprite(id).tile_index).collect();
+        assert_ne!(tiles[0], tiles[1]);
+        let mut cpu = TestCpu::default();
+        for flipped in [false, true, false] {
+            let flags = crate::stdlib::graphics::sprites::SpriteFlags::new().flip_x(flipped);
+            cpu.run(&sm.set_composite_flags(id, flags));
+            for index in 0..2 {
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_TILEID).to_string()],
+                    tiles[if flipped { 1 - index } else { index }],
+                );
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_FLAGS).to_string()],
+                    flags.bits(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn composite_flags_leave_other_layout_tiles_untouched() {
+        for offsets in [
+            vec![(0, 0), (0, 8)],
+            vec![(0, 0), (16, 0)],
+            vec![(0, 0), (8, 0), (16, 0)],
+        ] {
+            let mut game = RustBoy::new();
+            let parts: Vec<_> = offsets
+                .iter()
+                .map(|&(x, y)| MetaspritePart::new(TileSource::from_raw(&[["$ff"; 8]]), x, y, 0))
+                .collect();
+            let id = game.add_metasprite("Layout", 40, 48, &parts);
+            let mut cpu = TestCpu::default();
+            // Runtime tiles differ from creation-time ones: non-horizontal pairs
+            // and larger layouts must not reset them while changing flags.
+            for index in 0..parts.len() {
+                cpu.mem.insert(
+                    SHADOW.entry(index as u8, hw::OAMA_TILEID).to_string(),
+                    10 + index as u8,
+                );
+            }
+            let flags = crate::stdlib::graphics::sprites::SpriteFlags::new()
+                .flip_x(true)
+                .flip_y(true);
+            cpu.run(&game.sprites.set_composite_flags(id, flags));
+            for index in 0..parts.len() {
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_TILEID).to_string()],
+                    10 + index as u8
+                );
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index as u8, hw::OAMA_FLAGS).to_string()],
+                    flags.bits()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "composite")]
+    fn composite_flags_reject_unknown_id() {
+        SpriteManager::new(LabelAllocator::new()).set_composite_flags(CompositeSpriteId(0), 0);
     }
 
     type LimitMove = fn(&SpriteManager, SpriteId, u8, u8) -> Vec<Instr>;

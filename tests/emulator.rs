@@ -2436,6 +2436,28 @@ fn typed_sprite_flags_reach_oam_and_runtime_changes_preserve_position() {
 }
 
 #[test]
+fn composite_x_flip_swaps_halves_and_sets_flags_on_both() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.set_sprite_size(SpriteSize::Size8x16);
+    let left = TileSource::from_raw(&[["$ff"; 8], ["$00"; 8]]);
+    let right = TileSource::from_raw(&[["$00"; 8], ["$ff"; 8]]);
+    let id = game.add_sprite_16x16("Player", left, right, 40, 48, 0);
+    let flags = SpriteFlags::new()
+        .flip_x(true)
+        .palette(ObjectPalette::Palette1);
+    game.on_vblank(game.sprites.set_composite_flags(id, flags));
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(2);
+    assert_eq!(gb.oam_entry(0), [64, 48, 2, flags.bits()]);
+    assert_eq!(gb.oam_entry(1), [64, 56, 0, flags.bits()]);
+}
+
+#[test]
 fn random_u8_advances_a_nonzero_state_and_returns_it_in_a() {
     if !rgbds_enabled() {
         return;

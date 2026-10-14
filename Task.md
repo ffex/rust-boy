@@ -280,13 +280,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
-- [ ] Follow-up of the sprite attributes (from the review of #49): a composite-level `set_flags`, and an X flip of a
-      16x16 composite that also swaps its halves (today per member sprite; documented)
 - [x] Metasprites of any size (branch `refactor-p3-metasprites`): arbitrary `MetaspritePart`
       lists with signed offsets, per-part tiles/attributes and OAM order; 8x8 or 8x16 hardware parts.
       `add_sprite_16x16` reuses the generalized constructor while retaining old names/output.
 - [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
       off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
+- [x] Follow-up of the sprite attributes (from the review of #49): `SpriteManager::set_composite_flags` sets every
+      member's flags; two horizontal neighbours swap creation-time tile assignments on X flip
+      (clearing it restores them). Other layouts get flags only; Y flip never reorders parts.
 - [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
       static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
       with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
@@ -300,6 +301,7 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Follow-up of the background tile animation (from the review of #88): a variable named like an animation's ROM
       tables (`BgAnim{name}Targets`, `…Frames`, `…Frame{i}`) passes `build()` and fails in rgbasm ("already defined"); the
       name-conflict check should cover these raw labels, as it does for functions
+
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)

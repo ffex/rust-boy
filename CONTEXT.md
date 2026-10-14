@@ -283,7 +283,10 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   only their DMG bit (priority 7, Y flip 6, X flip 5, palette 4). `Sprite::set_flags` and `SpriteManager::set_flags`
   write the attribute byte at runtime (A only); the engine one writes the shadow OAM, which DMA copies at the next
   VBlank. Behind-background priority hides the sprite behind background/window colours 1-3, not 0. Flips act on each
-  hardware sprite: a flipped 16x16 composite mirrors each half in place. Tests: all 16 DMG combinations, raw-byte
+  hardware sprite. `SpriteManager::set_composite_flags` writes every member's flags and, for exactly two
+  horizontal neighbours, swaps creation-time tile assignments on X flip (clearing it restores them). This resets
+  animated tiles rather than mirroring the current frame. Other layouts get flags only; Y flip never reorders parts.
+  Tests: all 16 DMG combinations, raw-byte
   compatibility, independent bit clearing, the whole OAM entry on the emulator at start-up and after a runtime change.
 
 - **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,

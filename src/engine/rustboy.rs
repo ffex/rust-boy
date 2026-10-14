@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::asm::labels::defines;
+use crate::asm::labels::{DefinitionEvent, DefinitionScanner, defines};
 use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, is_identifier};
 use crate::hw;
 use crate::stdlib::flow::Emittable;
@@ -14,7 +14,7 @@ use crate::stdlib::interrupts::{self, Interrupt, Stat, Timer};
 use crate::stdlib::routine::{Regs, Routine};
 
 use super::config::{Palettes, RustBoyConfig, Window};
-use super::error::Error;
+use super::error::{Definition, Error};
 use super::functions::{BuiltinFunction, FunctionRegistry};
 use super::inputs::InputManager;
 use super::layout::{Chunk, Layout};
@@ -402,14 +402,18 @@ impl RustBoy {
     }
 
     /// Define a constant value
+    #[track_caller]
     pub fn define_const(&mut self, name: &str, value: impl std::fmt::Display) -> &mut Self {
+        super::sprites::check_label("constant", name);
         self.constants
             .push((name.to_string(), format!("{}", value)));
         self
     }
 
     /// Define a constant with a hex value
+    #[track_caller]
     pub fn define_const_hex(&mut self, name: &str, value: u16) -> &mut Self {
+        super::sprites::check_label("constant", name);
         self.constants
             .push((name.to_string(), format!("${:04X}", value)));
         self
@@ -613,7 +617,7 @@ impl RustBoy {
     /// # Ok::<(), rust_boy::engine::Error>(())
     /// ```
     pub fn external_symbol(&mut self, name: &str) -> &mut Self {
-        if !is_identifier(name) {
+        if !is_identifier(name) || crate::asm::expr::check_symbol(name).is_err() {
             panic!(
                 "invalid external symbol \"{}\": it must be a valid RGBDS identifier",
                 name
@@ -857,6 +861,12 @@ impl RustBoy {
     /// ([`Error::MemoryFull`]), code or data in a RAM section or a section name used twice
     /// ([`Error::Section`]).
     ///
+    /// Raw RGBDS conditionals and `REPT`/`FOR` iterations are not evaluated: their
+    /// definitions (including tails skipped by `BREAK`) are left to rgbasm. A
+    /// `PURGE` in either conservatively forgets a prior definition.
+    /// Macros and symbols defined only by included user files are also checked by
+    /// rgbasm. Definite duplicate definitions outside conditionals are rejected here.
+    ///
     /// # Example
     /// ```
     /// use rust_boy::engine::{Error, RustBoy};
@@ -1015,7 +1025,9 @@ impl RustBoy {
             lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
         }
         if let Some(window) = self.config.window {
-            lcdc = lcdc | hw::LCDCF_WINON;
+            if window.visible_on_startup {
+                lcdc = lcdc | hw::LCDCF_WINON;
+            }
             if window.tilemap == TilemapArea::Map9C00 {
                 lcdc = lcdc | hw::LCDCF_WIN9C00;
             }
@@ -1399,6 +1411,7 @@ impl RustBoy {
         asm.emit_all(vars.generate_sections());
         asm.emit_all(raw_data);
 
+        validate_unique_definitions(&asm, &vars, &functions.names, &generated)?;
         Ok(asm)
     }
 
@@ -1866,6 +1879,17 @@ impl RustBoy {
         y: u8,
         flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::SpriteId {
+        self.add_sprite_at(name, tile_source, i16::from(x), i16::from(y), flags)
+    }
+
+    fn add_sprite_at(
+        &mut self,
+        name: &str,
+        tile_source: super::tiles::TileSource,
+        x: i16,
+        y: i16,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> super::sprites::SpriteId {
         // The sprite name is checked before it names the tiles
         check_name("sprite", name);
         let count = tile_source.tile_count();
@@ -1886,8 +1910,9 @@ impl RustBoy {
     ///
     /// # Panics
     /// If parts are empty, names collide, tiles/OAM are full, a part has no tiles or
-    /// violates 8x16 alignment, or an offset position is outside supported screen coordinates
-    /// (X 0..=247, Y 0..=239). Invalid layout/capacity is checked before registration.
+    /// violates 8x16 alignment, or an offset position cannot fit in OAM after its hardware
+    /// coordinate offset (X + 8, Y + 16). This supports screen X -8..=247 and Y -16..=239;
+    /// OAM coordinate zero hides that part. Invalid layout/capacity is checked before registration.
     #[track_caller]
     pub fn add_metasprite(
         &mut self,
@@ -1935,17 +1960,17 @@ impl RustBoy {
                     <= usize::from((hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE),
                 "metasprite {name:?} tiles do not fit in VRAM"
             );
-            let mut position = [0u8; 2];
+            let mut position = [0i16; 2];
             for (slot, anchor, offset, hardware_offset) in [
                 (0, x, part.x, hw::OAM_X_OFFSET),
                 (1, y, part.y, hw::OAM_Y_OFFSET),
             ] {
                 let value = i32::from(anchor) + i32::from(offset);
                 assert!(
-                    (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
+                    (0..=i32::from(u8::MAX)).contains(&(value + i32::from(hardware_offset))),
                     "metasprite {name:?} part position is outside supported screen coordinates"
                 );
-                position[slot] = value as u8;
+                position[slot] = i16::try_from(value).expect("valid OAM positions fit i16");
             }
             positions.push((position[0], position[1]));
         }
@@ -1954,7 +1979,7 @@ impl RustBoy {
             .zip(names)
             .zip(positions)
             .map(|((part, label), (x, y))| {
-                self.add_sprite(label, part.tiles.clone(), x, y, part.flags)
+                self.add_sprite_at(label, part.tiles.clone(), x, y, part.flags)
             })
             .collect();
         self.sprites.create_composite(name, sprites)
@@ -2185,13 +2210,63 @@ fn check_routine(routine: &Routine) {
 
 /// Panics unless `name` can be a function's label
 fn check_function_name(name: &str) {
-    if !is_identifier(name) {
+    if !is_identifier(name) || crate::asm::expr::check_symbol(name).is_err() {
         panic!(
-            "invalid function name \"{}\": it must be a valid RGBDS identifier (a letter or \
-             `_`, then letters, digits, `_`, `#`, `$` or `@`)",
+            "invalid function name \"{}\": it must be a valid RGBDS symbol, not a register \
+             or keyword",
             name
         );
     }
+}
+
+/// Reject duplicate global definitions before rgbasm reports an opaque duplicate-label
+/// error. `REDEF` is left to RGBDS because it intentionally updates an existing constant.
+fn validate_unique_definitions(
+    layout: &Layout,
+    vars: &VariableManager,
+    functions: &[String],
+    generated: &[String],
+) -> Result<(), Error> {
+    let mut seen = crate::hw::SYMBOLS
+        .iter()
+        .map(|(name, _)| ((*name).to_string(), Definition::ExternalSymbol))
+        .collect::<BTreeMap<_, _>>();
+    let mut scanner = DefinitionScanner::default();
+    for chunk in Chunk::ORDER {
+        let Some(code) = layout.get_chunk(chunk) else {
+            continue;
+        };
+        for event in scanner.scan(code) {
+            let name = match event {
+                DefinitionEvent::Define(name) => name,
+                DefinitionEvent::Purge(name) => {
+                    seen.remove(&name);
+                    continue;
+                }
+            };
+            let current = if chunk == Chunk::Data {
+                vars.names()
+                    .find(|(variable, _)| *variable == name)
+                    .map(|(_, kind)| Definition::Variable(kind))
+                    .unwrap_or(Definition::CodeSymbol)
+            } else if chunk == Chunk::Functions && functions.iter().any(|item| item == &name) {
+                Definition::Function
+            } else if chunk == Chunk::Functions && generated.iter().any(|item| item == &name) {
+                Definition::GeneratedFunction
+            } else {
+                Definition::CodeSymbol
+            };
+            if let Some(first) = seen.get(&name) {
+                return Err(Error::NameConflict {
+                    name,
+                    first: *first,
+                    second: current,
+                });
+            }
+            seen.insert(name, current);
+        }
+    }
+    Ok(())
 }
 
 impl Default for RustBoy {
@@ -2292,6 +2367,187 @@ mod tests {
         let output = gb.build().unwrap();
         assert!(output.contains("DEF BRICK_LEFT EQU 0x05"));
         assert!(output.contains("DEF SCORE_ADDR EQU $9870"));
+    }
+
+    #[test]
+    fn test_raw_conditional_and_purged_definitions_are_left_to_rgbds() {
+        for raw in [
+            "IF 1\nChoice: db 1\nELSE\nChoice: db 2\nENDC",
+            "IF 0\nMain: db 1\nENDC",
+            "MACRO unused\nMain: db 1\nENDM",
+            "MACRO unused\nIF 1\nMain: db 1\nENDC\nENDM",
+            "    DEF TEMP EQU 1\n    PURGE TEMP\n    DEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nIF 1\nPURGE TEMP\nENDC\nDEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nDEF OTHER EQU 2\nPURGE TEMP, OTHER\nDEF TEMP EQU 3\nDEF OTHER EQU 4",
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(|asm| {
+                asm.raw(raw);
+            });
+            let output = gb.build().unwrap();
+            // The lightweight label checker does not evaluate IF/PURGE either;
+            // use RGBDS directly when link checks are enabled.
+            crate::asm::label_check::rgbds_rom(&output);
+        }
+
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("DEF TEMP EQU 1\nPURGE TEMP\nDEF TEMP EQU 2\nDEF TEMP EQU 3");
+        });
+        assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "TEMP"));
+    }
+
+    #[test]
+    fn test_raw_iterations_defer_definitions_but_keep_later_duplicate_checks() {
+        for raw in [
+            "REPT 0\nMain: db 1\nENDR",
+            "FOR idx, 0\nMain: db 1\nENDR",
+            "REPT 1\nBREAK\nMain: db 1\nENDR",
+            "FOR idx, 1\nBREAK\nMain: db 1\nENDR",
+            "REPT 1\nFOR idx, 0\nMain: db 1\nENDR\nENDR",
+            "DEF TEMP EQU 1\nREPT 1\nPURGE TEMP\nENDR\nDEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nFOR idx, 1\nPURGE TEMP\nENDR\nDEF TEMP EQU 2",
+            "MACRO unused\nREPT 0\nPURGE rLCDC\nENDR\nENDM",
+        ] {
+            let mut gb = RustBoy::new();
+            // Separate instructions exercise nesting across raw instruction boundaries.
+            gb.raw(|asm| {
+                for line in raw.lines() {
+                    asm.raw(line);
+                }
+            });
+            crate::asm::label_check::rgbds_rom(&gb.build().unwrap());
+            gb.raw(|asm| {
+                asm.raw("Definite: db 1\nDefinite: db 2");
+            });
+            assert!(
+                matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "Definite")
+            );
+        }
+    }
+
+    #[test]
+    fn test_macro_scan_state_spans_instructions_without_hiding_later_collisions() {
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("MACRO unused");
+            asm.raw("Main: db 1");
+            asm.raw("ENDM");
+        });
+        let out = gb.build().unwrap();
+        crate::asm::label_check::rgbds_rom(&out);
+        gb.raw(|asm| {
+            asm.raw("Definite: db 1\nDefinite: db 2");
+        });
+        assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "Definite"));
+    }
+
+    #[test]
+    fn test_symbol_collisions_are_reported_by_build() {
+        let mut gb = RustBoy::new();
+        gb.tiles.add_background("Coin", tiles(1));
+        gb.tiles.add_background("CoinEnd", tiles(1));
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "CoinEnd".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+
+        let mut gb = RustBoy::new();
+        gb.add_sprite("Main", tiles(1), 40, 40, 0);
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "Main".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+
+        let mut gb = RustBoy::new();
+        let player = gb.add_sprite("Player", tiles(1), 40, 40, 0);
+        gb.add_sprite_tiles(player, "Player", tiles(1));
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "Player".to_string(),
+                first: Definition::CodeSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid constant name \"ld\"")]
+    fn test_constant_names_reject_rgbds_keywords() {
+        RustBoy::new().define_const("ld", 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid external symbol \"LOW\"")]
+    fn test_external_symbol_names_reject_rgbds_keywords() {
+        RustBoy::new().external_symbol("LOW");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid constant name \"HIGH\"")]
+    fn test_hex_constant_names_reject_rgbds_keywords() {
+        RustBoy::new().define_const_hex("HIGH", 0x1234);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid tile name \"ld\"")]
+    fn test_plain_sprite_names_reject_rgbds_keywords() {
+        RustBoy::new().add_sprite("ld", tiles(1), 40, 40, 0);
+    }
+
+    #[test]
+    fn test_function_animation_and_composite_names_reject_keywords() {
+        let message = panic_message(|| {
+            RustBoy::new().define_function_from("ld", Vec::<Instr>::new());
+        });
+        assert!(
+            message.contains("invalid function name \"ld\""),
+            "{message}"
+        );
+
+        let mut gb = RustBoy::new();
+        let sprite = gb.add_sprite("Ball", tiles(1), 40, 40, 0);
+        let message = panic_message(|| {
+            gb.sprites
+                .add_animation(sprite, "ld", 0, 0, AnimationType::Loop);
+        });
+        assert!(
+            message.contains("invalid animation name \"ld\""),
+            "{message}"
+        );
+
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let message = panic_message(|| {
+            gb.add_sprite_16x16("ld", tiles(2), tiles(2), 40, 40, 0);
+        });
+        assert!(
+            message.contains("invalid composite sprite name \"ld\""),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_user_symbols_cannot_redefine_hardware_inc_names() {
+        let mut gb = RustBoy::new();
+        gb.define_const("rLCDC", 1);
+        assert_eq!(
+            gb.build(),
+            Err(Error::NameConflict {
+                name: "rLCDC".to_string(),
+                first: Definition::ExternalSymbol,
+                second: Definition::CodeSymbol,
+            })
+        );
     }
 
     #[test]
@@ -4470,7 +4726,7 @@ mod tests {
     fn test_window_from_the_config_at_start_up() {
         // The start-up code on the test CPU: WX/WY before user init, the window bits in the
         // LCD-on value. LCDC writes of init code are replaced by that value (documented on
-        // `show_window`): a configured window hidden in init shows anyway.
+        // `show_window`): a visible-by-default configured window hidden in init shows anyway.
         for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
             let mut gb =
                 RustBoy::with_config(RustBoyConfig::default().window(Window::new(map, 40, 112)));
@@ -4494,6 +4750,35 @@ mod tests {
             assert_mem(&cpu, "rWX", 47);
             assert_mem(&cpu, "rWY", 112);
             assert_mem(&cpu, "rLCDC", 0x83 | 0x20 | map_bit);
+        }
+    }
+
+    #[test]
+    fn test_window_hidden_at_start_up_keeps_map_bit_and_position() {
+        for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
+            let mut gb = RustBoy::with_config(
+                RustBoyConfig::default()
+                    .window(Window::new(map, 40, 112).visible_on_startup(false)),
+            );
+            let (code, mut cpu) = startup(&mut gb);
+            cpu.stubs.insert("Memcopy".to_string());
+            cpu.consts.retain(|text, _| !text.contains('|'));
+            for flag in [
+                hw::LCDCF_ON,
+                hw::LCDCF_BGON,
+                hw::LCDCF_OBJON,
+                hw::LCDCF_OBJ8,
+                hw::LCDCF_WINON,
+                hw::LCDCF_WIN9C00,
+            ] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.run(&code);
+            assert_mem(&cpu, "rWX", 47);
+            assert_mem(&cpu, "rWY", 112);
+            let lcdc = cpu.mem["rLCDC"];
+            assert_eq!(lcdc & 0x20, 0, "LCDCF_WINON must stay clear");
+            assert_eq!(lcdc, 0x83 | map_bit);
         }
     }
 

@@ -547,6 +547,90 @@ pub(crate) fn defines(code: &[super::Instr], name: &str) -> bool {
     defs.contains(name)
 }
 
+/// A change to the set of definitely defined global symbols.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DefinitionEvent {
+    Define(String),
+    Purge(String),
+}
+
+/// RGBDS conditionals and iterations are left to the assembler. Their definitions
+/// are not definite: a loop may execute zero times or BREAK before a definition.
+/// A PURGE inside either may remove an earlier definition. Keep nesting across
+/// chunks, since raw assembly can open a block in one chunk and close it in another.
+#[derive(Default)]
+pub(crate) struct DefinitionScanner {
+    conditional_depth: usize,
+    iteration_depth: usize,
+    macro_depth: usize,
+}
+
+impl DefinitionScanner {
+    pub(crate) fn scan(&mut self, code: &[super::Instr]) -> Vec<DefinitionEvent> {
+        let text = code
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut result = Vec::new();
+        for line in code_lines(&text) {
+            let (label, rest) = split_label(&line);
+            let rest = rest.trim_start();
+            let mut words = rest.split_whitespace();
+            let keyword = words.next().unwrap_or("");
+            if keyword.eq_ignore_ascii_case("MACRO") {
+                self.macro_depth += 1;
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("ENDM") {
+                self.macro_depth = self.macro_depth.saturating_sub(1);
+                continue;
+            }
+            // Macro bodies define symbols only on expansion. In particular, neither
+            // conditional directives nor PURGE inside an unused body take effect.
+            if self.macro_depth != 0 {
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("REPT") || keyword.eq_ignore_ascii_case("FOR") {
+                self.iteration_depth += 1;
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("ENDR") {
+                self.iteration_depth = self.iteration_depth.saturating_sub(1);
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("IF") {
+                self.conditional_depth += 1;
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("ENDC") {
+                self.conditional_depth = self.conditional_depth.saturating_sub(1);
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("PURGE") {
+                for name in rest[keyword.len()..].split(',').map(str::trim) {
+                    if is_identifier(name) {
+                        result.push(DefinitionEvent::Purge(name.to_string()));
+                    }
+                }
+                continue;
+            }
+            if self.conditional_depth != 0 || self.iteration_depth != 0 {
+                continue;
+            }
+            if let Some(label) = label {
+                result.push(DefinitionEvent::Define(label.to_string()));
+            }
+            if let Some((name, _)) = split_def(rest) {
+                if !keyword.eq_ignore_ascii_case("REDEF") {
+                    result.push(DefinitionEvent::Define(name.to_string()));
+                }
+            }
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +717,76 @@ mod tests {
     #[should_panic(expected = "label stem \"end\" given twice")]
     fn test_the_stems_of_one_number_are_distinct() {
         LabelAllocator::new().locals(["end", "end"]);
+    }
+
+    #[test]
+    fn test_definitions_include_global_labels_and_defs_but_skip_redef() {
+        let code = [
+            super::super::Instr::Raw {
+                line: "First: db 0\nDEF COUNT EQU 1\nREDEF COUNT += 1".to_string(),
+            },
+            super::super::Instr::Label {
+                name: ".local".to_string(),
+            },
+            super::super::Instr::Def {
+                label: "Typed".to_string(),
+                value: "2".to_string(),
+            },
+        ];
+        assert_eq!(
+            DefinitionScanner::default().scan(&code),
+            ["First", "COUNT", "Typed"].map(|name| DefinitionEvent::Define(name.to_string()))
+        );
+    }
+
+    #[test]
+    fn test_definition_scanner_keeps_conditional_state_across_calls() {
+        use super::super::Instr;
+        let raw = |line: &str| Instr::Raw {
+            line: line.to_string(),
+        };
+        let mut scanner = DefinitionScanner::default();
+        assert!(
+            scanner
+                .scan(&[
+                    raw("IF 1\nIF 0"),
+                    Instr::Label {
+                        name: "Hidden".into()
+                    }
+                ])
+                .is_empty()
+        );
+        assert_eq!(
+            scanner.scan(&[
+                raw("ELSE\nPURGE Old\nENDC\nENDC"),
+                Instr::Label {
+                    name: "Visible".into()
+                }
+            ]),
+            [
+                DefinitionEvent::Purge("Old".into()),
+                DefinitionEvent::Define("Visible".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_iteration_scan_state_spans_chunks_and_keeps_possible_purges() {
+        use super::super::Instr;
+        let raw = |line: &str| Instr::Raw { line: line.into() };
+        let mut scanner = DefinitionScanner::default();
+        assert_eq!(
+            scanner.scan(&[raw("DEF Old EQU 1\nREPT 0\nFOR idx, 1")]),
+            [DefinitionEvent::Define("Old".into())]
+        );
+        assert_eq!(
+            scanner.scan(&[raw("BREAK\nHidden: db 1\nPURGE Old\nENDR")]),
+            [DefinitionEvent::Purge("Old".into())]
+        );
+        assert_eq!(
+            scanner.scan(&[raw("StillHidden: db 1\nENDR\nVisible: db 1")]),
+            [DefinitionEvent::Define("Visible".into())]
+        );
     }
 
     #[test]

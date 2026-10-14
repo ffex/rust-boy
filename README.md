@@ -69,6 +69,11 @@ fn main() -> Result<(), Error> {
 }
 ```
 
+`on_press` keeps its original meaning: the action runs every frame the button is held. For edge-triggered actions,
+use `on_just_pressed` or `on_release`; several bindings can target the same button. `on_repeat(button, delay, interval,
+action)` runs once on press, then repeats after `delay` held frames and every `interval` frames. Both repeat counts must
+be between 1 and 255.
+
 ## Routines
 
 A routine is a value, `stdlib::routine::Routine`: its name, its code, the routines it depends on, the WRAM variables
@@ -743,6 +748,7 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
 | `unbricked_rustboy` | `engine` | The same game with `RustBoy` |
 | `fosdem` | `engine` | A 16×16 walking character with four animations (FOSDEM demo) |
 | `coin-anim` | `engine` | An animated coin: A starts the animation, B stops it |
+| `music` | `engine` | A two-note song played by the pinned, offline hUGEDriver |
 
 ## What is supported
 
@@ -836,3 +842,110 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Audio startup
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+// Stereo volume 0..=7; route channel 1 to the left output only.
+gb.init(rust_boy::stdlib::audio::set_mixer(Mixer::new(4, 4, hw::AUDTERM_1_LEFT.value)));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`AudioConfig::Off` powers off at startup. `On` resets existing channels, powers on
+with the selected mixer, and leaves channels silent until triggered. `Inherit` is
+the default and leaves boot audio state unchanged. Configuration runs before user
+init on cold startup and soft reset. Runtime `power_off`, `power_on` and `set_mixer`
+snippets preserve IME and change AF only. Wave RAM is retained. Volume zero is quiet,
+not mute; use zero routing or power off to mute. `hw::NR10` through `NR52`,
+`AUD3WAVERAM`, and `AUD*` flags name the hardware.inc symbols.
+
+### One-shot sound effects
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+let beep = Sfx::Pulse2(PulseEffect::new(
+    1750, 32, Duty::Half, Envelope::new(12, EnvelopeDirection::Decrease, 2),
+));
+gb.init(gb.play_sfx(&beep));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`Sfx::Pulse1` adds a `Sweep`; `Pulse2` has none. `Sfx::Wave` takes a `WaveEffect`
+with a `WavePattern` (32 samples 0..=15, or 16 packed bytes) and `WaveLevel`.
+`Sfx::Noise` takes a `NoiseEffect` with a seven- or fifteen-bit LFSR, shift 0..=13
+and divider 0..=7 (zero means 0.5). Pulse/wave period is the hardware 11-bit value,
+not Hz: pulse frequency is `131072 / (2048 - period)`, wave frequency is half that.
+Constructors panic for out-of-range fields. Sweep addition overflow can silence CH1;
+zero-volume decreasing envelopes disable the DAC. Wave hardware first plays sample 1.
+
+Every effect replaces its channel and enables a hardware length timer: pulse/noise
+length 1..=64, wave length 1..=256 ticks at 256 Hz, with tick phase affecting duration.
+Envelopes use 64 Hz ticks (pace zero disables them); sweep uses 128 Hz ticks.
+`play_sfx` changes AF only and returns carry clear when programmed, carry set with no
+writes if the APU is off. It preserves power, mixer, other channels and IME.
+`stdlib::audio::stop_channel(Channel::Pulse2)` disables just that channel's DAC.
+The standalone `stdlib::audio::play_sfx(labels, &effect)` uses the supplied label allocator.
+Serialize audio writes with music/interrupt code; reserve a channel before replacing it.
+CH3 stops before uploading wave RAM. DAC toggles may pop, and this API does not
+reset pulse phase or provide a software effect sequence. See
+[Pan Docs registers](https://gbdev.io/pandocs/Audio_Registers.html) and
+[APU details](https://gbdev.io/pandocs/Audio_details.html) for hardware behavior.
+
+### Tracker music (hUGEDriver 6.1.1)
+
+```rust
+use rust_boy::prelude::*;
+let song = Song::from_rgbds(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/music/song.asm")), "DemoSong");
+let mut gb = RustBoy::new();
+gb.enable_music(song, MusicClock::MainFrame);
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Export from hUGETracker 1.0.1 as RGBDS assembly and use its descriptor name.
+`Song::from_rgbds_file(path, descriptor)` reads the file at generation time;
+`from_rgbds` accepts its text. Data must be self-contained except the standard
+`hUGE.inc` include, which is expanded. Internal globals and section names are
+prefixed per descriptor, so `add_music_song` accepts additional exports with the
+same pattern/instrument names. Descriptors stay public and must be unique. ROM0
+and ROMX placement is retained: keep a ROMX song's bank mapped for its whole tick.
+Other export formats/driver versions and automatic bank switching are not supported.
+
+`enable_music` runs once, starts the first song before user init, and changes an
+inherited audio policy to `AudioConfig::On(Mixer::default())`. Explicit audio
+policies stay in effect. Soft reset initializes the driver/song again. The pinned
+public-domain driver lives in `vendor/hugedriver`; generated output embeds its
+code/data and needs only the normal hardware.inc include. It reserves 100 WRAM0
+bytes at the top of available RAM, plus two control bytes, without moving user
+variables. Read the pinned version/license/transform details in its README.
+
+`MusicClock::MainFrame` ticks after `WaitFrame` and before game logic. Long game
+frames slow playback. `MusicClock::VBlank` ticks after DMA/VRAM queue flush, saving
+all registers; complex songs can extend the handler beyond VBlank, so account for
+that before adding timing-sensitive user VBlank code. An off APU skips ticks and
+keeps song position. The engine is the single tick owner; do not tick the driver
+again. Song callbacks must return promptly and must not reenter music controls.
+
+Emit `start_music("OtherDescriptor")` to restart/switch and take all four channels;
+old channels are silenced and mute reservations reset. `pause_music` freezes song
+position and cuts music-owned channels. `resume_music` continues a pause (cut notes
+return at the next note row), returning carry set if stopped. `stop_music` requires
+`start_music` before a later resume. Controls preserve IME; start/reserve/release
+may change all registers, pause/stop/resume change AF. User interrupt handlers
+cannot call them, directly or through a registered function; `build` reports
+`MainLoopOnly`. Initialization publishes its paused flag before touching driver
+state, so the generated VBlank tick skips incomplete initialization.
+
+With music enabled, `play_sfx` returns carry set without writes unless the channel
+is reserved. Emit `reserve_music_channel(Channel::Wave)` before its effect and
+`release_music_channel` afterward. Reserved channels survive pause/stop; release
+returns ownership at the next music note and invalidates CH3's wave cache so the
+song wave is reloaded. Serialize game audio writers and avoid driver-wide mixer
+changes in song effects when sharing channels. Playback is tested as linked SM83
+execution, song state and register/wave RAM writes; the test emulator does not
+synthesize audio. Build/run the demo with `scripts/run.sh --run music`.

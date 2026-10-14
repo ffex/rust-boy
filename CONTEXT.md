@@ -198,7 +198,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   calls, jumps to or reads, given as values, so a routine brings what it needs: `Routine::with_deps` lists it and every
   dependency, each once, dependencies first (a name is one routine: two different routines with one name panic), and
   `code_with_deps` is their code, the routine first. Its **variables** are the WRAM bytes it needs (`UpdateKeys`:
-  `wCurKeys`, `wNewKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
+  `wCurKeys`, `wNewKeys`, `wReleasedKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
   the flags `f`, printed `a, bc, f`): the registers it **reads**, **returns** and **clobbers**; every other register is
   **preserved**. A routine whose convention is not given may change every register (`Regs::ALL`). Every `gb_std`
   routine is a `Routine` (`memcopy()`, `wait_vblank()`, `wait_not_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
@@ -209,7 +209,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   |---|---|---|---|---|
   | `Memcopy` | `bc` (length), `de` (source), `hl` (destination) | `bc` = 0, `de`, `hl` after the bytes | `a`, `f` | |
   | `WaitVBlank`, `WaitNotVBlank` | | | `a`, `f` | |
-  | `UpdateKeys` | | | `a`, `b`, `f` | `wCurKeys`, `wNewKeys` |
+  | `UpdateKeys` | | | `a`, `b`, `c`, `f` | `wCurKeys`, `wNewKeys`, `wReleasedKeys` |
   | `GetTileByPixel` | `b` (X), `c` (Y) | `a` (tile), `hl` (its address) | `bc`, `f` | |
   | `Delay` | `bc` (count) | | `a`, `bc` (`$FFFF`), `f` | |
   | `is_specific_tile` | `a` (tile) | `f` (Z: one of the tiles) | none | |
@@ -505,7 +505,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
    `use_function` / `keep_function` (`InitOamDma` with sprites, its DMA routine after it, at `OamDmaCode`); then the
    `Anim_*` functions; then the interrupt handlers (`VBlankHandler`, which starts with the OAM DMA with sprites, and
    one for each other interrupt with code, since `refactor-p3-interrupts`). The variables an emitted routine needs (`wCurKeys`,
-   `wNewKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
+   `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
    variable initialisation (step 3) and the Data chunk include them.
 7. **Tiles / Tilemap**: `Label:` + `dw`/`INCBIN` + `LabelEnd:`; **Data**: `SECTION "Variables", WRAM0` + `name: db/dw`
    (since `refactor-p2-engine-api-memory`: `SECTION "HRAM Variables", HRAM[$FF80]` first when the program has HRAM
@@ -834,7 +834,7 @@ use `enable_animation(coin, idx)` / `disable_animation(coin)`.
 **Status: fixed** on `refactor-p0-fix-build` (A starts the animation, B stops it).
 
 #### B3
-**Duplicate labels `wCurKeys` / `wNewKeys` in `unbricked_rustboy`.** The example creates them
+**Duplicate input-state labels in `unbricked_rustboy`.** The example creates `wCurKeys` / `wNewKeys`
 (`src/bin/unbricked_rustboy/main.rs:50-51`) and `RustBoy::add_inputs` creates them again
 (`src/engine/rustboy.rs:487-488`); `VariableManager::create_var` (`src/engine/variables.rs:146`) never
 rejects duplicates, so `wCurKeys: db` is emitted twice → rgbasm "already defined". The same would happen
@@ -1373,7 +1373,7 @@ where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
 **`RustBoy::external_symbol(name)`** (`src/engine/rustboy.rs:361`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
-(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
+(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
 and the Data chunk are emitted (`:743-763`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
@@ -1401,7 +1401,7 @@ calls even when nothing names it (a jump table in an `INCLUDE`d file). The scan 
 `symbols` moved to `gb_asm::labels` and reads typed operands by type. The variables of every emitted routine are
 created (`Routine::variables`; they were the builtins' only). Every behaviour above is unchanged and its tests pass
 (`keep_function`, `external_symbol`, `use_function`, a user function replacing a builtin, second entry points, the
-name conflicts, `wCurKeys`/`wNewKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
+name conflicts, `wCurKeys`/`wNewKeys`/`wReleasedKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
 (each routine once, in a fixed order, linked), `test_a_dependency_nothing_names_is_emitted`,
 `test_a_routine_and_a_function_of_one_name`, `test_define_routine_replaces_a_builtin_with_its_variables`, and in
 `functions.rs` `test_a_routine_brings_its_dependencies`, `test_a_dependency_is_shared_not_replaced`,
@@ -1505,7 +1505,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
-- **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
+- **Audio:** opt-in power/mixer initialization and typed one-shot effects exist; pinned hUGEDriver music integration exists.
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
   background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
@@ -1513,6 +1513,10 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
+- **Input:** (p3-input) held/just-pressed/released/repeat bindings. Multiple input managers share
+  one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
+  Initial presses and repeats share one emitted action body, so local labels in bounded movement and
+  other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
@@ -1550,3 +1554,72 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 APU initialization (`refactor-p3-apu`)
+
+`stdlib::audio` owns the stateless power/mixer snippets. `AudioConfig::Inherit` is the
+compatibility default and emits no audio instructions; `Off` writes NR52 off; `On`
+first powers off to reset channel state, then powers on and writes NR50/NR51. The
+configuration runs before user init on both cold startup and soft reset. `Mixer`
+validates 0..=7 left/right volume, disconnects VIN, and accepts NR51 routing flags;
+zero volume is not mute. Wave RAM is not cleared and no channel is triggered. All
+audio registers, wave RAM and existing hardware.inc flags are exported through hw.
+The emulator currently stores audio IO but does not synthesize or clock APU channels;
+tests verify register writes/startup ordering and assembly, with NR52 reset semantics
+checked against Pan Docs. Sound effects and driver integration remain separate tasks.
+
+### Phase 3 sound effects (`refactor-p3-sfx`, depends on APU initialization)
+
+`stdlib::audio::sfx` supplies validated `PulseEffect`, `Sweep`, `WaveEffect`,
+`WavePattern` and `NoiseEffect` values selected by `Sfx`. `play_sfx` tests NR52
+before writing (carry set on rejection), stops only the selected DAC, enables its
+length timer before loading a maximum-length setup value, then programs and triggers
+it and loads the requested duration last. This avoids extra-clock/trigger reload
+and a regular length clock during setup changing a one-tick effect into a 63/255-tick
+effect. CH3 is stopped throughout wave RAM upload and triggered
+only after re-enabling its DAC, avoiding DMG active-wave access/corruption. The
+hardware advances length/envelope/sweep; no software sequencer or state is allocated.
+NR50/NR51/NR52 and other channels are untouched; snippets clobber AF and preserve IME.
+The caller serializes audio writers, including interrupt handlers. DAC toggles can
+pop; sample zero is skipped on first wave playback, and channel phase is not reset.
+Unit tests execute the snippets and compare writes, model the extra-length clock,
+check bounds, unique local labels in an If, and register preservation. Linked-ROM
+checks verify channel register values and wave uploads, but the test emulator has
+no APU synthesis, so audible output is not verified. Music arbitration is the driver
+integration task. No existing example output changes.
+
+### Phase 3 tracker music (`refactor-p3-music`, depends on sound effects)
+
+Pinned public-domain hUGEDriver 6.1.1 (`13a26513498637baee9997bd3cad9476224db723`)
+files are vendored unchanged with upstream license/readme and checksums. The stdlib
+embeds/expands includes, modernizes legacy EQU declarations for RGBDS >=0.9,
+namespaces driver globals/macros, disables preview/GBDK branches, and turns the
+100-byte WRAM declarations into constants pointing into the engine buffer. The
+engine allocator reserves that buffer (and two zero-initialized control bytes),
+checks exhaustion/conflicts, and emits its numeric base before the driver. User
+variable addresses stay stable; generated assembly is deterministic and offline.
+`Song` imports self-contained hUGETracker 1.0.1 exports, retaining the public
+descriptor but prefixing internal labels/constants and section names. Multiple
+songs share the one driver and are emitted in insertion order. ROMX songs must
+remain mapped; banking is the later platform task.
+
+`enable_music` starts the first song before user init on cold/soft startup and
+turns inherited audio into On(default mixer), preserving explicit On/Off. Ticks
+run once per completed main frame by default, or in VBlank after DMA/queue flush
+with all registers saved. Long main frames slow music; complex VBlank ticks can
+spill beyond VBlank. Off APU skips ticks. Start pauses the consumer, silences all
+channels, initializes pointers/state, then publishes ready/playing. Pause freezes
+position and cuts only unreserved channels; stop also disarms resume; resume after
+pause continues with notes retriggered at the next note row. Reserved SFX channels
+survive pause/stop. CH3 release invalidates the wave cache before unmuting. Engine
+SFX rejects unreserved channels. User handlers reaching music controls/driver tick
+are rejected transitively; only the engine owns the consumer. Song callbacks must
+not reenter controls, and game audio writers must be serialized.
+
+Tests assemble/run multiple namespaced songs on the SM83, check note progression,
+clock modes, pause/stop/switch, APU gating, channel ownership/wave restoration,
+register preservation and injected VBlank during initialization. Exhaustion and
+symbol-conflict tests cover reserved state. The ROM test symbol parser now skips
+exported EQU constants rather than treating them as addresses (with a fixture test).
+The emulator still has no APU synthesis; audible output is not verified. The new
+music example/snapshot exercises offline generation; older snapshots are unchanged.

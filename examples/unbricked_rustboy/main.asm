@@ -66,9 +66,11 @@
     ld a, HIGH(wShadowOAM)
     call hOAMDMA
     ld a, 228
-    ld [rBGP], a
-    ld [rOBP0], a
-    ld [rOBP1], a
+    ldh [rBGP], a
+    ld a, 228
+    ldh [rOBP0], a
+    ld a, 228
+    ldh [rOBP1], a
     ld a, 0
     ld [wFrameCounter], a
     ld a, 1

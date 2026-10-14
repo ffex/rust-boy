@@ -12,7 +12,9 @@ use std::collections::BTreeSet;
 
 use rust_boy::asm::R16Stack;
 use rust_boy::prelude::*;
+use rust_boy::stdlib::banking;
 use rust_boy::stdlib::graphics::vram_queue;
+use rust_boy::stdlib::sram;
 use support::gameboy::{Button, GameBoy, Mode};
 use support::rom::{Rom, rgbds_enabled};
 
@@ -921,6 +923,68 @@ fn engine_rom(gb: &RustBoy) -> Rom {
     Rom::build(&gb.build().expect("the program builds"), &[])
 }
 
+#[test]
+fn sram_control_routines_assemble_and_return() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wSramBankHigh", 0);
+    game.vars.create_u8("wSramBankLow", 0);
+    let enable = game.call_routine(&sram::enable());
+    let select = game.call_routine(&sram::select_mbc5_bank());
+    let disable = game.call_routine(&sram::disable());
+    let mut init = Block::new();
+    init.emit_all(enable)
+        .ld_hl(0xABCD)
+        .emit_all(select)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wSramBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wSramBankLow")
+        .emit_all(disable);
+    game.init(init);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wSramBankHigh"), 0xAB);
+    assert_eq!(gb.read_symbol("wSramBankLow"), 0xCD);
+}
+
+#[test]
+fn mbc_bank_selectors_assemble_and_return_to_the_caller() {
+    if !rgbds_enabled() {
+        return;
+    }
+
+    let mut game = RustBoy::new();
+    for name in ["wBankHigh", "wBankLow"] {
+        game.vars.create_u8(name, 0);
+    }
+    let mbc1 = game.call_routine(&banking::set_mbc1_rom_bank());
+    let mbc5 = game.call_routine(&banking::set_mbc5_rom_bank());
+    let mut init = Block::new();
+    init.ld_hl(0x0041)
+        .emit_all(mbc1)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wBankLow")
+        .ld_hl(0x01FF)
+        .emit_all(mbc5)
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a("wBankHigh")
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a("wBankLow");
+    game.init(init);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wBankHigh"), 1);
+    assert_eq!(gb.read_symbol("wBankLow"), 0xFF);
+}
+
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a
 /// `halt`
 fn halted_share(gb: &mut GameBoy, frames: u64, samples: u64) -> f64 {
@@ -1736,7 +1800,7 @@ fn engine_vram_queue_late_flush_leaves_entries_for_the_next_vblank() {
         .emit_all(game.queue_vram_write(hw::SCRN0, 42))
         .label("WaitLastVblankLine")
         .ld_a_addr_def(hw::LY)
-        .cp(153)
+        .cp(hw::LY_LAST_LINE)
         .jr_cond(Condition::NZ, "WaitLastVblankLine")
         .call("FlushVramQueue")
         .label("QueueDeferred")
@@ -1821,38 +1885,332 @@ fn engine_background_scroll_init_survives_and_zero_delta_is_idle() {
 }
 
 #[test]
-fn engine_soft_reset_returns_background_camera_to_origin() {
+fn arbitrary_metasprites_keep_irregular_layout_at_every_edge() {
     if !rgbds_enabled() {
         return;
     }
-    let mut game = RustBoy::new();
-    game.set_soft_reset(true);
-    let done = game.labels().local("camera_set_once");
-    let mut set_once = Block::new();
-    set_once
-        .ld_a_addr_def("wCameraWritten")
-        .and(R8::A)
-        .jp_cond(Condition::NZ, &done)
-        .ld_a(1)
-        .ld_addr_def_a("wCameraWritten")
-        .ld_a(64)
-        .ldh(Mem::addr(hw::SCX), R8::A)
-        .ld_a(48)
-        .ldh(Mem::addr(hw::SCY), R8::A)
-        .label(&done);
-    game.add_to_main_loop(set_once);
-    game.raw(|asm| {
-        asm.chunk(Chunk::Data).label("wCameraWritten").ds("1");
-    });
+    type Move = fn(&rust_boy::engine::SpriteManager, CompositeSpriteId, u8, u8) -> Vec<Instr>;
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        for (movement, axis, increasing) in [
+            (
+                rust_boy::engine::SpriteManager::move_composite_left_limit as Move,
+                1usize,
+                false,
+            ),
+            (
+                rust_boy::engine::SpriteManager::move_composite_right_limit as Move,
+                1,
+                true,
+            ),
+            (
+                rust_boy::engine::SpriteManager::move_composite_up_limit as Move,
+                0,
+                false,
+            ),
+            (
+                rust_boy::engine::SpriteManager::move_composite_down_limit as Move,
+                0,
+                true,
+            ),
+        ] {
+            let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(size));
+            // Irregular, 32 pixels wide, with neither leading X/Y part first.
+            let offsets = [(8, 8), (-8, 0), (16, -8), (0, -8), (-8, 8), (16, 8)];
+            let count = usize::from(size.tiles_per_sprite());
+            let parts: Vec<_> = offsets
+                .iter()
+                .enumerate()
+                .map(|(index, &(x, y))| {
+                    MetaspritePart::new(
+                        TileSource::from_raw(&vec![["$ff"; 8]; count]),
+                        x,
+                        y,
+                        (index as u8) << 4,
+                    )
+                })
+                .collect();
+            let meta = game.add_metasprite("LargeActor", 80, 72, &parts);
+            assert_eq!(
+                game.sprites.get_composite_sprites(meta).unwrap().len(),
+                offsets.len()
+            );
+            let limit = if increasing { 160 } else { 32 };
+            game.add_to_main_loop(movement(&game.sprites, meta, 19, limit));
+            let mut gb = engine_rom(&game).boot();
+            assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+            let initial: Vec<_> = (0..parts.len()).map(|index| gb.oam_entry(index)).collect();
+            let lead = if increasing {
+                initial.iter().map(|entry| entry[axis]).max().unwrap()
+            } else {
+                initial.iter().map(|entry| entry[axis]).min().unwrap()
+            };
+            gb.run_frames(12);
+            for (index, before) in initial.iter().enumerate() {
+                let entry = gb.oam_entry(index);
+                assert_eq!(
+                    i16::from(entry[axis]),
+                    i16::from(limit) + i16::from(before[axis]) - i16::from(lead)
+                );
+                assert_eq!(entry[1 - axis], before[1 - axis]);
+                assert_eq!(&entry[2..], &before[2..]);
+            }
+        }
+    }
+}
+
+#[test]
+fn typed_flags_reach_every_part_of_a_16x16_sprite_and_a_metasprite() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let flags = SpriteFlags::new()
+        .flip_y(true)
+        .palette(ObjectPalette::Palette1)
+        .priority(SpritePriority::BehindBackground);
+    let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    let tiles = || TileSource::from_raw(&[["$ff"; 8]; 2]);
+    game.add_sprite_16x16("Hero", tiles(), tiles(), 40, 40, flags);
+    let parts = [
+        MetaspritePart::new(tiles(), 0, 0, flags.flip_x(true)),
+        MetaspritePart::new(tiles(), 8, 0, 0x10u8),
+    ];
+    game.add_metasprite("Actor", 80, 72, &parts);
     let mut gb = engine_rom(&game).boot();
     gb.run_frames(3);
-    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (64, 48));
+    for (entry, expected) in [
+        (0, flags.bits()),
+        (1, flags.bits()),
+        (2, flags.flip_x(true).bits()),
+        (3, 0x10),
+    ] {
+        assert_eq!(gb.oam_entry(entry)[3], expected, "OAM entry {entry}");
+    }
+}
 
-    gb.run_script(&[
-        (20, &[Button::A, Button::B, Button::Select, Button::Start]),
-        (3, &[]),
-    ]);
-    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (0, 0));
+#[test]
+fn arbitrary_metasprite_animation_advances_every_part_in_both_sizes() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(
+            RustBoyConfig::default()
+                .sprite_size(size)
+                .animation_delay(1),
+        );
+        let stride = size.tiles_per_sprite();
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(stride) * 2]);
+        let parts: Vec<_> = (0..3)
+            .map(|i| MetaspritePart::new(tiles.clone(), i * 8, i * 8, 0u8))
+            .collect();
+        let meta = game.add_metasprite("AnimatedActor", 40, 40, &parts);
+        game.sprites
+            .add_composite_animation(meta, "Walk", 0, 1, AnimationType::Loop);
+        game.sprites.set_composite_initial_animation(meta, 0);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..8 {
+            gb.run_frames(1);
+            let first = gb.oam_entry(0)[2];
+            assert!(first == 0 || first == stride);
+            seen.insert(first);
+            for index in 0..3 {
+                let entry = gb.oam_entry(index);
+                assert_eq!(entry[2], (index as u8) * stride * 2 + first);
+                assert_eq!(entry[0], 40 + (index as u8) * 8 + hw::OAM_Y_OFFSET);
+                assert_eq!(entry[1], 40 + (index as u8) * 8 + hw::OAM_X_OFFSET);
+            }
+        }
+        assert_eq!(seen.len(), 2);
+    }
+}
+
+#[test]
+fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(
+            RustBoyConfig::default()
+                .sprite_size(size)
+                .animation_delay(3),
+        );
+        let stride = size.tiles_per_sprite();
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(stride) * 2]);
+        let shared = game.add_sprite("Shared", tiles.clone(), 8, 8, 0);
+        let fast = game.add_sprite("Fast", tiles.clone(), 24, 8, 0);
+        for sprite in [shared, fast] {
+            game.sprites
+                .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
+            game.sprites.set_initial_animation(sprite, 0);
+        }
+        game.sprites.set_animation_delay(fast, 0, 1);
+        let parts: Vec<_> = (0..3)
+            .map(|i| MetaspritePart::new(tiles.clone(), i * 8, 0, 0u8))
+            .collect();
+        let meta = game.add_metasprite("Group", 48, 48, &parts);
+        game.sprites
+            .add_composite_animation(meta, "Walk", 0, 1, AnimationType::Loop);
+        game.sprites.set_composite_initial_animation(meta, 0);
+        game.sprites.set_composite_animation_delay(meta, 0, 2);
+        // Repeated enable is normal for held-key bindings; it must not stall a clock.
+        game.add_to_main_loop(game.sprites.enable_composite_animation(meta, 0));
+        let rom = engine_rom(&game);
+        let mut gb = rom.boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        // First DMA copies the initial shadow state; following DMA copies previous logic.
+        for visible in 0..16u16 {
+            gb.run_frames(1);
+            assert_eq!(gb.oam_entry(0)[2], stride * ((visible / 3) % 2) as u8);
+            assert_eq!(
+                gb.oam_entry(1)[2],
+                stride * 2 + stride * (visible % 2) as u8
+            );
+            for part in 0..3 {
+                assert_eq!(
+                    gb.oam_entry(part + 2)[2],
+                    stride * (4 + part as u8 * 2) + stride * ((visible / 2) % 2) as u8
+                );
+            }
+        }
+        assert_eq!(gb.blocked_accesses().1, 0);
+        assert!(
+            gb.oam_dmas()
+                .iter()
+                .filter(|dma| dma.lcd_on)
+                .all(|dma| dma.first.1 == Mode::VBlank
+                    && dma.last.is_some_and(|(_, mode)| mode == Mode::VBlank))
+        );
+    }
+}
+
+#[test]
+fn animation_callbacks_run_once_after_all_metasprite_parts_and_can_chain() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(
+            RustBoyConfig::default()
+                .sprite_size(size)
+                .animation_delay(1),
+        );
+        let stride = size.tiles_per_sprite();
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(stride) * 2]);
+        let parts: Vec<_> = (0..3)
+            .map(|i| MetaspritePart::new(tiles.clone(), i * 8, 0, 0u8))
+            .collect();
+        let meta = game.add_metasprite("Actor", 40, 40, &parts);
+        let once = game
+            .sprites
+            .add_composite_animation(meta, "Once", 0, 1, AnimationType::Once);
+        let idle = game
+            .sprites
+            .add_composite_animation(meta, "Idle", 0, 1, AnimationType::Loop);
+        game.sprites.set_composite_initial_animation(meta, once);
+        game.sprites.set_composite_animation_delay(meta, once, 2);
+        game.sprites
+            .set_composite_animation_callback(meta, once, "AnimationDone");
+        let calls = game.vars.create_u8("wCalls", 0);
+        let coherent = game.vars.create_u8("wCoherent", 0);
+        let events = game.vars.create_u8("wEvents", 0);
+        let regs: Vec<_> = ["wB", "wC", "wD", "wE", "wH", "wL"]
+            .iter()
+            .map(|name| game.vars.create_u8(name, 0))
+            .collect();
+        let mut callback = Block::new();
+        callback
+            .ld_a_addr_def(calls.name())
+            .inc(R8::A)
+            .ld_addr_def_a(calls.name());
+        for part in 0..3u8 {
+            callback
+                .ld_a_addr_def(
+                    Expr::sym("wShadowOAM")
+                        + i32::from(part * hw::OAM_ENTRY_SIZE.value + hw::OAMA_TILEID.value),
+                )
+                .cp(stride * (part * 2 + 1))
+                .jr_cond(Condition::NZ, ".bad");
+        }
+        callback
+            .ld_a(1)
+            .ld_addr_def_a(coherent.name())
+            .label(".bad")
+            .ld(R16::BC, 0xdead)
+            .ld(R16::DE, 0xbeef)
+            .ld(R16::HL, 0x1234)
+            .emit_all(game.sprites.restart_composite_animation(meta, idle));
+        game.define_function_from("AnimationDone", callback);
+        let mut init = Block::new();
+        init.ld(R16::BC, 0x1122)
+            .ld(R16::DE, 0x3344)
+            .ld(R16::HL, 0x5566);
+        game.init(init);
+        let mut logic = Block::new();
+        for (register, var) in [R8::B, R8::C, R8::D, R8::E, R8::H, R8::L].iter().zip(&regs) {
+            logic.ld(R8::A, *register).ld_addr_def_a(var.name());
+        }
+        logic
+            .push(R16Stack::BC)
+            .emit_all(game.sprites.take_composite_animation_event(meta, once))
+            .ld(R8::B, R8::A)
+            .ld_a_addr_def(events.name())
+            .add(R8::B)
+            .ld_addr_def_a(events.name())
+            .pop(R16Stack::BC);
+        game.add_to_main_loop(logic);
+        let rom = engine_rom(&game);
+        let mut gb = rom.boot();
+        gb.run_frames(20);
+        assert_eq!(gb.read_symbol(calls.name()), 1);
+        assert_eq!(gb.read_symbol(coherent.name()), 1);
+        assert_eq!(gb.read_symbol(events.name()), 1);
+        for (var, value) in regs.iter().zip([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]) {
+            assert_eq!(gb.read_symbol(var.name()), value);
+        }
+        let relative = gb.oam_entry(0)[2];
+        for part in 0..3 {
+            assert_eq!(gb.oam_entry(part)[2], stride * 2 * part as u8 + relative);
+        }
+        assert_eq!(gb.blocked_accesses(), (0, 0, 0));
+        assert_eq!(gb.dma_conflicts(), 0);
+    }
+}
+
+#[test]
+fn a_once_callback_can_restart_itself_without_duplicate_terminal_notifications() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(RustBoyConfig::default().animation_delay(1));
+    let sprite = game.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 3]), 8, 8, 0);
+    let once = game
+        .sprites
+        .add_animation(sprite, "Once", 0, 2, AnimationType::Once);
+    game.sprites.set_animation_delay(sprite, once, 3);
+    game.sprites.set_initial_animation(sprite, once);
+    game.sprites
+        .set_animation_callback(sprite, once, "RestartOnce");
+    let calls = game.vars.create_u8("wCalls", 0);
+    let mut callback = Block::new();
+    callback
+        .ld_a_addr_def(calls.name())
+        .inc(R8::A)
+        .ld_addr_def_a(calls.name())
+        .cp(2)
+        .jr_cond(Condition::NC, ".end")
+        .emit_all(game.sprites.restart_animation(sprite, once))
+        .label(".end");
+    game.define_function_from("RestartOnce", callback);
+    let rom = engine_rom(&game);
+    let mut gb = rom.boot();
+    gb.run_frames(40);
+    assert_eq!(gb.read_symbol(calls.name()), 2);
+    assert_eq!(gb.oam_entry(0)[2], 2);
+    gb.run_frames(10);
+    assert_eq!(gb.read_symbol(calls.name()), 2);
 }
 
 #[test]
@@ -2214,6 +2572,781 @@ fn get_tile_by_pixel_follows_active_background_map() {
         }
     }
 }
+#[test]
+fn png_and_binary_tile_sources_load_exact_bytes_into_vram() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    let source = TileSource::from_png(
+        support::examples::root().join("tests/fixtures/png/adam7-rgb.png"),
+        &PngOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(source.tile_count(), 1);
+    let background = game.tiles.add_background("PngBackground", source);
+    let binary =
+        TileSource::from_2bpp(support::examples::root().join("examples/coin-anim/coin.2bpp"))
+            .unwrap();
+    assert_eq!(binary.tile_count(), 7);
+    let binary_id = game.tiles.add_background("BinaryBackground", binary);
+    let player = game.add_sprite(
+        "PngSprite",
+        TileSource::from_png(
+            support::examples::root().join("examples/fosdem/char-dx.png"),
+            &PngOptions::new([[255; 3], [207; 3], [104; 3], [0, 0, 1]])
+                .tile_order(TileOrder::Sprite8x16),
+        )
+        .unwrap(),
+        80,
+        72,
+        0,
+    );
+    let base = game.tiles.get_address(background).unwrap();
+    let binary_base = game.tiles.get_address(binary_id).unwrap();
+    let asm = game.build().unwrap();
+    assert_eq!(asm, game.build().unwrap());
+    assert!(!asm.contains("INCBIN"));
+    let rom = Rom::build(&asm, &[]);
+    let mut gb = rom.boot();
+    gb.run_frames(15);
+    let expected = [
+        0x55, 0x33, 0xaa, 0x66, 0x55, 0xcc, 0xaa, 0x99, 0x55, 0x33, 0xaa, 0x66, 0x55, 0xcc, 0xaa,
+        0x99,
+    ];
+    for (i, byte) in expected.into_iter().enumerate() {
+        assert_eq!(gb.read(base + i as u16), byte);
+    }
+    for (i, &byte) in include_bytes!("../examples/coin-anim/coin.2bpp")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(gb.read(binary_base + i as u16), byte);
+    }
+    for (i, &byte) in include_bytes!("../examples/fosdem/char-dx.2bpp")
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(gb.read(hw::VRAM_OBJ_TILES + i as u16), byte);
+    }
+    assert_eq!(gb.oam_entry(0), [88, 88, 0, 0]);
+    let _ = player;
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
+
+#[test]
+fn background_tile_animation_sequences_pause_and_restart() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for area in [TilemapArea::Map9800, TilemapArea::Map9C00] {
+        for (kind, expected) in [
+            (AnimationType::Loop, vec![0, 0, 1, 1, 2, 2, 0, 0, 1]),
+            (AnimationType::PingPong, vec![0, 0, 1, 1, 2, 2, 1, 1, 0]),
+            (AnimationType::Once, vec![0, 0, 1, 1, 2, 2, 2, 2, 2]),
+        ] {
+            let mut game = RustBoy::new();
+            game.tiles
+                .add_background("Patterns", TileSource::from_raw(&[["$00"; 8]; 3]));
+            let animator = game.create_background_animation(
+                "Water",
+                BackgroundAnimationConfig::new(
+                    area,
+                    &[(0, 0), (31, 31)],
+                    &[vec![0, 2], vec![1, 1], vec![2, 0]],
+                )
+                .delay(2)
+                .playback(kind),
+            );
+            let request = game.vars.create_u8("wRequest", 0);
+            let finished = game.vars.create_u8("wFinished", 0);
+            let mut drive = Block::new();
+            drive
+                .label("DriveAnimation")
+                .ld_a_addr_def(request.name())
+                .and(R8::A)
+                .ret_cond(Condition::Z)
+                .ld(R8::B, R8::A)
+                .xor(R8::A)
+                .ld_addr_def_a(request.name())
+                .ld(R8::A, R8::B)
+                .cp(1)
+                .jr_cond(Condition::NZ, ".pause")
+                .emit_all(animator.step())
+                .jr(".end")
+                .label(".pause")
+                .cp(2)
+                .jr_cond(Condition::NZ, ".resume")
+                .emit_all(animator.pause())
+                .jr(".end")
+                .label(".resume")
+                .cp(3)
+                .jr_cond(Condition::NZ, ".restart")
+                .emit_all(animator.resume())
+                .jr(".end")
+                .label(".restart")
+                .emit_all(animator.restart())
+                .label(".end")
+                .emit_all(animator.finished())
+                .ld_addr_def_a(finished.name())
+                .ret();
+            game.define_function("DriveAnimation", drive.into_instrs());
+            let call = game.call("DriveAnimation");
+            game.add_to_main_loop(call);
+            let rom = Rom::build(&game.build().unwrap(), &[]);
+            let mut gb = rom.boot();
+            gb.run_frames(3);
+            let address = gb.symbol(request.name());
+            for (i, &frame) in expected.iter().enumerate() {
+                gb.write_ram(address, 1);
+                gb.run_frames(2);
+                assert_eq!(gb.read(area.address()), frame, "step {i}");
+                assert_eq!(gb.read(area.address() + 1023), 2 - frame);
+            }
+            let last = *expected.last().unwrap();
+            gb.write_ram(address, 2);
+            gb.run_frames(2);
+            for _ in 0..5 {
+                gb.write_ram(address, 1);
+                gb.run_frames(2);
+                assert_eq!(gb.read(area.address()), last);
+            }
+            gb.write_ram(address, 3);
+            gb.run_frames(2);
+            gb.write_ram(address, 4);
+            gb.run_frames(2);
+            assert_eq!(gb.read_symbol("wFinished"), 0);
+            gb.write_ram(address, 1);
+            gb.run_frames(2);
+            assert_eq!(gb.read(area.address()), 0);
+            assert_eq!(gb.blocked_accesses().0, 0);
+        }
+    }
+}
+
+#[test]
+fn background_animation_resumes_a_large_frame_before_advancing() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let cells: Vec<_> = (0..300u16)
+        .map(|i| ((i % 32) as u8, (i / 32) as u8))
+        .collect();
+    let animator = game.create_background_animation(
+        "Large",
+        BackgroundAnimationConfig::new(TilemapArea::Map9C00, &cells, &[vec![7; 300], vec![9; 300]])
+            .playback(AnimationType::Once),
+    );
+    game.add_to_main_loop(animator.step());
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let mut gb = rom.boot();
+    gb.run_frames(15);
+    assert_eq!(gb.read_symbol("wBgAnimLargeFrame"), 0);
+    let cursor = u16::from(gb.read_symbol("wBgAnimLargeCursor"))
+        | u16::from(gb.read(gb.symbol("wBgAnimLargeCursor") + 1)) << 8;
+    assert!(cursor > 12 && cursor < 300);
+    gb.run_frames(50);
+    assert_eq!(gb.read_symbol("wBgAnimLargeFinished"), 1);
+    for offset in 0..300 {
+        assert_eq!(gb.read(hw::SCRN1.value + offset), 9);
+    }
+    gb.run_frames(5);
+    assert_eq!(gb.read_symbol("wBgAnimLargeFrame"), 1);
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
+
+#[test]
+fn background_animation_handles_single_and_256_frame_ranges() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let once = game.create_background_animation(
+        "All",
+        BackgroundAnimationConfig::new(
+            TilemapArea::Map9800,
+            &[(0, 0)],
+            &(0..=255).map(|i| vec![i]).collect::<Vec<_>>(),
+        )
+        .playback(AnimationType::Once),
+    );
+    let single = game.create_background_animation(
+        "Single",
+        BackgroundAnimationConfig::new(TilemapArea::Map9800, &[(1, 0)], &[vec![42]])
+            .delay(255)
+            .playback(AnimationType::PingPong),
+    );
+    game.add_to_main_loop(once.step())
+        .add_to_main_loop(single.step());
+    let rom = Rom::build(&game.build().unwrap(), &[]);
+    let mut gb = rom.boot();
+    gb.run_frames(270);
+    assert_eq!(gb.read(hw::SCRN0.value), 255);
+    assert_eq!(gb.read_symbol("wBgAnimAllFinished"), 1);
+    assert_eq!(gb.read_symbol("wBgAnimAllFrame"), 255);
+    assert_eq!(gb.read(hw::SCRN0.value + 1), 42);
+    assert_eq!(gb.read_symbol("wBgAnimSingleFrame"), 0);
+    assert_eq!(gb.read_symbol("wBgAnimSingleFinished"), 0);
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
+
+#[test]
+fn wram_arrays_initialize_and_check_runtime_indices_across_pages() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for element in [
+        ArrayElement::U8,
+        ArrayElement::I8,
+        ArrayElement::U16,
+        ArrayElement::I16,
+    ] {
+        let word = matches!(element, ArrayElement::U16 | ArrayElement::I16);
+        let mut game = RustBoy::new();
+        let initial = match element {
+            ArrayElement::U8 => 126,
+            ArrayElement::I8 => -5,
+            ArrayElement::U16 => 0x1234,
+            ArrayElement::I16 => -300,
+        };
+        let before = game.vars.create_u8("wArrayBefore", 0x5a);
+        let array = game.vars.create_array("wArray", element, 300, initial);
+        let after = game.vars.create_u8("wArrayAfter", 0xa5);
+        let mut code = Block::new();
+        // 512: high byte above 300's, low byte below it (only the high-byte compare rejects it)
+        for (case, index) in [0u16, 1, 255, 256, 299, 300, 512, 65535]
+            .into_iter()
+            .enumerate()
+        {
+            let result = game.vars.create_u16(&format!("wArrayResult{case}"), 0);
+            let status = game.vars.create_u8(&format!("wArrayStatus{case}"), 0);
+            let valid = index < 300;
+            let end = game.labels().local("array_test_end");
+            code.ld(R16::BC, index)
+                .ld(R16::DE, 0xbeefu16)
+                .emit_all(array.set_indexed(game.labels()))
+                .ld_a(0)
+                .adc(0)
+                .ld_addr_def_a(status.name())
+                .emit_all(array.get_indexed(game.labels()))
+                .jr_cond(Condition::C, &end);
+            if word {
+                code.ld(R8::A, R8::L)
+                    .ld_addr_def_a(result.name())
+                    .ld(R8::A, R8::H)
+                    .ld(Mem::addr(Expr::sym(result.name()) + 1), R8::A);
+            } else {
+                code.ld_addr_def_a(result.name());
+            }
+            code.label(&end);
+            assert_eq!(valid, case < 5);
+        }
+        // Also exercise statically addressed signed/unsigned values.
+        code.emit_all(array.set(42, initial))
+            .emit_all(array.get(42));
+        game.init(code);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 20));
+        let base = gb.symbol("wArray");
+        assert_eq!(gb.read_symbol(before.name()), 0x5a);
+        assert_eq!(gb.read_symbol(after.name()), 0xa5);
+        let stride = if word { 2 } else { 1 };
+        assert_eq!(base, game.vars.get_address(array.id()).unwrap());
+        for index in 0..300u16 {
+            let touched = [0, 1, 255, 256, 299].contains(&index);
+            let value = if touched { 0xbeef } else { initial as u16 };
+            assert_eq!(gb.read(base + index * stride), value as u8);
+            if word {
+                assert_eq!(gb.read(base + index * stride + 1), (value >> 8) as u8);
+            }
+        }
+        for case in 0..7 {
+            assert_eq!(
+                gb.read_symbol(&format!("wArrayStatus{case}")),
+                u8::from(case >= 5)
+            );
+            let result = gb.symbol(&format!("wArrayResult{case}"));
+            let expected = if case >= 5 {
+                0
+            } else if word {
+                0xbeef
+            } else {
+                0xef
+            };
+            assert_eq!(
+                u16::from_le_bytes([gb.read(result), gb.read(result + 1)]),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn a_nearly_full_wram_array_uses_compact_startup_code() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.vars
+        .create_array("wWholeWram", ArrayElement::U8, 4095, 0x5a);
+    let output = game.build().unwrap();
+    let init = output
+        .split("EntryPoint:")
+        .nth(1)
+        .unwrap()
+        .split("Main:")
+        .next()
+        .unwrap();
+    assert!(
+        init.lines().count() < 100,
+        "array initialization should be a loop"
+    );
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 20));
+    for offset in 0..4095 {
+        assert_eq!(gb.read(hw::RAM.value + offset), 0x5a);
+    }
+}
+
+#[test]
+fn fonts_after_other_tiles_print_their_own_glyph_tiles() {
+    // Three other background tiles first, then a letter font ('A'..='C', tiles 3..=5) and a
+    // digit font (tiles 6..=15): the printed map bytes are the fonts' tiles, not 0-based
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.tiles
+        .add_background("Other", TileSource::from_raw(&[["$00"; 8]; 3]));
+    let letters = game.load_font("Letters", TileSource::from_raw(&[["$00"; 8]; 3]), b'A');
+    let digits = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+    let area = TilemapArea::Map9800;
+    let text = game.create_text_printer("Word", letters, area, 2, 0, "CAB");
+    let score = game.create_number_printer("Score", digits, area, 0, 1, NumberFormat::DecimalU16);
+    let mut init = Block::new();
+    init.ld(R16::DE, 12034)
+        .emit_all(score.set_value(game.labels()));
+    game.init(init);
+    game.add_to_main_loop(text.step())
+        .add_to_main_loop(score.step());
+    let mut gb = Rom::build(&game.build().unwrap(), &[]).boot();
+    gb.run_frames(10);
+    for (i, tile) in [5u8, 3, 4].into_iter().enumerate() {
+        assert_eq!(gb.read(area.address() + 2 + i as u16), tile, "letter {i}");
+    }
+    for (i, digit) in [1u8, 2, 0, 3, 4].into_iter().enumerate() {
+        assert_eq!(
+            gb.read(area.address() + 32 + i as u16),
+            6 + digit,
+            "digit {i}"
+        );
+    }
+}
+
+#[test]
+fn text_printer_resumes_long_strings_and_formats_scores() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for area in [TilemapArea::Map9800, TilemapArea::Map9C00] {
+        let mut game = RustBoy::new();
+        let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+        let text = game.create_text_printer(
+            "Long",
+            font,
+            area,
+            0,
+            1,
+            "0123456789012345678901234567890123456789\n9",
+        );
+        let decimal =
+            game.create_number_printer("Decimal", font, area, 0, 4, NumberFormat::DecimalU16);
+        let bcd = game.create_number_printer("Bcd", font, area, 0, 5, NumberFormat::PackedBcd);
+        let mut init = Block::new();
+        init.ld(R16::DE, 65535)
+            .emit_all(decimal.set_value(game.labels()))
+            .ld(R16::DE, 0x1234)
+            .emit_all(bcd.set_value(game.labels()));
+        game.init(init);
+        game.add_to_main_loop(text.step())
+            .add_to_main_loop(decimal.step())
+            .add_to_main_loop(bcd.step());
+        let rom = Rom::build(&game.build().unwrap(), &[]);
+        let mut gb = rom.boot();
+        gb.run_frames(30);
+        for i in 0..40u16 {
+            assert_eq!(gb.read(area.address() + 32 + i), (i % 10) as u8);
+        }
+        assert_eq!(gb.read(area.address() + 96), 9);
+        for (i, digit) in [6, 5, 5, 3, 5].into_iter().enumerate() {
+            assert_eq!(gb.read(area.address() + 128 + i as u16), digit);
+        }
+        for (i, digit) in [1, 2, 3, 4].into_iter().enumerate() {
+            assert_eq!(gb.read(area.address() + 160 + i as u16), digit);
+        }
+        assert_eq!(gb.read_symbol("wTextLongCursor"), 41);
+        assert_eq!(gb.blocked_accesses().0, 0);
+    }
+}
+
+#[test]
+fn a_text_job_of_more_than_256_glyphs_prints_all_and_stops() {
+    // The cursor is a 16-bit word: past 255 glyphs its high byte counts too
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+    let text: String = (0..300)
+        .map(|i| char::from(b'0' + (i % 10) as u8))
+        .collect();
+    let printer = game.create_text_printer("Long", font, TilemapArea::Map9800, 0, 0, &text);
+    game.add_to_main_loop(printer.step());
+    let mut gb = Rom::build(&game.build().unwrap(), &[]).boot();
+    gb.run_frames(60);
+    for i in 0..300u16 {
+        assert_eq!(gb.read(hw::SCRN0.value + i), (i % 10) as u8, "glyph {i}");
+    }
+    let cursor = gb.symbol("wTextLongCursor");
+    assert_eq!(
+        u16::from_le_bytes([gb.read(cursor), gb.read(cursor + 1)]),
+        300
+    );
+    assert_eq!(gb.blocked_accesses().0, 0);
+}
+
+#[test]
+fn score_encoders_cover_decimal_boundaries_and_reject_invalid_bcd() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for value in [0, 1, 9, 10, 99, 100, 999, 1000, 9999, 10000, 32768, 65535] {
+        let mut game = RustBoy::new();
+        let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+        let score = game.create_number_printer(
+            "Score",
+            font,
+            TilemapArea::Map9800,
+            0,
+            0,
+            NumberFormat::DecimalU16,
+        );
+        let mut init = Block::new();
+        init.ld(R16::DE, value)
+            .emit_all(score.set_value(game.labels()));
+        game.init(init);
+        game.add_to_main_loop(score.step());
+        let rom = Rom::build(&game.build().unwrap(), &[]);
+        let mut gb = rom.boot();
+        gb.run_frames(10);
+        for (i, ch) in format!("{value:05}").bytes().enumerate() {
+            assert_eq!(
+                gb.read(hw::SCRN0.value + i as u16),
+                ch - b'0',
+                "value {value}"
+            );
+        }
+    }
+    for value in [0, 0x9999, 0xa123, 0x1b23, 0x12c3, 0x123f] {
+        let mut game = RustBoy::new();
+        let font = game.load_font("Digits", TileSource::from_raw(&[["$00"; 8]; 10]), b'0');
+        let score = game.create_number_printer(
+            "Score",
+            font,
+            TilemapArea::Map9800,
+            0,
+            0,
+            NumberFormat::PackedBcd,
+        );
+        let invalid = game.vars.create_u8("wCarry", 0);
+        let mut init = Block::new();
+        // The old value shares no digit with the invalid ones: a partial write would show
+        init.ld(R16::DE, 0x5678)
+            .emit_all(score.set_value(game.labels()))
+            .ld(R16::DE, value)
+            .emit_all(score.set_value(game.labels()))
+            .ld_a(0)
+            .adc(0)
+            .ld_addr_def_a(invalid.name());
+        game.init(init);
+        game.add_to_main_loop(score.step());
+        let rom = Rom::build(&game.build().unwrap(), &[]);
+        let mut gb = rom.boot();
+        gb.run_frames(10);
+        let bad = value != 0 && value != 0x9999;
+        assert_eq!(gb.read_symbol(invalid.name()), u8::from(bad));
+        let expected = if bad {
+            [5, 6, 7, 8]
+        } else if value == 0 {
+            [0; 4]
+        } else {
+            [9; 4]
+        };
+        for (i, digit) in expected.into_iter().enumerate() {
+            assert_eq!(gb.read(hw::SCRN0.value + i as u16), digit);
+        }
+    }
+}
+
+#[test]
+fn runtime_oam_pools_allocate_hide_release_and_reuse_disjoint_slots() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(size));
+        let tiles = TileSource::from_raw(&vec![["$ff"; 8]; usize::from(size.tiles_per_sprite())]);
+        let before = game.add_sprite("StaticBefore", tiles.clone(), 8, 8, 0);
+        let pool = game.create_sprite_pool("Actors", 3);
+        game.add_sprite("StaticAfter", tiles, 120, 120, 0);
+        let other = game.create_sprite_pool("Other", 2);
+        assert_eq!((pool.first_slot(), other.first_slot()), (1, 5));
+        let action = game.vars.create_u8("wPoolAction", 0);
+        let result = game.vars.create_u8("wPoolResult", 0);
+        let full = game.vars.create_u8("wPoolFull", 0);
+        let mut init = Block::new();
+        for i in 0..3u8 {
+            init.emit_all(pool.allocate())
+                .ld_b(20 + i)
+                .ld_c(30 + i)
+                .ld_d(0)
+                .ld_e(0x10)
+                .emit_all(pool.write());
+        }
+        init.emit_all(pool.allocate()).ld_addr_def_a(full.name());
+        game.init(init);
+        let mut hide = Block::new();
+        hide.ld_a(0).emit_all(pool.hide()).emit_all(action.set(0));
+        let mut release = Block::new();
+        release
+            .ld_a(0)
+            .emit_all(pool.release())
+            .emit_all(action.set(0));
+        let mut reuse = Block::new();
+        reuse
+            .emit_all(pool.allocate())
+            .ld_addr_def_a(result.name())
+            .ld_b(60)
+            .ld_c(70)
+            .ld_d(0)
+            .ld_e(0x20)
+            .emit_all(pool.write())
+            .emit_all(action.set(0));
+        for (event, code) in [(1, hide), (2, release), (3, reuse)] {
+            game.add_to_main_loop(action.get());
+            game.add_to_main_loop(IfA::eq(event, code.into_instrs()));
+        }
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        gb.run_frames(2);
+        assert_eq!(gb.read_symbol(full.name()), 255);
+        assert_eq!(gb.oam_entry(0), [24, 16, 0, 0]);
+        let static_after = gb.oam_entry(4);
+        let active = gb.oam_entry(1);
+        assert_eq!(active, [46, 28, 0, 0x10]);
+        for i in 0..3 {
+            assert_eq!(gb.read(gb.symbol("wPoolActorsUsed") + i), 1);
+        }
+        gb.write_ram(gb.symbol(action.name()), 1);
+        gb.run_frames(3);
+        assert_eq!(gb.oam_entry(1), [0, active[1], active[2], active[3]]);
+        assert_eq!(gb.read_symbol("wPoolActorsUsed"), 1);
+        gb.write_ram(gb.symbol(action.name()), 2);
+        gb.run_frames(3);
+        assert_eq!(gb.oam_entry(1), [0; 4]);
+        assert_eq!(gb.read_symbol("wPoolActorsUsed"), 0);
+        gb.write_ram(gb.symbol(action.name()), 3);
+        gb.run_frames(3);
+        assert_eq!(gb.read_symbol(result.name()), 0);
+        assert_eq!(gb.oam_entry(1), [86, 68, 0, 0x20]);
+        assert_eq!(gb.oam_entry(4), static_after);
+        assert_eq!(gb.oam_entry(5), [0; 4]);
+        // Static sprite visibility leaves tile/flags alone and accepts a new screen position.
+        let mut game2 = RustBoy::new();
+        let sprite = game2.add_sprite("Visible", TileSource::from_raw(&[["$ff"; 8]]), 8, 8, 0x10);
+        game2.init(game2.sprites.hide(sprite));
+        let mut hidden = engine_rom(&game2).boot();
+        hidden.run_frames(2);
+        assert_eq!(hidden.oam_entry(0), [0, 16, 0, 0x10]);
+        game2.add_to_main_loop(game2.sprites.show_at(sprite, 24, 32));
+        let mut shown = engine_rom(&game2).boot();
+        shown.run_frames(3);
+        assert_eq!(shown.oam_entry(0), [48, 32, 0, 0x10]);
+        assert!(!game.sprites.hide(before).is_empty());
+    }
+}
+
+#[test]
+fn composites_hide_and_show_at_keep_every_part_and_offset() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let tile = || TileSource::from_raw(&[["$ff"; 8]]);
+    let parts = [
+        MetaspritePart::new(tile(), 0, 0, 0x10u8),
+        MetaspritePart::new(tile(), 8, 0, 0x20u8),
+        MetaspritePart::new(tile(), -8, 8, 0x40u8),
+    ];
+    let actor = game.add_metasprite("Actor", 40, 40, &parts);
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    let initial: Vec<_> = (0..3).map(|entry| gb.oam_entry(entry)).collect();
+    game.init(game.sprites.hide_composite(actor));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    for (entry, before) in initial.iter().enumerate() {
+        let hidden = gb.oam_entry(entry);
+        assert_eq!(hidden[0], 0, "part {entry} hidden by Y=0");
+        assert_eq!(
+            &hidden[1..],
+            &before[1..],
+            "part {entry} keeps X, tile and flags"
+        );
+    }
+    // Shown again elsewhere: the first part at (60, 50), the others at their offsets
+    game.init(game.sprites.show_composite_at(actor, 60, 50));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    for (entry, (before, part)) in initial.iter().zip(&parts).enumerate() {
+        let shown = gb.oam_entry(entry);
+        let x = (60 + part.x + i16::from(hw::OAM_X_OFFSET)) as u8;
+        let y = (50 + part.y + i16::from(hw::OAM_Y_OFFSET)) as u8;
+        assert_eq!((shown[0], shown[1]), (y, x), "part {entry}");
+        assert_eq!(
+            &shown[2..],
+            &before[2..],
+            "part {entry} keeps tile and flags"
+        );
+    }
+}
+
+#[test]
+fn pool_allocation_returns_its_cleared_hidden_entry_in_hl() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.add_sprite("Static", TileSource::from_raw(&[["$ff"; 8]]), 8, 8, 0);
+    let pool = game.create_sprite_pool("Actors", 3);
+    let entries = game.vars.create_u16("wPoolEntries", 0);
+    let second = game.vars.create_u16("wPoolSecondEntry", 0);
+    let mut init = Block::new();
+    // Fill slot 0 with nonzero bytes, release it, then allocate twice: slot 0 comes back
+    // cleared, slot 1 is fresh
+    init.emit_all(pool.allocate())
+        .ld_b(20)
+        .ld_c(30)
+        .ld_d(4)
+        .ld_e(0x30)
+        .emit_all(pool.write())
+        .ld_a(0)
+        .emit_all(pool.release())
+        .emit_all(pool.allocate())
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a(entries.name())
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a(Expr::sym(entries.name()) + 1)
+        .emit_all(pool.allocate())
+        .ld(R8::A, R8::L)
+        .ld_addr_def_a(second.name())
+        .ld(R8::A, R8::H)
+        .ld_addr_def_a(Expr::sym(second.name()) + 1);
+    game.init(init);
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    let shadow = gb.symbol("wShadowOAM");
+    let word = |name: &str| {
+        let address = gb.symbol(name);
+        u16::from_le_bytes([gb.read(address), gb.read(address + 1)])
+    };
+    let first_slot = u16::from(pool.first_slot());
+    for (name, slot) in [("wPoolEntries", 0), ("wPoolSecondEntry", 1)] {
+        let entry = shadow + 4 * (first_slot + slot);
+        assert_eq!(
+            word(name),
+            entry,
+            "{name}: HL is the slot's shadow OAM entry"
+        );
+        for byte in 0..4 {
+            assert_eq!(gb.read(entry + byte), 0, "{name}: byte {byte} cleared");
+        }
+    }
+}
+
+#[test]
+fn sprite_pool_rejects_free_invalid_and_unrepresentable_writes_without_mutation() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for size in [SpriteSize::Size8x8, SpriteSize::Size8x16] {
+        let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(size));
+        let pool = game.create_sprite_pool("Checked", 2);
+        let cases = game.vars.create_array("wPoolCarry", ArrayElement::U8, 9, 0);
+        let mut code = Block::new();
+        code.emit_all(pool.allocate())
+            .ld_b(24)
+            .ld_c(32)
+            .ld_d(0)
+            .ld_e(0x10)
+            .emit_all(pool.write());
+        let checks = [
+            (pool.release(), 255u8, 24u8, 32u8, 0u8, true),
+            (pool.hide(), 2, 24, 32, 0, true),
+            (pool.write(), 1, 24, 32, 0, true), // free slot
+            (pool.release(), 1, 24, 32, 0, true),
+            (pool.write(), 0, 248, 32, 0, true),
+            (pool.write(), 0, 24, 240, 0, true),
+            (pool.write(), 0, 24, 32, 1, size == SpriteSize::Size8x16),
+        ];
+        for (index, (operation, slot, x, y, tile, _)) in checks.iter().enumerate() {
+            code.ld_a(*slot)
+                .ld_b(*x)
+                .ld_c(*y)
+                .ld_d(*tile)
+                .ld_e(0x10)
+                .emit_all(operation.clone())
+                .ld_a(0)
+                .adc(0)
+                .ld_addr_def_a(cases.address(index as u16));
+        }
+        code.emit_all(pool.allocate())
+            .emit_all(pool.allocate()) // third claim: full
+            .ld_a(0)
+            .adc(0)
+            .ld_addr_def_a(cases.address(7))
+            .ld_a(1)
+            .emit_all(pool.release())
+            .ld_a(1)
+            .emit_all(pool.release())
+            .ld_a(0)
+            .adc(0)
+            .ld_addr_def_a(cases.address(8));
+        game.init(code);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        gb.run_frames(2);
+        let base = gb.symbol(cases.name());
+        for (index, (_, _, _, _, _, rejected)) in checks.iter().enumerate() {
+            assert_eq!(gb.read(base + index as u16), u8::from(*rejected));
+        }
+        assert_eq!(gb.read(base + 7), 1);
+        assert_eq!(gb.read(base + 8), 1);
+        assert_eq!(
+            gb.oam_entry(0),
+            [
+                48,
+                32,
+                if size == SpriteSize::Size8x16 { 0 } else { 1 },
+                0x10
+            ]
+        );
+        assert_eq!(gb.oam_entry(1), [0; 4]);
+        assert_eq!(gb.read_symbol("wPoolCheckedUsed"), 1);
+        assert_eq!(gb.read(gb.symbol("wPoolCheckedUsed") + 1), 0);
+    }
+}
 
 #[test]
 fn get_tile_by_screen_pixel_adds_background_scroll_before_lookup() {
@@ -2244,4 +3377,39 @@ fn get_tile_by_screen_pixel_adds_background_scroll_before_lookup() {
     gb.run_frames(2);
     assert_eq!(gb.read_symbol("wUnscrolledTile"), 17);
     assert_eq!(gb.read_symbol("wScrolledTile"), 93);
+}
+
+#[test]
+fn engine_soft_reset_returns_background_camera_to_origin() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.set_soft_reset(true);
+    let done = game.labels().local("camera_set_once");
+    let mut set_once = Block::new();
+    set_once
+        .ld_a_addr_def("wCameraWritten")
+        .and(R8::A)
+        .jp_cond(Condition::NZ, &done)
+        .ld_a(1)
+        .ld_addr_def_a("wCameraWritten")
+        .ld_a(64)
+        .ldh(Mem::addr(hw::SCX), R8::A)
+        .ld_a(48)
+        .ldh(Mem::addr(hw::SCY), R8::A)
+        .label(&done);
+    game.add_to_main_loop(set_once);
+    game.raw(|asm| {
+        asm.chunk(Chunk::Data).label("wCameraWritten").ds("1");
+    });
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (64, 48));
+
+    gb.run_script(&[
+        (20, &[Button::A, Button::B, Button::Select, Button::Start]),
+        (3, &[]),
+    ]);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (0, 0));
 }

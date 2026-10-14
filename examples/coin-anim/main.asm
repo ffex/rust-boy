@@ -39,9 +39,11 @@
     ld a, HIGH(wShadowOAM)
     call hOAMDMA
     ld a, 228
-    ld [rBGP], a
-    ld [rOBP0], a
-    ld [rOBP1], a
+    ldh [rBGP], a
+    ld a, 228
+    ldh [rOBP0], a
+    ld a, 228
+    ldh [rOBP1], a
     ld a, 0
     ld [wCurKeys], a
     ld a, 0
@@ -206,7 +208,62 @@
     reti
 
     Coin:
-    INCBIN "coin.2bpp"
+    dw $1818
+    dw $7E66
+    dw $467A
+    dw $CFB1
+    dw $DFA1
+    dw $7E42
+    dw $7E66
+    dw $1818
+    dw $1818
+    dw $3C24
+    dw $6E52
+    dw $7E42
+    dw $7E42
+    dw $7E42
+    dw $3C24
+    dw $1818
+    dw $1818
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $1818
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $3C24
+    dw $1818
+    dw $1818
+    dw $3C24
+    dw $6E52
+    dw $7E42
+    dw $7E42
+    dw $7E42
+    dw $3C24
+    dw $1818
+    dw $1818
+    dw $7E66
+    dw $467A
+    dw $CFB1
+    dw $DFA1
+    dw $7E42
+    dw $7E66
+    dw $1818
     CoinEnd:
 
     SECTION "Shadow OAM", WRAM0[$CF00]

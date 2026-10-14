@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::asm::labels::{defines, definitions};
+use crate::asm::labels::{DefinitionEvent, DefinitionScanner, defines};
 use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, is_identifier};
 use crate::hw;
 use crate::stdlib::flow::Emittable;
@@ -732,6 +732,11 @@ impl RustBoy {
     /// ([`Error::NameConflict`]), variables that do not fit in WRAM0
     /// ([`Error::MemoryFull`]), code or data in a RAM section or a section name used twice
     /// ([`Error::Section`]).
+    ///
+    /// Raw RGBDS conditionals are not evaluated: their definitions are left to
+    /// rgbasm, and conditional `PURGE` conservatively forgets a prior definition.
+    /// Macros and symbols defined only by included user files are also checked by
+    /// rgbasm. Definite duplicate definitions outside conditionals are rejected here.
     ///
     /// # Example
     /// ```
@@ -1959,11 +1964,19 @@ fn validate_unique_definitions(
         .iter()
         .map(|(name, _)| ((*name).to_string(), Definition::ExternalSymbol))
         .collect::<BTreeMap<_, _>>();
+    let mut scanner = DefinitionScanner::default();
     for chunk in Chunk::ORDER {
         let Some(code) = layout.get_chunk(chunk) else {
             continue;
         };
-        for name in definitions(code) {
+        for event in scanner.scan(code) {
+            let name = match event {
+                DefinitionEvent::Define(name) => name,
+                DefinitionEvent::Purge(name) => {
+                    seen.remove(&name);
+                    continue;
+                }
+            };
             let current = if chunk == Chunk::Data {
                 vars.names()
                     .find(|(variable, _)| *variable == name)
@@ -2027,6 +2040,32 @@ mod tests {
         let output = gb.build().unwrap();
         assert!(output.contains("DEF BRICK_LEFT EQU 0x05"));
         assert!(output.contains("DEF SCORE_ADDR EQU $9870"));
+    }
+
+    #[test]
+    fn test_raw_conditional_and_purged_definitions_are_left_to_rgbds() {
+        for raw in [
+            "IF 1\nChoice: db 1\nELSE\nChoice: db 2\nENDC",
+            "IF 0\nMain: db 1\nENDC",
+            "    DEF TEMP EQU 1\n    PURGE TEMP\n    DEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nIF 1\nPURGE TEMP\nENDC\nDEF TEMP EQU 2",
+            "DEF TEMP EQU 1\nDEF OTHER EQU 2\nPURGE TEMP, OTHER\nDEF TEMP EQU 3\nDEF OTHER EQU 4",
+        ] {
+            let mut gb = RustBoy::new();
+            gb.raw(|asm| {
+                asm.raw(raw);
+            });
+            let output = gb.build().unwrap();
+            // The lightweight label checker does not evaluate IF/PURGE either;
+            // use RGBDS directly when link checks are enabled.
+            crate::asm::label_check::rgbds_rom(&output);
+        }
+
+        let mut gb = RustBoy::new();
+        gb.raw(|asm| {
+            asm.raw("DEF TEMP EQU 1\nPURGE TEMP\nDEF TEMP EQU 2\nDEF TEMP EQU 3");
+        });
+        assert!(matches!(gb.build(), Err(Error::NameConflict { name, .. }) if name == "TEMP"));
     }
 
     #[test]

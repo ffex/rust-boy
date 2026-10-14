@@ -404,7 +404,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `hardware.inc`, generated code, tile labels, constants, raw code and variables (including
       `Coin`/`CoinEnd`, `Main`, and `add_sprite_tiles(player, "Player", ..)` collisions).
       PR #81 review coverage also checks keyword rejection for external symbols, hexadecimal constants,
-      and plain sprites; animation fixtures use non-keyword names.
+      and plain sprites; animation fixtures use non-keyword names. Raw RGBDS conditional definitions
+      are conservatively deferred to the assembler, and `PURGE` ends a symbol lifetime; regression
+      programs cover conditional branches, conditional purge, multiple purged symbols and later duplicates.
 - [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
       after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
       branch `refactor-p3-vram-queue-followups`.

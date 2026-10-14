@@ -547,35 +547,65 @@ pub(crate) fn defines(code: &[super::Instr], name: &str) -> bool {
     defs.contains(name)
 }
 
-/// The global symbols defined in `code`, in source order. RGBDS `REDEF` is an explicit
-/// reassignment, not a second definition; all other global labels and definitions are
-/// returned so the engine can reject collisions before handing output to rgbasm.
-pub(crate) fn definitions(code: &[super::Instr]) -> Vec<String> {
-    use super::Instr;
+/// A change to the set of definitely defined global symbols.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DefinitionEvent {
+    Define(String),
+    Purge(String),
+}
 
-    let mut result = Vec::new();
-    for instr in code {
-        match instr {
-            Instr::Label { name } if !name.starts_with('.') => result.push(name.clone()),
-            Instr::Def { label, .. } => result.push(label.clone()),
-            Instr::Raw { .. } | Instr::Db { .. } | Instr::Dw { .. } | Instr::Ds { .. } => {
-                for line in code_lines(&instr.to_string()) {
-                    let (label, rest) = split_label(&line);
-                    if let Some(label) = label {
-                        result.push(label.to_string());
-                    }
-                    if let Some((name, _)) = split_def(rest) {
-                        let keyword = rest.split_whitespace().next().unwrap_or("");
-                        if !keyword.eq_ignore_ascii_case("REDEF") {
-                            result.push(name.to_string());
-                        }
+/// RGBDS conditionals are left to the assembler. Definitions inside them are not
+/// definite; a PURGE inside one may remove an earlier definition. Keep the nesting
+/// state across chunks, since raw assembly can open a conditional in one chunk and
+/// close it in another.
+#[derive(Default)]
+pub(crate) struct DefinitionScanner {
+    conditional_depth: usize,
+}
+
+impl DefinitionScanner {
+    pub(crate) fn scan(&mut self, code: &[super::Instr]) -> Vec<DefinitionEvent> {
+        let text = code
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut result = Vec::new();
+        for line in code_lines(&text) {
+            let (label, rest) = split_label(&line);
+            let rest = rest.trim_start();
+            let mut words = rest.split_whitespace();
+            let keyword = words.next().unwrap_or("");
+            if keyword.eq_ignore_ascii_case("IF") {
+                self.conditional_depth += 1;
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("ENDC") {
+                self.conditional_depth = self.conditional_depth.saturating_sub(1);
+                continue;
+            }
+            if keyword.eq_ignore_ascii_case("PURGE") {
+                for name in rest[keyword.len()..].split(',').map(str::trim) {
+                    if is_identifier(name) {
+                        result.push(DefinitionEvent::Purge(name.to_string()));
                     }
                 }
+                continue;
             }
-            _ => {}
+            if self.conditional_depth != 0 {
+                continue;
+            }
+            if let Some(label) = label {
+                result.push(DefinitionEvent::Define(label.to_string()));
+            }
+            if let Some((name, _)) = split_def(rest) {
+                if !keyword.eq_ignore_ascii_case("REDEF") {
+                    result.push(DefinitionEvent::Define(name.to_string()));
+                }
+            }
         }
+        result
     }
-    result
 }
 
 #[cfg(test)]
@@ -680,7 +710,41 @@ mod tests {
                 value: "2".to_string(),
             },
         ];
-        assert_eq!(definitions(&code), ["First", "COUNT", "Typed"]);
+        assert_eq!(
+            DefinitionScanner::default().scan(&code),
+            ["First", "COUNT", "Typed"].map(|name| DefinitionEvent::Define(name.to_string()))
+        );
+    }
+
+    #[test]
+    fn test_definition_scanner_keeps_conditional_state_across_calls() {
+        use super::super::Instr;
+        let raw = |line: &str| Instr::Raw {
+            line: line.to_string(),
+        };
+        let mut scanner = DefinitionScanner::default();
+        assert!(
+            scanner
+                .scan(&[
+                    raw("IF 1\nIF 0"),
+                    Instr::Label {
+                        name: "Hidden".into()
+                    }
+                ])
+                .is_empty()
+        );
+        assert_eq!(
+            scanner.scan(&[
+                raw("ELSE\nPURGE Old\nENDC\nENDC"),
+                Instr::Label {
+                    name: "Visible".into()
+                }
+            ]),
+            [
+                DefinitionEvent::Purge("Old".into()),
+                DefinitionEvent::Define("Visible".into())
+            ]
+        );
     }
 
     #[test]

@@ -43,8 +43,8 @@ pub use crate::engine::{
     BackgroundAnimationConfig, BuiltinFunction, Chunk, CompositeSpriteId, Definition, EntityPool,
     Error, Font, InputManager, Layout, Lcdc, MemoryRegion, MetaspritePart, NumberFormat,
     NumberPrinter, Palettes, PngColorMapping, PngOptions, RustBoy, RustBoyConfig, SceneManager,
-    SpriteId, SpriteSize, TextPrinter, TileOrder, TileSource, TilemapArea, Var, VarType, Window,
-    WramArray, png_to_2bpp,
+    SpriteId, SpriteSize, TextPrinter, TileCollision, TileCollisionCheck, TileOrder, TileSource,
+    TilemapArea, Var, VarType, Window, WramArray, png_to_2bpp,
 };
 pub use crate::hw;
 pub use crate::stdlib::flow::{Call, If, IfA, IfCall, IfConst};

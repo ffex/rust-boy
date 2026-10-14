@@ -14,7 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::asm::Instr;
 use crate::asm::labels::symbols;
 use crate::stdlib::graphics::oam::init_oam_dma;
-use crate::stdlib::graphics::utility::{get_tile_by_pixel, memcopy, wait_not_vblank, wait_vblank};
+use crate::stdlib::graphics::utility::{
+    get_tile_by_pixel, get_tile_by_screen_pixel, memcopy, wait_not_vblank, wait_vblank,
+};
 use crate::stdlib::inputs::{check_soft_reset, update_keys};
 use crate::stdlib::interrupts::wait_frame;
 use crate::stdlib::routine::Routine;
@@ -37,6 +39,8 @@ pub enum BuiltinFunction {
     /// The background tile under a pixel: its address in `hl`, its index in `a`
     /// (see `stdlib::graphics::utility::get_tile_by_pixel` for the contract)
     GetTileByPixel,
+    /// The background tile under a screen pixel after adding SCX/SCY (`stdlib::graphics::utility::get_tile_by_screen_pixel`)
+    GetTileByScreenPixel,
     /// Delay loop using BC as counter
     Delay,
     /// Wait for the next VBlank, asleep (`halt`): the main loop's frame wait (see
@@ -52,12 +56,13 @@ pub enum BuiltinFunction {
 
 impl BuiltinFunction {
     /// Every builtin, in the order `build()` emits them
-    pub const ALL: [BuiltinFunction; 9] = [
+    pub const ALL: [BuiltinFunction; 10] = [
         BuiltinFunction::Memcopy,
         BuiltinFunction::WaitVBlank,
         BuiltinFunction::WaitNotVBlank,
         BuiltinFunction::UpdateKeys,
         BuiltinFunction::GetTileByPixel,
+        BuiltinFunction::GetTileByScreenPixel,
         BuiltinFunction::Delay,
         BuiltinFunction::WaitFrame,
         BuiltinFunction::CheckSoftReset,
@@ -72,6 +77,7 @@ impl BuiltinFunction {
             BuiltinFunction::WaitNotVBlank => "WaitNotVBlank",
             BuiltinFunction::UpdateKeys => "UpdateKeys",
             BuiltinFunction::GetTileByPixel => "GetTileByPixel",
+            BuiltinFunction::GetTileByScreenPixel => "GetTileByScreenPixel",
             BuiltinFunction::Delay => "Delay",
             BuiltinFunction::WaitFrame => "WaitFrame",
             BuiltinFunction::CheckSoftReset => "CheckSoftReset",
@@ -95,6 +101,7 @@ impl BuiltinFunction {
             BuiltinFunction::WaitNotVBlank => wait_not_vblank(),
             BuiltinFunction::UpdateKeys => update_keys(),
             BuiltinFunction::GetTileByPixel => get_tile_by_pixel(),
+            BuiltinFunction::GetTileByScreenPixel => get_tile_by_screen_pixel(),
             BuiltinFunction::Delay => delay(),
             BuiltinFunction::WaitFrame => wait_frame(),
             BuiltinFunction::CheckSoftReset => check_soft_reset(),
@@ -628,6 +635,10 @@ mod tests {
             (BuiltinFunction::WaitNotVBlank, wait_not_vblank()),
             (BuiltinFunction::UpdateKeys, update_keys()),
             (BuiltinFunction::GetTileByPixel, get_tile_by_pixel()),
+            (
+                BuiltinFunction::GetTileByScreenPixel,
+                get_tile_by_screen_pixel(),
+            ),
             (BuiltinFunction::WaitFrame, wait_frame()),
             (BuiltinFunction::CheckSoftReset, check_soft_reset()),
         ];

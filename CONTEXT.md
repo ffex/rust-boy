@@ -6,7 +6,8 @@ built, how the code is layered, what is broken and why. The actionable checklist
 [`AGENTS.md`](AGENTS.md), and Claude's review, fix and merge rules in [`CLAUDE.md`](CLAUDE.md).
 
 Codex makes the first try of a task and opens its PR into `refactor`; Claude has it reviewed by a
-context-free agent, fixes the findings and merges it. Only the `refactor` → `main` PR waits for the maintainer.
+context-free agent, sends the findings to Codex as an `@codex fix-request` comment (Codex fixes
+them) and merges it. Only the `refactor` → `main` PR waits for the maintainer.
 
 > Snapshot taken on branch `refactor` at commit `4601a5c` (October 2026). Line numbers refer to
 > that commit. Since `refactor-p2-engine-api-prelude` the layers are `asm`, `stdlib` and `engine`, in `src/asm/`,
@@ -27,7 +28,8 @@ into a ROM:
 your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ──rgblink──▶ main.gb ──rgbfix──▶ playable ROM
 ```
 
-- Zero Rust dependencies, edition 2024.
+- Edition 2024. The snapshot had zero Rust dependencies; `refactor-p3-png-assets` adds the pure-Rust
+  `png` decoder (0.18.1, declared MSRV 1.73) for host-side asset conversion.
 - The project is built with RGBDS 1.0 (the `.o` files once committed were object format `RGB9`). Generated code uses `0x05`-style
   constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
@@ -286,7 +288,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 
 - **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,
   `Shade` and `PaletteRegister` and stateless snippets, reused by `RustBoy::set_palette` and `fade_palette`. The
-  start-up `Palettes` keep taking hardware bytes. `PaletteFade` has four shade-saturating stages, fade-in from a
+  Startup `Palettes` accepts `Palette` or raw `u8`; writes reuse `set_palette`'s `ldh` form. `PaletteFade` has four shade-saturating stages, fade-in from a
   solid shade or fade-out to one; A selects the stage at runtime and values >= 3 stay complete. The game owns
   progress and timing: no hidden variables, waits or loops; emit in init or VBlank. Writes change A, fades A and
   flags (local labels from the allocator). BGP is shared by the background and the window; object colour 0 stays
@@ -326,6 +328,18 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
   Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
 
+- **PNG and binary tile assets** (since `refactor-p3-png-assets`): `engine::assets::png_to_2bpp` converts a static PNG
+  to tile bytes with the `png` crate (decompression, sample expansion, interlacing, checksums). Palette slots map
+  colours to pixel indices, exactly by default or by nearest RGB distance (deterministic ties); fully transparent
+  pixels map to an index (0 by default) and partial alpha is rejected; 16-bit samples use their high byte; no gamma,
+  dithering, deduplication, cropping or padding. Tiles are row-major, or in 8x16 top/bottom pairs; animated PNGs are
+  rejected; output is limited to 64 MiB before allocating. `TileSource::from_png`, `from_2bpp` and `from_2bpp_bytes`
+  derive the tile count, own their bytes and return `AssetError`; they reuse the raw source as little-endian `dw`
+  pairs (no new enum variant), so no INCBIN include path is needed; paths resolve in the generating process. The old
+  `from_file(path, count)` still defers INCBIN to RGBDS with a manual count. FOSDEM loads its right half from its PNG
+  (byte-for-byte equal to the committed 2bpp, tested) and its left half and the coin with derived counts; their
+  snapshots inline the tile data as `dw`, the rest of their output is unchanged.
+
 - **Sprite visibility and runtime OAM pools** (since `refactor-p3-sprite-pools`): `Sprite`/`SpriteManager::hide` sets
   Y=0 and keeps X, tile and flags; `show_at` takes screen coordinates and writes Y last; `hide_composite` /
   `show_composite_at` apply to every member, placing the first registered part and keeping the offsets. A hidden
@@ -348,7 +362,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   ping-pong or once, 1 to 256 frames, a hold of 1..=255 calls per frame. Pause keeps the cursor and timer; restart
   replays from frame 0 and keeps writes already queued. Once's finished flag means its last frame is queued, not
   flushed. Frames of several cells are not atomic: the queue can flush part of one. Handler steps are rejected through
-  the queue dependency check.
+  the queue dependency check. The target and frame tables go to the single ROM0 bank; too large ones make rgblink fail (past $4000
+  bytes), or rgbasm already (past $8000).
 
 - **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
   a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
@@ -383,7 +398,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `wVramQueue` (39 bytes), `wVramQueueRead` and `wVramQueueWrite` (one byte each) are reserved
   at the top of WRAM0, below shadow OAM when present, without moving user variables. Competing
   definitions return `Error::NameConflict`; insufficient memory is `Error::MemoryFull`.
-  Startup clears the cursors before user init code. Enqueue takes `hl` and `a`, changes all
+  Startup clears the cursors before user init code. Accepted writes queued while the LCD is off
+  remain pending until a VBlank after the LCD turns on; the queue does not poll or flush during
+  initialization. Enqueue takes `hl` and `a`, changes all
   registers and flags, and preserves IME. Carry clear means accepted; carry set means full or
   a runtime destination outside VRAM (constant errors panic at the API call). Rejection retains
   queued entries; callers retry if necessary. There is one producer, in init/main, never in an
@@ -392,7 +409,10 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   code are not followed, and a main-loop call to `FlushVramQueue`, a second consumer, is not rejected:
   both are documented limits). The write cursor is published after all bytes, so the consumer sees only
   complete entries even when enqueue is interrupted. Flush consumes FIFO entries with interrupts
-  off, beginning writes only on lines 144–152 and retaining entries if late. Unit tests cover
+  off, reading `rLY` with `ldh` (one M-cycle saved per entry), beginning writes only on lines
+  144–152 and retaining entries if late. `hw::LY_LAST_LINE` names 153, derived from
+  `SCRN_Y` and `VBLANK_LINES`, and is used by STAT validation and the late-flush test.
+  Unit tests cover
   wrapping, overflow, invalid destinations, FIFO order and routine conventions; emulator tests
   cover delayed main-loop work, rejection/IME at init, full-queue timing alongside OAM DMA,
   late deferral and VBlank injected at every enqueue instruction boundary. The interruption
@@ -1164,7 +1184,8 @@ screen are identical on every frame, and every frame of every animation is shown
 `test_variables_must_fit_in_wram0`, `test_animation_frames_must_be_the_sprite_tiles`,
 `test_loop_animation_ending_on_the_last_sprite_tile` (runs the animation on `gb_asm::test_cpu` in 8x8 and 8x16; it
 overflowed before), `test_allocation_stops_at_the_end_of_the_region`, `test_regions`; all the new ones failed before.
-Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (its size is only known when
+Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (since `refactor-p3-png-assets`,
+`from_2bpp` derives the count from the file instead; for `from_file` its size is only known when
 assembled).
 
 #### B18
@@ -1474,7 +1495,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20) (it panics since). |
 | 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
-| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |
+| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size): `TileSource::from_2bpp` / `from_png` since `refactor-p3-png-assets`. |
 
 ---
 
@@ -1485,8 +1506,9 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **Audio:** opt-in power/mixer initialization and typed one-shot effects exist; music driver integration remains.
 - **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
   entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
-  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and
-  palettes/fades since `refactor-p3-palettes` (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
+  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
+  `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
+  (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
 - **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
@@ -1495,10 +1517,14 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.
-- **Platform:** single ROM0 bank, no SRAM saves, no GBC.
+- **Platform:** generated engine programs still use ROM0 and do not select a cartridge mapper;
+  `stdlib::banking` has low-level MBC1/MBC5 ROM bank selectors (`refactor-p3-mbc-banking`), but
+  mapper headers and engine-managed banked asset access remain. `stdlib::sram` provides low-level
+  MBC1/MBC5 RAM gating and MBC5 bank selection; persistent saves and GBC support remain.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
-  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`).
+  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and
+  `.2bpp` files with a derived tile count exist since `refactor-p3-png-assets` (see §2).
 
 ---
 

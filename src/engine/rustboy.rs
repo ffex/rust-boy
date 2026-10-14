@@ -260,6 +260,15 @@ impl RustBoy {
         self
     }
 
+    /// Include Rust source locations in comments before user-provided init, main-loop,
+    /// and interrupt-handler code. Disabled by default; see
+    /// [`RustBoyConfig::source_comments`]. Paths stay as rustc reports them and may be
+    /// machine-dependent or remapped; these comments are unsuitable for committed snapshots.
+    pub fn set_source_comments(&mut self, enabled: bool) -> &mut Self {
+        self.config.source_comments = enabled;
+        self
+    }
+
     /// Set the palettes the start-up code writes to `rBGP`, `rOBP0` and `rOBP1` (by
     /// default `%11100100` each, see [`Palettes`])
     ///
@@ -468,7 +477,11 @@ impl RustBoy {
     /// On an instruction [`Instr::check`] rejects (code built by hand, `vec![Instr::..]`).
     #[track_caller]
     pub fn init(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(self.asm.labels());
+        let caller = std::panic::Location::caller();
+        let mut instrs = code.emit(self.asm.labels());
+        if self.config.source_comments && !instrs.is_empty() {
+            instrs.insert(0, source_comment(caller));
+        }
         self.init_code.extend(checked(instrs));
         self
     }
@@ -796,6 +809,10 @@ impl RustBoy {
 
     /// Call a function with setup instructions (parameters) and add to main loop
     ///
+    /// Parameters are passed in registers: `setup` loads the registers that the callee
+    /// expects (for example `a` and `de`); no stack arguments or implicit conversions
+    /// are added. A `Routine` documents its inputs with `Routine::with_reads`.
+    ///
     /// This method emits the setup instructions before the call directly to
     /// the main loop, allowing fluent chaining without borrow checker issues.
     ///
@@ -1008,7 +1025,9 @@ impl RustBoy {
             lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
         }
         if let Some(window) = self.config.window {
-            lcdc = lcdc | hw::LCDCF_WINON;
+            if window.visible_on_startup {
+                lcdc = lcdc | hw::LCDCF_WINON;
+            }
             if window.tilemap == TilemapArea::Map9C00 {
                 lcdc = lcdc | hw::LCDCF_WIN9C00;
             }
@@ -1480,7 +1499,11 @@ impl RustBoy {
     /// On an instruction [`Instr::check`] rejects (code built by hand, `vec![Instr::..]`).
     #[track_caller]
     pub fn add_to_main_loop(&mut self, mut code: impl Emittable) -> &mut Self {
-        let instrs = code.emit(self.asm.labels());
+        let caller = std::panic::Location::caller();
+        let mut instrs = code.emit(self.asm.labels());
+        if self.config.source_comments && !instrs.is_empty() {
+            instrs.insert(0, source_comment(caller));
+        }
         self.main_loop_code.extend(checked(instrs));
         self
     }
@@ -1580,7 +1603,12 @@ impl RustBoy {
     /// ```
     #[track_caller]
     pub fn on_interrupt(&mut self, interrupt: Interrupt, mut code: impl Emittable) -> &mut Self {
-        let code = checked(code.emit(self.asm.labels()));
+        let caller = std::panic::Location::caller();
+        let mut code = code.emit(self.asm.labels());
+        if self.config.source_comments && !code.is_empty() {
+            code.insert(0, source_comment(caller));
+        }
+        let code = checked(code);
         let saves = Regs::written_by(&code).unwrap_or(Regs::ALL);
         self.add_handler_code(interrupt, code, saves);
         self
@@ -1851,6 +1879,17 @@ impl RustBoy {
         y: u8,
         flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::SpriteId {
+        self.add_sprite_at(name, tile_source, i16::from(x), i16::from(y), flags)
+    }
+
+    fn add_sprite_at(
+        &mut self,
+        name: &str,
+        tile_source: super::tiles::TileSource,
+        x: i16,
+        y: i16,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> super::sprites::SpriteId {
         // The sprite name is checked before it names the tiles
         check_name("sprite", name);
         let count = tile_source.tile_count();
@@ -1871,8 +1910,9 @@ impl RustBoy {
     ///
     /// # Panics
     /// If parts are empty, names collide, tiles/OAM are full, a part has no tiles or
-    /// violates 8x16 alignment, or an offset position is outside supported screen coordinates
-    /// (X 0..=247, Y 0..=239). Invalid layout/capacity is checked before registration.
+    /// violates 8x16 alignment, or an offset position cannot fit in OAM after its hardware
+    /// coordinate offset (X + 8, Y + 16). This supports screen X -8..=247 and Y -16..=239;
+    /// OAM coordinate zero hides that part. Invalid layout/capacity is checked before registration.
     #[track_caller]
     pub fn add_metasprite(
         &mut self,
@@ -1920,17 +1960,17 @@ impl RustBoy {
                     <= usize::from((hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE),
                 "metasprite {name:?} tiles do not fit in VRAM"
             );
-            let mut position = [0u8; 2];
+            let mut position = [0i16; 2];
             for (slot, anchor, offset, hardware_offset) in [
                 (0, x, part.x, hw::OAM_X_OFFSET),
                 (1, y, part.y, hw::OAM_Y_OFFSET),
             ] {
                 let value = i32::from(anchor) + i32::from(offset);
                 assert!(
-                    (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
+                    (0..=i32::from(u8::MAX)).contains(&(value + i32::from(hardware_offset))),
                     "metasprite {name:?} part position is outside supported screen coordinates"
                 );
-                position[slot] = value as u8;
+                position[slot] = i16::try_from(value).expect("valid OAM positions fit i16");
             }
             positions.push((position[0], position[1]));
         }
@@ -1939,7 +1979,7 @@ impl RustBoy {
             .zip(names)
             .zip(positions)
             .map(|((part, label), (x, y))| {
-                self.add_sprite(label, part.tiles.clone(), x, y, part.flags)
+                self.add_sprite_at(label, part.tiles.clone(), x, y, part.flags)
             })
             .collect();
         self.sprites.create_composite(name, sprites)
@@ -2135,6 +2175,13 @@ impl RustBoy {
     }
 }
 
+#[track_caller]
+fn source_comment(location: &'static std::panic::Location<'static>) -> Instr {
+    Instr::Comment {
+        text: format!("Rust source: {}:{}", location.file(), location.line()),
+    }
+}
+
 /// `code`, after checking each instruction against its operands ([`Instr::check`])
 ///
 /// Code built with the builders (`Block`, `Layout`) is checked as it is written; this
@@ -2239,6 +2286,66 @@ mod tests {
         let gb = RustBoy::new();
         assert!(gb.tiles.is_empty());
         assert!(gb.vars.is_empty());
+    }
+
+    #[test]
+    fn source_comments_preserve_interrupt_register_saves() {
+        fn timer_handler(annotated: bool) -> Vec<Instr> {
+            let mut game = RustBoy::new();
+            game.set_source_comments(annotated);
+            let mut body = Block::new();
+            body.ld_a(7)
+                .ld(R16::BC, 123)
+                .ld(R16::DE, 456)
+                .ld(R16::HL, 789);
+            game.on_interrupt(Interrupt::Timer, body);
+            game.generate_handlers()
+                .into_iter()
+                .find(|routine| routine.name() == Interrupt::Timer.handler_label())
+                .unwrap()
+                .body()
+                .iter()
+                .filter(|instruction| !matches!(instruction, Instr::Comment { .. }))
+                .cloned()
+                .collect()
+        }
+        let plain = timer_handler(false);
+        let annotated = timer_handler(true);
+        assert_eq!(plain, annotated);
+        let text = plain
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for register in ["af", "bc", "de", "hl"] {
+            assert!(text.contains(&format!("push {register}")));
+            assert!(text.contains(&format!("pop {register}")));
+        }
+    }
+
+    #[test]
+    fn source_comments_are_opt_in_and_point_to_call_sites() {
+        let mut default = RustBoy::new();
+        default.init(vec![Instr::Nop]);
+        default.add_to_main_loop(vec![Instr::Nop]);
+        let plain = default.build().unwrap();
+        assert!(!plain.contains("Rust source:"));
+
+        let mut annotated = RustBoy::with_config(RustBoyConfig::default().source_comments(true));
+        let init_line = line!() + 1;
+        annotated.init(vec![Instr::Nop]);
+        let loop_line = line!() + 1;
+        annotated.add_to_main_loop(vec![Instr::Nop]);
+        let handler_line = line!() + 1;
+        annotated.on_interrupt(Interrupt::Serial, vec![Instr::Nop]);
+        let output = annotated.build().unwrap();
+        for source_line in [init_line, loop_line, handler_line] {
+            assert!(
+                output.contains(&format!("Rust source: {}:{}", file!(), source_line)),
+                "missing source line {source_line}:\n{output}"
+            );
+        }
+        assert_eq!(output.matches("; Rust source:").count(), 3, "{output}");
     }
 
     #[test]
@@ -4619,7 +4726,7 @@ mod tests {
     fn test_window_from_the_config_at_start_up() {
         // The start-up code on the test CPU: WX/WY before user init, the window bits in the
         // LCD-on value. LCDC writes of init code are replaced by that value (documented on
-        // `show_window`): a configured window hidden in init shows anyway.
+        // `show_window`): a visible-by-default configured window hidden in init shows anyway.
         for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
             let mut gb =
                 RustBoy::with_config(RustBoyConfig::default().window(Window::new(map, 40, 112)));
@@ -4643,6 +4750,35 @@ mod tests {
             assert_mem(&cpu, "rWX", 47);
             assert_mem(&cpu, "rWY", 112);
             assert_mem(&cpu, "rLCDC", 0x83 | 0x20 | map_bit);
+        }
+    }
+
+    #[test]
+    fn test_window_hidden_at_start_up_keeps_map_bit_and_position() {
+        for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
+            let mut gb = RustBoy::with_config(
+                RustBoyConfig::default()
+                    .window(Window::new(map, 40, 112).visible_on_startup(false)),
+            );
+            let (code, mut cpu) = startup(&mut gb);
+            cpu.stubs.insert("Memcopy".to_string());
+            cpu.consts.retain(|text, _| !text.contains('|'));
+            for flag in [
+                hw::LCDCF_ON,
+                hw::LCDCF_BGON,
+                hw::LCDCF_OBJON,
+                hw::LCDCF_OBJ8,
+                hw::LCDCF_WINON,
+                hw::LCDCF_WIN9C00,
+            ] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.run(&code);
+            assert_mem(&cpu, "rWX", 47);
+            assert_mem(&cpu, "rWY", 112);
+            let lcdc = cpu.mem["rLCDC"];
+            assert_eq!(lcdc & 0x20, 0, "LCDCF_WINON must stay clear");
+            assert_eq!(lcdc, 0x83 | map_bit);
         }
     }
 

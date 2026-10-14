@@ -10,6 +10,7 @@
 mod animations;
 pub mod assets;
 mod background_animation;
+mod collision;
 mod config;
 mod entities;
 mod error;
@@ -18,6 +19,7 @@ mod inputs;
 mod layout;
 mod memory;
 mod rustboy;
+mod scenes;
 mod sprite_pool;
 mod sprites;
 mod text;
@@ -27,6 +29,7 @@ mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
+pub use collision::Aabb;
 pub use config::{Lcdc, Palettes, RustBoyConfig, Window};
 pub use entities::EntityPool;
 pub use error::{Definition, Error};
@@ -35,6 +38,7 @@ pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};
 pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
 pub use rustboy::{MusicClock, RustBoy};
+pub use scenes::SceneManager;
 pub use sprites::{
     ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
 };

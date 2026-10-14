@@ -17,7 +17,7 @@ use super::tiles::TilemapArea;
 /// gives the same program as before the configuration existed. Change it with the builder
 /// methods (one per field), or set the fields of a default value; the `RustBoy` setters
 /// (`set_sprite_size`, `set_background_tilemap`, `set_palettes`, `set_animation_delay`,
-/// `use_function`, `set_soft_reset`, and `on_stat` / `on_timer` for `stat` / `timer`)
+/// `set_source_comments`, `use_function`, `set_soft_reset`, and `on_stat` / `on_timer` for `stat` / `timer`)
 /// change the same settings later.
 ///
 /// # Example
@@ -70,6 +70,9 @@ pub struct RustBoyConfig {
     /// The timer the start-up code starts; stopped by default.
     /// [`RustBoy::on_timer`](super::RustBoy::on_timer) sets it with its handler.
     pub timer: Option<Timer>,
+    /// Add Rust file and line comments before user-provided `init`, main-loop, and
+    /// interrupt-handler code. Off by default so generated assembly stays unchanged.
+    pub source_comments: bool,
     /// APU startup policy; Inherit leaves legacy boot state unchanged.
     pub audio: AudioConfig,
 }
@@ -87,6 +90,7 @@ impl Default for RustBoyConfig {
             soft_reset: false,
             stat: None,
             timer: None,
+            source_comments: false,
             audio: AudioConfig::Inherit,
         }
     }
@@ -116,7 +120,10 @@ impl RustBoyConfig {
         self
     }
 
-    /// Show a window at startup. Position writes precede user init code.
+    /// Configure a window at startup. Position writes precede user init code.
+    /// `window.visible_on_startup(false)` leaves it hidden until runtime. A configured
+    /// window is still allowed when `Lcdc::background(false)`; on DMG, LCDC bit 0 disables
+    /// both the background and window.
     pub fn window(mut self, window: Window) -> Self {
         self.window = Some(window);
         self
@@ -161,6 +168,14 @@ impl RustBoyConfig {
     /// With `timer` started at start-up
     pub fn timer(mut self, timer: Timer) -> Self {
         self.timer = Some(timer);
+        self
+    }
+
+    /// Include Rust source locations in comments before user-provided code.
+    /// Paths are kept as rustc reports them and may depend on the machine or path remapping.
+    /// These comments are unsuitable for committed snapshots.
+    pub fn source_comments(mut self, enabled: bool) -> Self {
+        self.source_comments = enabled;
         self
     }
 }
@@ -262,7 +277,10 @@ impl Lcdc {
 
 /// Startup window settings. Uses the background tiles and palette.
 /// Populate its map with `tiles.add_tilemap_at`; the two layers may share a map.
+/// LCDC bit 0 controls the background and window together on DMG, so a visible configured
+/// window is not shown there when `Lcdc::background` is false.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Window {
     /// Window map, independent of the background map.
     pub tilemap: TilemapArea,
@@ -270,6 +288,8 @@ pub struct Window {
     pub wx: u8,
     /// Raw hardware Y coordinate.
     pub wy: u8,
+    /// Whether startup enables LCDC's window bit. Defaults to `true`.
+    pub visible_on_startup: bool,
 }
 
 impl Window {
@@ -293,7 +313,24 @@ impl Window {
     #[track_caller]
     pub fn new(tilemap: TilemapArea, x: u8, y: u8) -> Self {
         let (wx, wy) = crate::stdlib::graphics::window::screen_to_raw(x, y);
-        Self { tilemap, wx, wy }
+        Self::from_raw(tilemap, wx, wy)
+    }
+
+    /// Construct a window from raw hardware coordinates, allowing clipping and off-screen
+    /// placement. WX/WY quirks are described by [`crate::stdlib::graphics::window::set_position_raw`].
+    pub fn from_raw(tilemap: TilemapArea, wx: u8, wy: u8) -> Self {
+        Self {
+            tilemap,
+            wx,
+            wy,
+            visible_on_startup: true,
+        }
+    }
+
+    /// Keep the configured window hidden until a later `show_window(true)` call.
+    pub fn visible_on_startup(mut self, visible: bool) -> Self {
+        self.visible_on_startup = visible;
+        self
     }
 }
 
@@ -305,7 +342,15 @@ mod tests {
     fn window_new_converts_and_checks_screen_coordinates() {
         let window = Window::new(TilemapArea::Map9C00, 158, 143);
         assert_eq!((window.wx, window.wy), (165, 143));
+        assert!(window.visible_on_startup);
         assert_eq!(Window::new(TilemapArea::Map9800, 0, 0).wx, 7);
+        assert!(
+            !Window::new(TilemapArea::Map9800, 0, 0)
+                .visible_on_startup(false)
+                .visible_on_startup
+        );
+        let raw = Window::from_raw(TilemapArea::Map9C00, 0, 166);
+        assert_eq!((raw.wx, raw.wy), (0, 166));
         for (x, y) in [(159, 0), (0, 144)] {
             assert!(std::panic::catch_unwind(|| Window::new(TilemapArea::Map9800, x, y)).is_err());
         }

@@ -350,7 +350,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `Routine::changes`), `on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `enable_interrupt`, `disable_interrupt`;
       `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
-- [ ] Scenes / game states
+- [x] Scenes / game states (branch `refactor-p3-scenes`): `SceneManager` dispatches the selected byte-sized scene
+      Review regressions cover duplicate IDs, unknown IDs, an empty dispatcher and generated instructions.
+      routine from the main loop, registers scene routines as dependencies, and provides `switch_to` code for changing
+      state; an unknown ID is a no-op.
 - [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
       reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
       `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)

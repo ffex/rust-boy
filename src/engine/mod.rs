@@ -18,6 +18,7 @@ mod inputs;
 mod layout;
 mod memory;
 mod rustboy;
+mod scenes;
 mod sprite_pool;
 mod sprites;
 mod text;
@@ -34,6 +35,7 @@ pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};
 pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
 pub use rustboy::{MusicClock, RustBoy};
+pub use scenes::SceneManager;
 pub use sprites::{
     ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
 };

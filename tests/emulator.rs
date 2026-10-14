@@ -924,6 +924,42 @@ fn engine_rom(gb: &RustBoy) -> Rom {
 }
 
 #[test]
+fn scene_dispatcher_runs_the_selected_scene_and_switches_next_frame() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wTitleTicks", 0);
+    game.vars.create_u8("wPlayTicks", 0);
+
+    let mut title = Block::new();
+    title.label("UpdateTitle");
+    title.emit_all(count("wTitleTicks").into_instrs());
+    title.ret();
+    let title = Routine::new("UpdateTitle", title.into_instrs());
+
+    let mut play = Block::new();
+    play.label("UpdatePlay");
+    play.emit_all(count("wPlayTicks").into_instrs());
+    play.ret();
+    let play = Routine::new("UpdatePlay", play.into_instrs());
+
+    let mut scenes = SceneManager::new("UpdateScene", "wCurrentScene");
+    scenes.add_scene(0, title).add_scene(2, play);
+    let dispatcher = scenes.dispatcher();
+    let dispatch = game.call_routine(&dispatcher);
+    game.add_to_main_loop(dispatch);
+    game.add_to_main_loop(scenes.switch_to(2));
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(3);
+    assert_eq!(gb.read_symbol("wTitleTicks"), 1);
+    assert_eq!(gb.read_symbol("wPlayTicks"), 2);
+    assert_eq!(gb.read_symbol("wCurrentScene"), 2);
+}
+
+#[test]
 fn sram_control_routines_assemble_and_return() {
     if !rgbds_enabled() {
         return;
@@ -983,6 +1019,35 @@ fn mbc_bank_selectors_assemble_and_return_to_the_caller() {
     gb.run_frames(5);
     assert_eq!(gb.read_symbol("wBankHigh"), 1);
     assert_eq!(gb.read_symbol("wBankLow"), 0xFF);
+}
+
+#[test]
+fn scene_dispatcher_ignores_unknown_ids_and_empty_scene_lists() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for with_scene in [false, true] {
+        let mut game = RustBoy::new();
+        game.vars.create_u8("wSceneTicks", 0);
+        game.vars.create_u8("wMainTicks", 0);
+        let mut scenes = SceneManager::new("UpdateScene", "wCurrentScene");
+        if with_scene {
+            let mut body = Block::new();
+            body.label("UpdateKnown")
+                .emit_all(count("wSceneTicks").into_instrs())
+                .ret();
+            scenes.add_scene(0, Routine::new("UpdateKnown", body.into_instrs()));
+        }
+        let call = game.call_routine(&scenes.dispatcher());
+        game.init(scenes.switch_to(9));
+        game.add_to_main_loop(call);
+        game.add_to_main_loop(count("wMainTicks"));
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(5);
+        assert_eq!(gb.read_symbol("wSceneTicks"), 0);
+        assert!(gb.read_symbol("wMainTicks") > 0);
+        assert_eq!(gb.read_symbol("wCurrentScene"), 9);
+    }
 }
 
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a

@@ -81,13 +81,33 @@ pub struct RustBoy {
     /// reads the keys it updates
     updates_keys: bool,
 
+    /// Next stable id for per-binding auto-repeat counters.
+    input_binding_count: usize,
+
     /// Whether the program uses the bounded VRAM write queue.
     vram_queue: bool,
+    main_only_routines: Vec<String>,
+
+    /// Optional pinned driver and imported songs.
+    music: Option<MusicState>,
 
     /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
     /// builtins, animation delay. The sprite size is also the sprite manager's, which
     /// needs it when a sprite is added: `with_config` and `set_sprite_size` set both
     config: RustBoyConfig,
+}
+
+/// Music scheduling. MainFrame runs once per completed game frame; VBlank runs in
+/// the handler after DMA/VRAM flush and may extend beyond VBlank on complex songs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MusicClock {
+    #[default]
+    MainFrame,
+    VBlank,
+}
+struct MusicState {
+    songs: Vec<crate::stdlib::audio::music::Song>,
+    clock: MusicClock,
 }
 
 /// The code of an interrupt handler, as the program gives it, and the registers it saves
@@ -129,7 +149,10 @@ impl RustBoy {
             handlers: BTreeMap::new(),
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
+            input_binding_count: 0,
             vram_queue: false,
+            music: None,
+            main_only_routines: Vec::new(),
             config,
         }
     }
@@ -137,6 +160,96 @@ impl RustBoy {
     /// The settings of this program
     pub fn config(&self) -> &RustBoyConfig {
         &self.config
+    }
+
+    /// Set the audio startup policy. Runtime power helpers are in `stdlib::audio`.
+    pub fn set_audio(&mut self, audio: crate::stdlib::audio::AudioConfig) -> &mut Self {
+        self.config.audio = audio;
+        self
+    }
+
+    /// Replace a channel's sound; AF only, carry set if APU is off or music owns this
+    /// unreserved channel. Serialize audio writers.
+    pub fn play_sfx(&self, effect: &crate::stdlib::audio::Sfx) -> Vec<Instr> {
+        if self.music.is_some() {
+            crate::stdlib::audio::music::play_sfx(self.labels(), effect)
+        } else {
+            crate::stdlib::audio::play_sfx(self.labels(), effect)
+        }
+    }
+
+    /// Enable the pinned hUGEDriver and start this song before user init. An inherited
+    /// audio policy becomes On(default mixer); explicit On/Off policies are retained.
+    /// Call once. Music controls are main-only; generated ticks are the single consumer.
+    pub fn enable_music(
+        &mut self,
+        song: crate::stdlib::audio::music::Song,
+        clock: MusicClock,
+    ) -> &mut Self {
+        assert!(self.music.is_none(), "music is already enabled");
+        for routine in crate::stdlib::audio::music::controls() {
+            self.define_routine(routine);
+        }
+        if self.config.audio == crate::stdlib::audio::AudioConfig::Inherit {
+            self.config.audio =
+                crate::stdlib::audio::AudioConfig::On(crate::stdlib::audio::Mixer::default());
+        }
+        self.music = Some(MusicState {
+            songs: vec![song],
+            clock,
+        });
+        self
+    }
+    /// Add another export, emitted in insertion order. Descriptors must be unique.
+    pub fn add_music_song(&mut self, song: crate::stdlib::audio::music::Song) -> &mut Self {
+        let music = self.music.as_mut().expect("enable music first");
+        assert!(
+            !music
+                .songs
+                .iter()
+                .any(|s| s.descriptor() == song.descriptor()),
+            "duplicate music descriptor"
+        );
+        music.songs.push(song);
+        self
+    }
+    /// Change/restart the song. Resets driver mute ownership; serialize game audio code.
+    pub fn start_music(&self, descriptor: &str) -> Vec<Instr> {
+        let music = self.music.as_ref().expect("enable music first");
+        let song = music
+            .songs
+            .iter()
+            .find(|s| s.descriptor() == descriptor)
+            .expect("song not imported");
+        crate::stdlib::audio::music::start(song)
+    }
+    /// Freeze song position and silence only music-owned channels; reserved SFX continue.
+    pub fn pause_music(&self) -> Vec<Instr> {
+        self.music_control(crate::stdlib::audio::music::PAUSE)
+    }
+    /// Resume a paused song. Carry set if stopped. Cut notes return at the next note row.
+    pub fn resume_music(&self) -> Vec<Instr> {
+        self.music_control(crate::stdlib::audio::music::RESUME)
+    }
+    /// Stop playback; resume is rejected until start_music. Reserved channels are retained.
+    pub fn stop_music(&self) -> Vec<Instr> {
+        self.music_control(crate::stdlib::audio::music::STOP)
+    }
+    fn music_control(&self, routine: &str) -> Vec<Instr> {
+        assert!(self.music.is_some(), "enable music first");
+        let mut b = Block::new();
+        b.call(routine);
+        b.into_instrs()
+    }
+    /// Mute this channel in the driver before SFX playback. Main-only; changes all registers.
+    pub fn reserve_music_channel(&self, channel: crate::stdlib::audio::Channel) -> Vec<Instr> {
+        assert!(self.music.is_some(), "enable music first");
+        crate::stdlib::audio::music::reserve(channel)
+    }
+    /// Release SFX ownership. CH3 wave cache is invalidated so its song wave is restored.
+    pub fn release_music_channel(&self, channel: crate::stdlib::audio::Channel) -> Vec<Instr> {
+        assert!(self.music.is_some(), "enable music first");
+        crate::stdlib::audio::music::release(channel)
     }
 
     /// Set the animation delay value in frames (higher = slower animations)
@@ -164,7 +277,8 @@ impl RustBoy {
     /// needs 8x16 mode.
     ///
     /// # Panics
-    /// If sprites were already added with another size: call it before adding sprites.
+    /// If sprites or sprite pools were already added with another size: call it before adding
+    /// them (a pool's Write routine checks 8x16 tiles when the pool is created).
     pub fn set_sprite_size(&mut self, size: SpriteSize) -> &mut Self {
         self.sprites.set_size(size);
         self.config.sprite_size = size;
@@ -426,7 +540,7 @@ impl RustBoy {
     /// the ones those functions refer to, and so on. A function is found by its name
     /// anywhere in an instruction's code: `call`, `jp`, `IfCall`, `Call`, `ld hl, Name`,
     /// `dw Name`, raw lines (`raw`, one or several lines); not in comments or strings.
-    /// The variables a builtin needs (`wCurKeys`, `wNewKeys` for `UpdateKeys`) are created
+    /// The variables a builtin needs (`wCurKeys`, `wNewKeys`, and `wReleasedKeys` for `UpdateKeys`) are created
     /// with it. So keep only a function that is called from code `build()` does not see:
     /// asm added to its output afterwards, or an `INCLUDE`d file. For the opposite, a
     /// routine *defined* where `build()` does not see, use [`RustBoy::external_symbol`].
@@ -463,7 +577,7 @@ impl RustBoy {
     /// `INCLUDE`d files. A program that includes its own `UpdateKeys` (or another routine
     /// with a builtin's name) declares it here, so the builtin is not emitted as well (that
     /// would be a duplicate label), and neither are the variables that builtin needs
-    /// (`wCurKeys`, `wNewKeys`): the included code defines what it uses. The opposite of
+    /// (`wCurKeys`, `wNewKeys`, `wReleasedKeys`): the included code defines what it uses. The opposite of
     /// [`RustBoy::keep_function`], which emits a function that only outside code calls.
     ///
     /// # Panics
@@ -785,6 +899,7 @@ impl RustBoy {
         startup.label("EntryPoint");
         startup.di();
         startup.ld(R16::SP, Expr::hex(hw::STACK_TOP));
+        startup.emit_all(crate::stdlib::audio::initialize(self.config.audio));
         startup.call("WaitVBlank");
 
         // Turn off screen for safe VRAM access
@@ -810,20 +925,26 @@ impl RustBoy {
             startup.emit_all(clear_objects_screen(&labels));
         }
 
-        // The palettes, every one of them (OBP1 too, B28); `a` is loaded again only for
-        // another value
+        // The palettes, every one of them (OBP1 too, B28), through the stdlib writer
         let palettes = self.config.palettes;
-        let mut loaded = None;
         for (register, palette) in [
-            (hw::BGP, palettes.bgp),
-            (hw::OBP0, palettes.obp0),
-            (hw::OBP1, palettes.obp1),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Background,
+                palettes.bgp,
+            ),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Object0,
+                palettes.obp0,
+            ),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Object1,
+                palettes.obp1,
+            ),
         ] {
-            if loaded != Some(palette) {
-                startup.ld_a(palette);
-                loaded = Some(palette);
-            }
-            startup.ld_addr_def_a(register);
+            startup.emit_all(crate::stdlib::graphics::palette::set_palette(
+                register,
+                crate::stdlib::graphics::palette::Palette::from(palette),
+            ));
         }
 
         // Then the variables (below), then the interrupt sources and `rIE`, then the user
@@ -852,6 +973,9 @@ impl RustBoy {
             finish.emit_all(crate::stdlib::graphics::window::set_position_raw(
                 window.wx, window.wy,
             ));
+        }
+        if let Some(music) = &self.music {
+            finish.emit_all(crate::stdlib::audio::music::start(&music.songs[0]));
         }
         finish.emit_all(self.init_code.clone());
         finish.emit_all(self.raw_chunk(Chunk::Init));
@@ -893,6 +1017,13 @@ impl RustBoy {
         // starts in VBlank
         asm.label("Main");
         asm.call(BuiltinFunction::WaitFrame.label());
+        if self
+            .music
+            .as_ref()
+            .is_some_and(|m| m.clock == MusicClock::MainFrame)
+        {
+            asm.call(crate::stdlib::audio::music::TICK);
+        }
 
         // Generate animation calls at start of main loop
         if self.sprites.has_animations() {
@@ -942,6 +1073,14 @@ impl RustBoy {
         // code is part of the program now
         let raw_functions = self.raw_chunk(Chunk::Functions);
         let raw_data = self.raw_chunk(Chunk::Data);
+        let music_data: Vec<Instr> = self
+            .music
+            .iter()
+            .flat_map(|m| m.songs.iter())
+            .map(|song| Instr::Raw {
+                line: song.assembly().to_owned(),
+            })
+            .collect();
 
         // The variables of this program: the program's, and the ones `build()` adds (on a
         // copy: building changes nothing in `self`)
@@ -951,6 +1090,10 @@ impl RustBoy {
         // created here too, since the handler needs it even if the program replaced
         // WaitFrame with its own)
         vars.create_needed(interrupts::VBLANK_FLAG, 0)?;
+        if self.music.is_some() {
+            vars.create_needed(crate::stdlib::audio::music::PLAYING, 0)?;
+            vars.create_needed(crate::stdlib::audio::music::READY, 0)?;
+        }
 
         // Add animation variables if animations are used
         if self.sprites.has_animations() {
@@ -986,14 +1129,32 @@ impl RustBoy {
             finish.as_slice(),
             raw_functions.as_slice(),
             raw_data.as_slice(),
+            music_data.as_slice(),
         ]);
         code.extend(animations.iter().map(|(_, body)| body.as_slice()));
         code.extend(handlers.iter().map(Routine::body));
         let mut generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
         generated.extend(handlers.iter().map(|handler| handler.name().to_string()));
+        for callback in self.sprites.animation_callback_names() {
+            if !self.function_exists(callback) && !self.functions.is_external_symbol(callback) {
+                return Err(Error::UnknownFunction {
+                    name: callback.to_string(),
+                    available: self.functions.available_functions(&generated),
+                });
+            }
+        }
         // The VRAM queue has one producer, the main loop: no handler may enqueue
         let enqueue = vram_queue::enqueue();
+        let event_functions = self.sprites.animation_event_function_names();
         for (interrupt, handler) in &self.handlers {
+            for routine in &event_functions {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
+            }
             if self.functions.reaches(&handler.code, enqueue.name()) {
                 return Err(Error::MainLoopOnly {
                     routine: enqueue.name().to_string(),
@@ -1001,9 +1162,62 @@ impl RustBoy {
                 });
             }
         }
+        for (interrupt, handler) in &self.handlers {
+            for routine in &self.main_only_routines {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
+            }
+        }
+        if self.music.is_some() {
+            for (interrupt, handler) in &self.handlers {
+                for routine in [
+                    crate::stdlib::audio::music::START,
+                    crate::stdlib::audio::music::PAUSE,
+                    crate::stdlib::audio::music::RESUME,
+                    crate::stdlib::audio::music::STOP,
+                    crate::stdlib::audio::music::RESERVE,
+                    crate::stdlib::audio::music::RELEASE,
+                    crate::stdlib::audio::music::TICK,
+                    "RustBoyHuge_hUGE_init",
+                    "RustBoyHuge_hUGE_dosound",
+                    "RustBoyHuge_hUGE_mute_channel",
+                ] {
+                    if self.functions.reaches(&handler.code, routine) {
+                        return Err(Error::MainLoopOnly {
+                            routine: routine.into(),
+                            handler: interrupt.handler_label().into(),
+                        });
+                    }
+                }
+            }
+        }
         let functions =
             self.functions
                 .generate_used(&code, vars.names(), &generated, &self.config.builtins)?;
+        if self.music.is_some() {
+            let name = crate::stdlib::audio::music::RAM_BASE;
+            let first = if let Some((_, kind)) = vars.names().find(|(var, _)| *var == name) {
+                Some(super::error::Definition::Variable(kind))
+            } else if self.functions.is_external_symbol(name) {
+                Some(super::error::Definition::ExternalSymbol)
+            } else if code.iter().any(|body| defines(body, name)) || defines(&functions.code, name)
+            {
+                Some(super::error::Definition::CodeSymbol)
+            } else {
+                None
+            };
+            if let Some(first) = first {
+                return Err(Error::NameConflict {
+                    name: name.into(),
+                    first,
+                    second: super::error::Definition::BuiltinLabel,
+                });
+            }
+        }
         let mut buffers = Vec::new();
         if self.uses_shadow_oam()
             || functions
@@ -1052,6 +1266,15 @@ impl RustBoy {
                     0,
                 ),
             ]);
+        }
+        if self.music.is_some() {
+            buffers.push((
+                crate::stdlib::audio::music::BUFFER,
+                "Music driver WRAM",
+                MemoryRegion::Wram0,
+                crate::stdlib::audio::music::BUFFER_BYTES,
+                0,
+            ));
         }
         {
             // Generated RAM buffers cannot also be user-defined symbols: a reference
@@ -1118,9 +1341,10 @@ impl RustBoy {
             asm.emit_all(handler);
         }
         asm.emit_all(raw_functions);
+        asm.emit_all(music_data);
 
         // === VARIABLES: the INIT CHUNK, and the DATA CHUNK ===
-        // The variables of the emitted routines (`wCurKeys`, `wNewKeys` for UpdateKeys, and
+        // The variables of the emitted routines (`wCurKeys`, `wNewKeys`, and `wReleasedKeys` for UpdateKeys, and
         // those of the user's routines), however the program calls them, unless it defines
         // them already (as variables or in raw code)
         for name in functions.variables {
@@ -1134,10 +1358,19 @@ impl RustBoy {
         }
         // Every variable now: they must fit
         vars.check_layout()?;
+        if self.music.is_some() {
+            asm.chunk(Chunk::Constants);
+            asm.def(
+                crate::stdlib::audio::music::RAM_BASE,
+                vars.buffer_address(crate::stdlib::audio::music::BUFFER)
+                    .expect("music buffer allocated")
+                    .to_string(),
+            );
+        }
 
         asm.chunk(Chunk::Init);
         asm.emit_all(startup);
-        asm.emit_all(vars.generate_init_code());
+        asm.emit_all(vars.generate_init_code(&labels));
         asm.emit_all(finish);
 
         asm.chunk(Chunk::Data);
@@ -1183,6 +1416,17 @@ impl RustBoy {
                     target: JumpTarget::Label(vram_queue::flush().name().to_string()),
                 });
                 saves |= vram_queue::flush().changes();
+            }
+            if interrupt == Interrupt::VBlank
+                && self
+                    .music
+                    .as_ref()
+                    .is_some_and(|m| m.clock == MusicClock::VBlank)
+            {
+                code.push(Instr::Call {
+                    target: JumpTarget::Label(crate::stdlib::audio::music::TICK.into()),
+                });
+                saves |= Regs::ALL;
             }
             if let Some(handler) = given {
                 code.extend(handler.code.iter().cloned());
@@ -1231,7 +1475,7 @@ impl RustBoy {
     ///
     /// This method takes an InputManager and generates the complete input
     /// handling code, including:
-    /// 1. Calling UpdateKeys to poll the controller
+    /// 1. Calling UpdateKeys once per frame, before the first manager’s bindings
     /// 2. Checking each registered button binding
     /// 3. Executing associated actions when buttons are pressed
     ///
@@ -1254,15 +1498,23 @@ impl RustBoy {
         // Auto-create input variables required by UpdateKeys
         self.vars.create_u8("wCurKeys", 0);
         self.vars.create_u8("wNewKeys", 0);
+        self.vars.create_u8("wReleasedKeys", 0);
+        let first_id = self.input_binding_count;
+        for name in inputs.repeat_variable_names(first_id) {
+            self.vars.create_u8(&name, 0);
+        }
 
-        // Add call to UpdateKeys
-        self.main_loop_code.push(Instr::Call {
-            target: JumpTarget::Label("UpdateKeys".to_string()),
-        });
+        // All managers share one sample, including its press and release edges.
+        if !self.updates_keys {
+            self.main_loop_code.push(Instr::Call {
+                target: JumpTarget::Label("UpdateKeys".to_string()),
+            });
+        }
 
         // Add the input handling code (the actions are the user's code)
         self.main_loop_code
-            .extend(checked(inputs.generate_code(self.asm.labels())));
+            .extend(checked(inputs.generate_code(self.asm.labels(), first_id)));
+        self.input_binding_count += inputs.binding_count();
         self.updates_keys = true;
 
         self
@@ -1502,6 +1754,9 @@ impl RustBoy {
     /// before user VBlank code. Writes appear at the next flush. On return, carry is
     /// clear if accepted, set if full or outside VRAM; rejected writes must be retried
     /// by the caller if required. Changes all registers and flags, preserving IME.
+    /// If called with the LCD off (for example from `init()`), accepted entries stay
+    /// queued until a VBlank after the LCD is on; the queue does not poll or flush them
+    /// during initialization.
     ///
     /// Do not call the generated code from interrupt handlers: the queue has one
     /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it
@@ -1674,6 +1929,73 @@ impl RustBoy {
             })
             .collect();
         self.sprites.create_composite(name, sprites)
+    }
+
+    /// Reserve OAM slots for runtime sprites. Pools and static sprites share 40 entries.
+    /// Tiles remain registered separately; pool writes take an existing hardware tile index.
+    /// All pool operations belong in init/main; handler use returns MainLoopOnly from build.
+    /// Create pools after [`RustBoy::set_sprite_size`]: the size is fixed from the first pool on.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, `count` is 0 or more than the free OAM entries, or the
+    /// pool's state or routine names are already used.
+    #[track_caller]
+    pub fn create_sprite_pool(&mut self, name: &str, count: u8) -> super::sprite_pool::SpritePool {
+        check_name("sprite pool", name);
+        let occupancy = format!("wPool{name}Used");
+        let routines = crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            0,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        );
+        assert!(
+            !self.vars.names().any(|(existing, _)| existing == occupancy),
+            "sprite pool state name already exists"
+        );
+        for routine in &routines {
+            assert!(
+                !self.function_exists(routine.name()),
+                "sprite pool routine name already exists"
+            );
+        }
+        let first = self.sprites.reserve_pool_slots(count);
+        self.vars.create_array(
+            &occupancy,
+            super::variables::ArrayElement::U8,
+            u16::from(count),
+            0,
+        );
+        for routine in crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            first,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        ) {
+            self.main_only_routines.push(routine.name().to_string());
+            self.define_routine(routine);
+        }
+        super::sprite_pool::SpritePool {
+            name: name.to_string(),
+            first,
+            count,
+        }
+    }
+
+    /// Create a pool for runtime entities, each represented by one hardware sprite.
+    /// Entities share OAM slots with static sprites and can be spawned, updated, hidden,
+    /// and despawned at runtime. The entity index is returned in A by `spawn`.
+    /// Operations belong in init/main; using them in a handler makes `build()` return
+    /// `Error::MainLoopOnly`. Create it after [`RustBoy::set_sprite_size`], as a sprite pool.
+    ///
+    /// # Panics
+    /// As [`RustBoy::create_sprite_pool`]: if `name` cannot be a label, `capacity` is 0 or more
+    /// than the free OAM entries, or the pool's names are already used.
+    #[track_caller]
+    pub fn create_entity_pool(&mut self, name: &str, capacity: u8) -> super::entities::EntityPool {
+        super::entities::EntityPool::new(self.create_sprite_pool(name, capacity))
     }
 
     /// Give sprite `sprite` more tiles, from another source: frames spread over several
@@ -2026,6 +2348,7 @@ mod tests {
         let out = gb.build().unwrap();
         assert_eq!(out.matches("wCurKeys: db").count(), 1);
         assert_eq!(out.matches("wNewKeys: db").count(), 1);
+        assert_eq!(out.matches("wReleasedKeys: db").count(), 1);
     }
 
     #[test]
@@ -2922,6 +3245,44 @@ mod tests {
         gb.add_inputs(more);
 
         assert_labels_ok(&gb.build().unwrap());
+    }
+
+    #[test]
+    fn test_repeat_action_with_local_labels_links() {
+        let mut gb = RustBoy::new();
+        let (paddle, _) = paddle_and_ball(&mut gb);
+        let mut inputs = InputManager::new();
+        // Bounded movement contains local branch labels. The initial press and
+        // subsequent repeats must share one copy of those definitions.
+        inputs.on_repeat(
+            PadButton::Left,
+            3,
+            2,
+            gb.sprites.move_left_limit(paddle, 1, 8),
+        );
+        gb.add_inputs(inputs);
+        assert_links(&gb.build().unwrap());
+    }
+
+    #[test]
+    fn test_multiple_input_managers_poll_once_before_all_bindings() {
+        let mut gb = RustBoy::new();
+        for (button, marker) in [
+            (PadButton::A, ".first_input_action"),
+            (PadButton::B, ".second_input_action"),
+        ] {
+            let mut inputs = InputManager::new();
+            let mut action = Block::new();
+            action.label(marker).nop();
+            inputs.on_just_pressed(button, action.into_instrs());
+            gb.add_inputs(inputs);
+        }
+        let out = gb.build().unwrap();
+        assert_eq!(out.matches("call UpdateKeys").count(), 1, "{out}");
+        let poll = out.find("call UpdateKeys").unwrap();
+        assert!(poll < out.find(".first_input_action:").unwrap());
+        assert!(poll < out.find(".second_input_action:").unwrap());
+        assert_links(&out);
     }
 
     #[test]
@@ -3882,8 +4243,8 @@ mod tests {
                 out
             );
         }
-        // And the code it writes for these settings is the code written before
-        let palettes = "    ld a, 228\n    ld [rBGP], a\n    ld [rOBP0], a\n    ld [rOBP1], a\n";
+        // And the generated start-up palette writes use the shared ldh-based stdlib writer
+        let palettes = "    ld a, 228\n    ldh [rBGP], a\n    ld a, 228\n    ldh [rOBP0], a\n    ld a, 228\n    ldh [rOBP1], a\n";
         assert!(out.contains(palettes), "{}", out);
         assert_eq!(
             lcdc_on(&out),
@@ -3945,12 +4306,12 @@ mod tests {
 
     #[test]
     fn test_palettes_from_the_config() {
-        // Each register gets its palette, at start-up; `a` is loaded once per value
-        for (palettes, loads) in [
-            (Palettes::all(0x1B), 1),
-            (Palettes::all(0x1B).obp0(0xE4), 3),
-            (Palettes::all(0xE4).obp1(0x00), 2),
-            (Palettes::default().bgp(0xFF).obp0(0x00).obp1(0x55), 3),
+        // Each register gets its palette at startup through set_palette's ldh write.
+        for palettes in [
+            Palettes::all(0x1B),
+            Palettes::all(0x1B).obp0(0xE4),
+            Palettes::all(0xE4).obp1(0x00),
+            Palettes::default().bgp(0xFF).obp0(0x00).obp1(0x55),
         ] {
             let mut gb = RustBoy::new();
             gb.set_palettes(palettes);
@@ -3959,14 +4320,10 @@ mod tests {
             assert_mem(&cpu, "rOBP0", palettes.obp0);
             assert_mem(&cpu, "rOBP1", palettes.obp1);
             let out = gb.build().unwrap();
-            let start = out.find("ld [rBGP], a").unwrap() - 20;
-            let end = out.find("ld [rOBP1], a").unwrap();
-            assert_eq!(
-                out[start..end].matches("ld a, ").count(),
-                loads,
-                "{}",
-                &out[start..end]
-            );
+            for register in ["rBGP", "rOBP0", "rOBP1"] {
+                assert_eq!(out.matches(&format!("ldh [{register}], a")).count(), 1);
+                assert!(!out.contains(&format!("ld [{register}], a")));
+            }
         }
     }
 
@@ -4079,7 +4436,7 @@ mod tests {
         function_of(&mut gb, "SetSpeed", vars[3].set(7));
         function_of(&mut gb, "GetSpeed", vars[3].get());
         // An animated sprite and inputs: build() adds wFrameCounter, wAnim_Coin_Current
-        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys and wNewKeys (called through a
+        // and wAnim_Coin_Dir, and UpdateKeys' wCurKeys, wNewKeys, and wReleasedKeys (called through a
         // function, so they are build()'s, not add_inputs'). The review of #32 found they
         // went into the first section and moved the second one: `wHigh` was at $C001 by
         // get_address, $C003 once linked
@@ -4108,7 +4465,7 @@ mod tests {
                  SECTION \"Variables\", WRAM0[$C000]\n    wLives: db\n    wScore: dw\n    \
                  SECTION \"Scores\", WRAM0[$C003]\n    wHigh: dw\n    wVBlankFlag: db\n    \
                  wFrameCounter: db\n    wAnim_Coin_Current: db\n    wAnim_Coin_Dir: db\n    \
-                 wCurKeys: db\n    wNewKeys: db\n    SECTION \"Buffer\", WRAM0\n"
+                 wCurKeys: db\n    wNewKeys: db\n    wReleasedKeys: db\n    SECTION \"Buffer\", WRAM0\n"
             ),
             "{}",
             data
@@ -4138,6 +4495,7 @@ mod tests {
             ("wFrameCounter", 0xC006),
             ("wAnim_Coin_Current", 0xC007),
             ("wNewKeys", 0xC00A),
+            ("wReleasedKeys", 0xC00B),
             // The sprite's shadow OAM on the last page of WRAM0, and the OAM DMA routine at
             // the top of the variables' HRAM (B12): no variable moved for them
             ("wShadowOAM", 0xCF00),

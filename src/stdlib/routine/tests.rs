@@ -193,6 +193,7 @@ fn test_update_keys_convention() {
                 cpu.consts.insert(flag.name.to_string(), flag.value);
             }
             cpu.mem.insert("wCurKeys".to_string(), held);
+            cpu.mem.insert("wReleasedKeys".to_string(), 0x42);
         }
     };
     let (none, some) = (keys(0x00), keys(0x21));

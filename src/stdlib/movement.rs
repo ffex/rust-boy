@@ -56,4 +56,22 @@ mod tests {
         assert_eq!(u16::from_be_bytes([cpu.d, cpu.e]), 0x0100);
         assert_eq!(u16::from_be_bytes([cpu.b, cpu.c]), 0x0040);
     }
+    #[test]
+    fn negative_velocity_and_gravity_and_position_wrap() {
+        for (position, velocity, gravity, next_position, next_velocity) in [
+            (0x0200, 0xFF80, 0xFFC0, 0x0180, 0xFF40),
+            (0xFFC0, 0x0080, 0, 0x0040, 0x0080),
+        ] {
+            let mut cpu = TestCpu::default();
+            cpu.a = 0x5A;
+            write_pair(&mut cpu.h, &mut cpu.l, position);
+            write_pair(&mut cpu.d, &mut cpu.e, velocity);
+            write_pair(&mut cpu.b, &mut cpu.c, gravity);
+            cpu.run(step_8_8().body());
+            assert_eq!(read_hl(&cpu), next_position);
+            assert_eq!(u16::from_be_bytes([cpu.d, cpu.e]), next_velocity);
+            assert_eq!(u16::from_be_bytes([cpu.b, cpu.c]), gravity);
+            assert_eq!(cpu.a, 0x5A);
+        }
+    }
 }

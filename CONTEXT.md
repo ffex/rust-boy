@@ -1530,6 +1530,7 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   `TileCollision` (`refactor-p3-tile-collision`) (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
+  Register-based function arguments use `RustBoy::call_args` / `Call::with_args`.
   Signed 8.8 position/velocity/gravity integration exists in `stdlib::movement`.
   `stdlib::flow` provides `While`, fixed-count `For` and `SwitchA`; For saves BC around its body.
   Unsigned 16-bit add/subtract/compare, 8×8 multiply and 16÷8 divide are available in `stdlib::math`.

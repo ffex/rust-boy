@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Register-based function arguments**: `RustBoy::call_args` and `Call::with_args`
+  emit setup immediately before each call, using the callee's register convention.
+
 - **Fixed-point movement** (`stdlib::movement::step_8_8`): integrate signed 8.8 velocity
   and gravity with fractional accumulation and wrapping arithmetic.
 - **Control flow**: `While`, fixed-count `For` and `SwitchA` compose with existing conditions.

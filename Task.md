@@ -381,7 +381,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       multiplication and nine-bit shifted division remainders.
 - [x] Control flow: `While`, fixed-count `For`, `SwitchA` (`refactor-p3-control-flow`); nested loops
       preserve their BC counters, with assembled label-nesting and hardware execution regressions.
-- [ ] Functions with parameters
+- [x] Functions with register parameters: `RustBoy::call_args` / `Call::with_args` emit
+      register setup immediately before each call; routines declare inputs with `Routine::with_reads`.
 - [x] Soft reset (A+B+Start+Select) (branch `refactor-p3-interrupts`: `RustBoy::set_soft_reset` /
       `RustBoyConfig::soft_reset`, off by default; `stdlib::inputs::check_soft_reset`, `CheckSoftReset`, reads
       `wCurKeys` after `UpdateKeys` at the end of each frame and jumps to `$0100`, so the whole start-up runs again;

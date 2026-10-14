@@ -24,6 +24,10 @@ pub struct Call {
 
 impl Call {
     /// Create a function call with argument setup instructions.
+    ///
+    /// `args` loads the registers expected by the callee, for example `a` and `de`.
+    /// The setup is emitted immediately before this call; no stack arguments or
+    /// implicit conversions are added. Routines declare inputs with `Routine::with_reads`.
     pub fn with_args(func_name: &str, args: Vec<Instr>) -> Self {
         Self {
             func_name: func_name.to_string(),
@@ -47,5 +51,34 @@ impl Emittable for Call {
             target: JumpTarget::Label(self.func_name.clone()),
         });
         instrs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::asm::{Block, R8, R16};
+
+    #[test]
+    fn every_call_emits_its_register_setup_immediately_before_the_call() {
+        let labels = LabelAllocator::new();
+        let mut actual = Vec::new();
+        for (a, de) in [(0x12, 0x3456), (0x78, 0x9ABC)] {
+            let mut setup = Block::new();
+            setup.ld(R8::A, a).ld(R16::DE, de);
+            actual.extend(Call::with_args("Receive", setup.into_instrs()).emit(&labels));
+        }
+        let actual: Vec<_> = actual.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            actual,
+            [
+                "ld a, 18",
+                "ld de, 13398",
+                "call Receive",
+                "ld a, 120",
+                "ld de, 39612",
+                "call Receive"
+            ]
+        );
     }
 }

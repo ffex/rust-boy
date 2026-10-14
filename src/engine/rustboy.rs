@@ -792,6 +792,10 @@ impl RustBoy {
 
     /// Call a function with setup instructions (parameters) and add to main loop
     ///
+    /// Parameters are passed in registers: `setup` loads the registers that the callee
+    /// expects (for example `a` and `de`); no stack arguments or implicit conversions
+    /// are added. A `Routine` documents its inputs with `Routine::with_reads`.
+    ///
     /// This method emits the setup instructions before the call directly to
     /// the main loop, allowing fluent chaining without borrow checker issues.
     ///

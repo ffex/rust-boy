@@ -153,12 +153,14 @@ together: every breaking change of the refactoring is in this release, so a prog
   any arrangement of available 8x8 or 8x16 hardware parts with signed offsets,
   per-part tiles/flags and OAM entries in creation order. Composite movement and animation
   apply to the whole group. Existing 16x16 calls retain names and generated output.
-- **Per-animation timing** (Phase 3): `sprites.set_animation_delay(sprite, index, frames)` overrides one animation's
+- **Per-animation timing** (Phase 3): `sprites.set_animation_period(sprite, index, frames)` overrides one animation's
   period (1..=255). Sprites with overrides get their own clock; their other animations use the global period.
   Selection changes reset the clock, repeated enable calls keep it, disabled frames stop it. The composite setters
-  configure every part; `clear_animation_delay` removes an override. Each timed sprite uses two WRAM bytes; BC is
+  configure every part; `clear_animation_period` removes an override. Each timed sprite uses two WRAM bytes; BC is
   preserved. Programs without overrides, the examples too, are unchanged; `RustBoy::set_animation_delay` stays the
   global default.
+  The per-animation methods use `set_animation_period` and `set_composite_animation_period` to distinguish them from
+  the global setter.
 - **Animation completion** (Phase 3): `enable_animation_events` / `take_animation_event` give coalescing completion
   flags (Once reaches its last frame, Loop wraps, PingPong returns to its first frame); `set_animation_callback` binds
   a named function called after all sprite parts stepped, with BC/DE/HL preserved; the composite APIs give one

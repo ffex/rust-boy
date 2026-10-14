@@ -305,9 +305,9 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
 - [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
       overrides, independent selection clocks, default/global fallback, composite setters)
-- [ ] Follow-up of the per-animation speed (from the review of the #50 chain, maintainer decision): the name
-      `SpriteManager::set_animation_delay(sprite, index, frames)` is the global `RustBoy::set_animation_delay(frames)`'s,
-      with another meaning; `set_animation_period` would tell them apart (an API rename)
+- [x] Follow-up of the per-animation speed (review of the #50 chain): distinguish per-animation
+      overrides from global `RustBoy::set_animation_delay` (renamed to `set_animation_period`
+      and the composite/clear counterparts).
 - [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
       coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
 - [ ] Follow-up of the animation events (from the review of the #50 chain, maintainer decision): re-enabling a finished
@@ -316,6 +316,7 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Follow-up of the animation events (from review 2 of the #50 chain): `build()` could reject restart snippets
       generated before the sprite's timing or events changed (today documented: configure first; a cleared period
       leaves an undefined `wAnim_{name}_Timer` for rgbasm)
+
 
 ### Audio
 - [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in

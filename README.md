@@ -286,7 +286,7 @@ use rust_boy::prelude::*;
 let mut gb = RustBoy::new();
 let actor = gb.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 4]), 40, 40, 0);
 let walk = gb.sprites.add_animation(actor, "Walk", 0, 3, AnimationType::PingPong);
-gb.sprites.set_animation_delay(actor, walk, 3);
+gb.sprites.set_animation_period(actor, walk, 3);
 gb.sprites.set_initial_animation(actor, walk);
 let asm = gb.build()?;
 # Ok::<(), rust_boy::engine::Error>(())
@@ -299,9 +299,9 @@ the selected animation keep its progress; a disabled frame stops/resets it. Exis
 frame stepping is unchanged, so selecting an animation does not immediately replace
 the displayed tile. Direct calls to animation functions bypass dispatcher timing.
 
-Use `set_composite_animation_delay(composite, index, frames)` to synchronize all
-metasprite parts. Clear overrides with `clear_animation_delay` or
-`clear_composite_animation_delay`. These are generation-time settings, with two WRAM
+Use `set_composite_animation_period(composite, index, frames)` to synchronize all
+metasprite parts. Clear overrides with `clear_animation_period` or
+`clear_composite_animation_period`. These are generation-time settings, with two WRAM
 bytes per independently timed sprite. Programs without overrides retain global timing.
 
 ### Animation completion and replay
@@ -315,7 +315,7 @@ let mut gb = RustBoy::new();
 let actor = gb.add_sprite("Actor", TileSource::from_raw(&[["$00"; 8]; 4]), 40, 40, 0);
 let attack = gb.sprites.add_animation(actor, "Attack", 0, 2, AnimationType::Once);
 let idle = gb.sprites.add_animation(actor, "Idle", 3, 3, AnimationType::Loop);
-gb.sprites.set_animation_delay(actor, attack, 2);
+gb.sprites.set_animation_period(actor, attack, 2);
 gb.sprites.set_animation_callback(actor, attack, "AttackDone");
 gb.sprites.set_initial_animation(actor, attack);
 // Configure subscriptions/timing before generating restart snippets.

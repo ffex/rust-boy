@@ -649,7 +649,7 @@ impl SpriteManager {
     ///
     /// The snippet writes the state the sprite has **when it is generated**: set periods,
     /// events and callbacks first. A snippet generated before `enable_animation_events` skips
-    /// the event state, and one generated before `clear_animation_delay` writes a timer that
+    /// the event state, and one generated before `clear_animation_period` writes a timer that
     /// no longer exists (rgbasm then fails on the undefined `wAnim_{name}_Timer`).
     ///
     /// # Panics
@@ -746,7 +746,7 @@ impl SpriteManager {
     /// # Panics
     /// If `sprite_id` is not a sprite of this manager, it has no animation `animation_index`,
     /// or `delay` is 0.
-    pub fn set_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8, delay: u8) {
+    pub fn set_animation_period(&mut self, sprite_id: SpriteId, animation_index: u8, delay: u8) {
         assert!(delay > 0, "per-animation delay must be 1..=255");
         let sprite = self.sprite_mut(sprite_id);
         sprite.check_animation_index(animation_index);
@@ -758,7 +758,7 @@ impl SpriteManager {
     ///
     /// # Panics
     /// If `sprite_id` is not a sprite of this manager, or it has no animation `animation_index`.
-    pub fn clear_animation_delay(&mut self, sprite_id: SpriteId, animation_index: u8) {
+    pub fn clear_animation_period(&mut self, sprite_id: SpriteId, animation_index: u8) {
         let sprite = self.sprite_mut(sprite_id);
         sprite.check_animation_index(animation_index);
         sprite.animations[usize::from(animation_index)].delay = None;
@@ -771,7 +771,7 @@ impl SpriteManager {
     /// # Panics
     /// If `composite_id` is unknown, a part has no animation `animation_index`, or `delay` is 0;
     /// no part is changed then.
-    pub fn set_composite_animation_delay(
+    pub fn set_composite_animation_period(
         &mut self,
         composite_id: CompositeSpriteId,
         animation_index: u8,
@@ -783,7 +783,7 @@ impl SpriteManager {
             self.sprite(*id).check_animation_index(animation_index);
         }
         for id in ids {
-            self.set_animation_delay(id, animation_index, delay);
+            self.set_animation_period(id, animation_index, delay);
         }
     }
 
@@ -792,7 +792,7 @@ impl SpriteManager {
     /// # Panics
     /// If `composite_id` is unknown or a part has no animation `animation_index`; no part is
     /// changed then.
-    pub fn clear_composite_animation_delay(
+    pub fn clear_composite_animation_period(
         &mut self,
         composite_id: CompositeSpriteId,
         animation_index: u8,
@@ -802,7 +802,7 @@ impl SpriteManager {
             self.sprite(*id).check_animation_index(animation_index);
         }
         for id in ids {
-            self.clear_animation_delay(id, animation_index);
+            self.clear_animation_period(id, animation_index);
         }
     }
 
@@ -2589,7 +2589,7 @@ mod tests {
             let sprite = sm.add_for_test("Timed", 0, 0, 0, 2);
             sm.add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
             sm.set_initial_animation(sprite, 0);
-            sm.set_animation_delay(sprite, 0, delay);
+            sm.set_animation_period(sprite, 0, delay);
             let mut cpu = animation_cpu(&sm);
             cpu.b = 0xab;
             cpu.c = 0xcd;
@@ -2617,7 +2617,7 @@ mod tests {
         sm.add_animation(shared, "Shared", 0, 1, AnimationType::Loop);
         sm.set_initial_animation(timed, 0);
         sm.set_initial_animation(shared, 0);
-        sm.set_animation_delay(timed, 0, 2);
+        sm.set_animation_period(timed, 0, 2);
         let code = animation_program(&sm, 4);
         let mut cpu = animation_cpu(&sm);
         cpu.run(&code);
@@ -2655,8 +2655,8 @@ mod tests {
         sm.add_animation(timed, "Slow", 0, 1, AnimationType::Loop);
         sm.add_animation(timed, "Quick", 0, 1, AnimationType::Loop);
         sm.set_initial_animation(timed, 0);
-        sm.set_animation_delay(timed, 0, 200);
-        sm.set_animation_delay(timed, 1, 3);
+        sm.set_animation_period(timed, 0, 200);
+        sm.set_animation_period(timed, 1, 3);
         let code = animation_program(&sm, 1);
         let mut cpu = animation_cpu(&sm);
         for _ in 0..5 {
@@ -2681,19 +2681,19 @@ mod tests {
             .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
         let before = gb.build().unwrap();
         for message in [
-            panic_message(|| gb.sprites.set_animation_delay(sprite, 0, 0)),
-            panic_message(|| gb.sprites.set_animation_delay(sprite, 1, 2)),
-            panic_message(|| gb.sprites.set_animation_delay(SpriteId(999), 0, 2)),
-            panic_message(|| gb.sprites.clear_animation_delay(sprite, 1)),
+            panic_message(|| gb.sprites.set_animation_period(sprite, 0, 0)),
+            panic_message(|| gb.sprites.set_animation_period(sprite, 1, 2)),
+            panic_message(|| gb.sprites.set_animation_period(SpriteId(999), 0, 2)),
+            panic_message(|| gb.sprites.clear_animation_period(sprite, 1)),
         ] {
             assert!(!message.is_empty());
         }
         assert_eq!(before, gb.build().unwrap());
-        gb.sprites.set_animation_delay(sprite, 0, 2);
+        gb.sprites.set_animation_period(sprite, 0, 2);
         let timed = gb.build().unwrap();
         assert_eq!(timed, gb.build().unwrap());
         assert!(timed.contains("wAnim_Actor_Timer"));
-        gb.sprites.clear_animation_delay(sprite, 0);
+        gb.sprites.clear_animation_period(sprite, 0);
         assert_eq!(before, gb.build().unwrap());
     }
     #[test]
@@ -2706,7 +2706,7 @@ mod tests {
             let sprite = sm.add_for_test("Actor", 0, 0, 0, 3);
             sm.add_animation(sprite, "Play", 0, 2, kind);
             sm.set_initial_animation(sprite, 0);
-            sm.set_animation_delay(sprite, 0, 3);
+            sm.set_animation_period(sprite, 0, 3);
             let code = animation_program(&sm, 1);
             let mut cpu = animation_cpu(&sm);
             let mut previous = 0;
@@ -2732,7 +2732,7 @@ mod tests {
                 .add_animation(sprite, &format!("Pose{index}"), 0, 1, AnimationType::Loop);
         }
         gb.sprites.set_initial_animation(sprite, 254);
-        gb.sprites.set_animation_delay(sprite, 254, 2);
+        gb.sprites.set_animation_period(sprite, 254, 2);
         crate::asm::label_check::assert_links(&gb.build().unwrap());
         let code = animation_program(&gb.sprites, 1);
         let mut cpu = animation_cpu(&gb.sprites);
@@ -2910,7 +2910,7 @@ mod tests {
         let sprite = sm.add_for_test("Timed", 0, 0, 0, 3);
         sm.add_animation(sprite, "Walk", 0, 2, AnimationType::Loop);
         sm.set_initial_animation(sprite, 0);
-        sm.set_animation_delay(sprite, 0, 4);
+        sm.set_animation_period(sprite, 0, 4);
         let code = animation_program(&sm, 1);
         let mut cpu = animation_cpu(&sm);
         for _ in 0..6 {
@@ -2984,7 +2984,7 @@ mod tests {
         sm.add_animation(sprite, "Idle", 0, 1, AnimationType::Loop);
         sm.set_initial_animation(sprite, 0);
         sm.enable_animation_events(sprite, 0);
-        sm.set_animation_delay(sprite, 0, 2);
+        sm.set_animation_period(sprite, 0, 2);
         let code = animation_program(&sm, 3);
         let mut cpu = animation_cpu(&sm);
         cpu.run(&code);

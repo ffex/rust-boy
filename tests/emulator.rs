@@ -2208,7 +2208,7 @@ fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
                 .add_animation(sprite, "Spin", 0, 1, AnimationType::Loop);
             game.sprites.set_initial_animation(sprite, 0);
         }
-        game.sprites.set_animation_delay(fast, 0, 1);
+        game.sprites.set_animation_period(fast, 0, 1);
         let parts: Vec<_> = (0..3)
             .map(|i| MetaspritePart::new(tiles.clone(), i * 8, 0, 0u8))
             .collect();
@@ -2216,7 +2216,7 @@ fn independent_sprite_and_metasprite_animation_periods_survive_dma() {
         game.sprites
             .add_composite_animation(meta, "Walk", 0, 1, AnimationType::Loop);
         game.sprites.set_composite_initial_animation(meta, 0);
-        game.sprites.set_composite_animation_delay(meta, 0, 2);
+        game.sprites.set_composite_animation_period(meta, 0, 2);
         // Repeated enable is normal for held-key bindings; it must not stall a clock.
         game.add_to_main_loop(game.sprites.enable_composite_animation(meta, 0));
         let rom = engine_rom(&game);
@@ -2272,7 +2272,7 @@ fn animation_callbacks_run_once_after_all_metasprite_parts_and_can_chain() {
             .sprites
             .add_composite_animation(meta, "Idle", 0, 1, AnimationType::Loop);
         game.sprites.set_composite_initial_animation(meta, once);
-        game.sprites.set_composite_animation_delay(meta, once, 2);
+        game.sprites.set_composite_animation_period(meta, once, 2);
         game.sprites
             .set_composite_animation_callback(meta, once, "AnimationDone");
         let calls = game.vars.create_u8("wCalls", 0);
@@ -2351,7 +2351,7 @@ fn a_once_callback_can_restart_itself_without_duplicate_terminal_notifications()
     let once = game
         .sprites
         .add_animation(sprite, "Once", 0, 2, AnimationType::Once);
-    game.sprites.set_animation_delay(sprite, once, 3);
+    game.sprites.set_animation_period(sprite, once, 3);
     game.sprites.set_initial_animation(sprite, once);
     game.sprites
         .set_animation_callback(sprite, once, "RestartOnce");

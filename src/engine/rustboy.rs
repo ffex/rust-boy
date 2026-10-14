@@ -83,6 +83,7 @@ pub struct RustBoy {
 
     /// Whether the program uses the bounded VRAM write queue.
     vram_queue: bool,
+    main_only_routines: Vec<String>,
 
     /// The settings: sprite size, background tilemap, palettes, LCDC flags, forced
     /// builtins, animation delay. The sprite size is also the sprite manager's, which
@@ -130,6 +131,7 @@ impl RustBoy {
             switched_interrupts: BTreeSet::new(),
             updates_keys: false,
             vram_queue: false,
+            main_only_routines: Vec::new(),
             config,
         }
     }
@@ -164,7 +166,8 @@ impl RustBoy {
     /// needs 8x16 mode.
     ///
     /// # Panics
-    /// If sprites were already added with another size: call it before adding sprites.
+    /// If sprites or sprite pools were already added with another size: call it before adding
+    /// them (a pool's Write routine checks 8x16 tiles when the pool is created).
     pub fn set_sprite_size(&mut self, size: SpriteSize) -> &mut Self {
         self.sprites.set_size(size);
         self.config.sprite_size = size;
@@ -814,20 +817,26 @@ impl RustBoy {
             startup.emit_all(clear_objects_screen(&labels));
         }
 
-        // The palettes, every one of them (OBP1 too, B28); `a` is loaded again only for
-        // another value
+        // The palettes, every one of them (OBP1 too, B28), through the stdlib writer
         let palettes = self.config.palettes;
-        let mut loaded = None;
         for (register, palette) in [
-            (hw::BGP, palettes.bgp),
-            (hw::OBP0, palettes.obp0),
-            (hw::OBP1, palettes.obp1),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Background,
+                palettes.bgp,
+            ),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Object0,
+                palettes.obp0,
+            ),
+            (
+                crate::stdlib::graphics::palette::PaletteRegister::Object1,
+                palettes.obp1,
+            ),
         ] {
-            if loaded != Some(palette) {
-                startup.ld_a(palette);
-                loaded = Some(palette);
-            }
-            startup.ld_addr_def_a(register);
+            startup.emit_all(crate::stdlib::graphics::palette::set_palette(
+                register,
+                crate::stdlib::graphics::palette::Palette::from(palette),
+            ));
         }
 
         // Then the variables (below), then the interrupt sources and `rIE`, then the user
@@ -995,14 +1004,41 @@ impl RustBoy {
         code.extend(handlers.iter().map(Routine::body));
         let mut generated: Vec<String> = animations.iter().map(|(name, _)| name.clone()).collect();
         generated.extend(handlers.iter().map(|handler| handler.name().to_string()));
+        for callback in self.sprites.animation_callback_names() {
+            if !self.function_exists(callback) && !self.functions.is_external_symbol(callback) {
+                return Err(Error::UnknownFunction {
+                    name: callback.to_string(),
+                    available: self.functions.available_functions(&generated),
+                });
+            }
+        }
         // The VRAM queue has one producer, the main loop: no handler may enqueue
         let enqueue = vram_queue::enqueue();
+        let event_functions = self.sprites.animation_event_function_names();
         for (interrupt, handler) in &self.handlers {
+            for routine in &event_functions {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
+            }
             if self.functions.reaches(&handler.code, enqueue.name()) {
                 return Err(Error::MainLoopOnly {
                     routine: enqueue.name().to_string(),
                     handler: interrupt.handler_label().to_string(),
                 });
+            }
+        }
+        for (interrupt, handler) in &self.handlers {
+            for routine in &self.main_only_routines {
+                if self.functions.reaches(&handler.code, routine) {
+                    return Err(Error::MainLoopOnly {
+                        routine: routine.clone(),
+                        handler: interrupt.handler_label().to_string(),
+                    });
+                }
             }
         }
         let functions =
@@ -1141,7 +1177,7 @@ impl RustBoy {
 
         asm.chunk(Chunk::Init);
         asm.emit_all(startup);
-        asm.emit_all(vars.generate_init_code());
+        asm.emit_all(vars.generate_init_code(&labels));
         asm.emit_all(finish);
 
         asm.chunk(Chunk::Data);
@@ -1507,6 +1543,9 @@ impl RustBoy {
     /// before user VBlank code. Writes appear at the next flush. On return, carry is
     /// clear if accepted, set if full or outside VRAM; rejected writes must be retried
     /// by the caller if required. Changes all registers and flags, preserving IME.
+    /// If called with the LCD off (for example from `init()`), accepted entries stay
+    /// queued until a VBlank after the LCD is on; the queue does not poll or flush them
+    /// during initialization.
     ///
     /// Do not call the generated code from interrupt handlers: the queue has one
     /// producer, and `build()` returns [`Error::MainLoopOnly`] when handler code reaches it
@@ -1679,6 +1718,73 @@ impl RustBoy {
             })
             .collect();
         self.sprites.create_composite(name, sprites)
+    }
+
+    /// Reserve OAM slots for runtime sprites. Pools and static sprites share 40 entries.
+    /// Tiles remain registered separately; pool writes take an existing hardware tile index.
+    /// All pool operations belong in init/main; handler use returns MainLoopOnly from build.
+    /// Create pools after [`RustBoy::set_sprite_size`]: the size is fixed from the first pool on.
+    ///
+    /// # Panics
+    /// If `name` cannot be a label, `count` is 0 or more than the free OAM entries, or the
+    /// pool's state or routine names are already used.
+    #[track_caller]
+    pub fn create_sprite_pool(&mut self, name: &str, count: u8) -> super::sprite_pool::SpritePool {
+        check_name("sprite pool", name);
+        let occupancy = format!("wPool{name}Used");
+        let routines = crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            0,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        );
+        assert!(
+            !self.vars.names().any(|(existing, _)| existing == occupancy),
+            "sprite pool state name already exists"
+        );
+        for routine in &routines {
+            assert!(
+                !self.function_exists(routine.name()),
+                "sprite pool routine name already exists"
+            );
+        }
+        let first = self.sprites.reserve_pool_slots(count);
+        self.vars.create_array(
+            &occupancy,
+            super::variables::ArrayElement::U8,
+            u16::from(count),
+            0,
+        );
+        for routine in crate::stdlib::graphics::sprite_pool::routines(
+            name,
+            first,
+            count,
+            &occupancy,
+            self.sprite_size() == SpriteSize::Size8x16,
+        ) {
+            self.main_only_routines.push(routine.name().to_string());
+            self.define_routine(routine);
+        }
+        super::sprite_pool::SpritePool {
+            name: name.to_string(),
+            first,
+            count,
+        }
+    }
+
+    /// Create a pool for runtime entities, each represented by one hardware sprite.
+    /// Entities share OAM slots with static sprites and can be spawned, updated, hidden,
+    /// and despawned at runtime. The entity index is returned in A by `spawn`.
+    /// Operations belong in init/main; using them in a handler makes `build()` return
+    /// `Error::MainLoopOnly`. Create it after [`RustBoy::set_sprite_size`], as a sprite pool.
+    ///
+    /// # Panics
+    /// As [`RustBoy::create_sprite_pool`]: if `name` cannot be a label, `capacity` is 0 or more
+    /// than the free OAM entries, or the pool's names are already used.
+    #[track_caller]
+    pub fn create_entity_pool(&mut self, name: &str, capacity: u8) -> super::entities::EntityPool {
+        super::entities::EntityPool::new(self.create_sprite_pool(name, capacity))
     }
 
     /// Give sprite `sprite` more tiles, from another source: frames spread over several
@@ -1965,6 +2071,24 @@ mod tests {
     #[should_panic(expected = "invalid constant name \"ld\"")]
     fn test_constant_names_reject_rgbds_keywords() {
         RustBoy::new().define_const("ld", 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid external symbol \"LOW\"")]
+    fn test_external_symbol_names_reject_rgbds_keywords() {
+        RustBoy::new().external_symbol("LOW");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid constant name \"HIGH\"")]
+    fn test_hex_constant_names_reject_rgbds_keywords() {
+        RustBoy::new().define_const_hex("HIGH", 0x1234);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid tile name \"ld\"")]
+    fn test_plain_sprite_names_reject_rgbds_keywords() {
+        RustBoy::new().add_sprite("ld", tiles(1), 40, 40, 0);
     }
 
     #[test]
@@ -4019,8 +4143,8 @@ mod tests {
                 out
             );
         }
-        // And the code it writes for these settings is the code written before
-        let palettes = "    ld a, 228\n    ld [rBGP], a\n    ld [rOBP0], a\n    ld [rOBP1], a\n";
+        // And the generated start-up palette writes use the shared ldh-based stdlib writer
+        let palettes = "    ld a, 228\n    ldh [rBGP], a\n    ld a, 228\n    ldh [rOBP0], a\n    ld a, 228\n    ldh [rOBP1], a\n";
         assert!(out.contains(palettes), "{}", out);
         assert_eq!(
             lcdc_on(&out),
@@ -4082,12 +4206,12 @@ mod tests {
 
     #[test]
     fn test_palettes_from_the_config() {
-        // Each register gets its palette, at start-up; `a` is loaded once per value
-        for (palettes, loads) in [
-            (Palettes::all(0x1B), 1),
-            (Palettes::all(0x1B).obp0(0xE4), 3),
-            (Palettes::all(0xE4).obp1(0x00), 2),
-            (Palettes::default().bgp(0xFF).obp0(0x00).obp1(0x55), 3),
+        // Each register gets its palette at startup through set_palette's ldh write.
+        for palettes in [
+            Palettes::all(0x1B),
+            Palettes::all(0x1B).obp0(0xE4),
+            Palettes::all(0xE4).obp1(0x00),
+            Palettes::default().bgp(0xFF).obp0(0x00).obp1(0x55),
         ] {
             let mut gb = RustBoy::new();
             gb.set_palettes(palettes);
@@ -4096,14 +4220,10 @@ mod tests {
             assert_mem(&cpu, "rOBP0", palettes.obp0);
             assert_mem(&cpu, "rOBP1", palettes.obp1);
             let out = gb.build().unwrap();
-            let start = out.find("ld [rBGP], a").unwrap() - 20;
-            let end = out.find("ld [rOBP1], a").unwrap();
-            assert_eq!(
-                out[start..end].matches("ld a, ").count(),
-                loads,
-                "{}",
-                &out[start..end]
-            );
+            for register in ["rBGP", "rOBP0", "rOBP1"] {
+                assert_eq!(out.matches(&format!("ldh [{register}], a")).count(), 1);
+                assert!(!out.contains(&format!("ld [{register}], a")));
+            }
         }
     }
 

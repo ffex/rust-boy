@@ -261,11 +261,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       - [x] Start-up resets SCX/SCY to zero on power-on and soft reset; user init can choose another position.
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
-- [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
-      `#[non_exhaustive]` like `Lcdc` (its public `wx`/`wy` fields allow raw start-up values today); whether `build()`
-      should reject or warn about a configured window with `Lcdc.background` off (invisible on DMG, documented today);
-      whether a configured window can start hidden (a `Window` flag), or LCDC writes in init survive the LCD-on write
-      (today `build()` replaces them; documented on `show_window`)
+- [x] Follow-ups of the window layer (from the review of #44):
+      - [x] Mark `Window` `#[non_exhaustive]` and add `Window::from_raw` for clipped/off-screen WX/WY values.
+      - [x] Keep a window allowed with `Lcdc.background(false)`; document that LCDC bit 0 disables it on DMG.
+      - [x] Add `Window::visible_on_startup(false)`; runtime `show_window(true)` still works.
+      - [x] Keep `RustBoyConfig` authoritative for the final LCDC value; runtime LCDC snippets belong in VBlank.
 - [x] `GetTileByPixel` for the `$9C00` map (branch `refactor-p3-tilemap-lookup`):
       reads LCDC bit 3 at runtime; follows both configured and runtime background-map selection.
 - [x] Tilemaps kept in ROM only, to copy at runtime (branch `refactor-p3-runtime-tilemaps`):
@@ -356,7 +356,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `Routine::changes`), `on_vblank`, `on_stat`, `on_timer`, `on_joypad`, `enable_interrupt`, `disable_interrupt`;
       `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
-- [ ] Scenes / game states
+- [x] Scenes / game states (branch `refactor-p3-scenes`): `SceneManager` dispatches the selected byte-sized scene
+      Review regressions cover duplicate IDs, unknown IDs, an empty dispatcher and generated instructions.
+      routine from the main loop, registers scene routines as dependencies, and provides `switch_to` code for changing
+      state; an unknown ID is a no-op.
 - [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
       reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
       `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
@@ -365,7 +368,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
       Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
-- [ ] RNG
+- [x] RNG (`stdlib::random::random_u8`): deterministic 255-state LFSR, custom nonzero seeds
+      and recovery from runtime zero states; emulator regressions cover the complete cycle.
 - [ ] Sprite-vs-sprite collision (AABB)
 - [x] Generalised tile collision (`refactor-p3-tile-collision`):
       `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using

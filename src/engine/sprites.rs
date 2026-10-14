@@ -5,11 +5,11 @@ use std::collections::BTreeMap;
 use super::memory::{MemoryAllocator, MemoryRegion};
 use super::tiles::TileId;
 use crate::{
-    asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, R16Stack, is_identifier},
+    asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, R16, R16Stack, is_identifier},
     engine::animations::Animation,
     hw,
     stdlib::graphics::sprites::{
-        MoveDir, OamTarget, Sprite, draw_sprites, move_coord_limit, move_coord_var, pivot,
+        MoveDir, OamTarget, Sprite, move_coord_limit, move_coord_var, pivot,
     },
 };
 
@@ -160,8 +160,9 @@ pub(crate) struct SpriteData {
     #[cfg_attr(not(test), allow(dead_code))] // the tests check it against tile_index
     pub tile_id: TileId,
     pub oam_index: u8,
-    pub x: u8,
-    pub y: u8,
+    /// Initial screen-space coordinate; signed so metasprite parts can be partly off-screen.
+    pub x: i16,
+    pub y: i16,
     /// Tile index of the sprite's first tile, from the tile manager (B18)
     pub tile_index: u8,
     /// Number of tiles of the sprite (its frames are among them)
@@ -256,7 +257,7 @@ enum Axis {
 
 impl Axis {
     /// The sprite's initial position on this axis (screen coordinates)
-    fn position(self, sprite: &SpriteData) -> u8 {
+    fn position(self, sprite: &SpriteData) -> i16 {
         match self {
             Axis::X => sprite.x,
             Axis::Y => sprite.y,
@@ -337,14 +338,14 @@ impl SpriteManager {
     /// - In 8x16 mode, if the sprite has an odd number of tiles (the bottom half of the
     ///   last frame would be the next tile in VRAM, which is not this sprite's), or starts
     ///   on an odd tile (the hardware ignores bit 0 of the index).
-    /// - If `x` is above 247 or `y` above 239: OAM X = x + 8 and OAM Y = y + 16 are bytes.
+    /// - If `x + 8` or `y + 16` is outside the OAM byte range.
     /// - If OAM is full: it holds 40 sprites.
     pub(crate) fn add(
         &mut self,
         name: &str,
         tiles: SpriteTiles,
-        x: u8,
-        y: u8,
+        x: i16,
+        y: i16,
         flags: u8,
     ) -> SpriteId {
         check_name("sprite", name);
@@ -372,7 +373,7 @@ impl SpriteManager {
         }
         // OAM X = x + 8 and OAM Y = y + 16 are bytes (B17)
         for (axis, value, offset) in [("x", x, hw::OAM_X_OFFSET), ("y", y, hw::OAM_Y_OFFSET)] {
-            if value.checked_add(offset).is_none() {
+            if !(0..=i16::from(u8::MAX)).contains(&(value + i16::from(offset))) {
                 panic!(
                     "sprite \"{}\": {} = {} is too large: its OAM coordinate, {} + {}, must fit \
                      in a byte, so {} is at most {}",
@@ -442,7 +443,7 @@ impl SpriteManager {
             first: u8::try_from(first).expect("too many tiles for a test"),
             count: tile_count.into(),
         };
-        self.add(name, tiles, x, y, flags)
+        self.add(name, tiles, i16::from(x), i16::from(y), flags)
     }
 
     /// The tile right after the last tile of sprite `id`, where more tiles must go to
@@ -1133,7 +1134,7 @@ impl SpriteManager {
             .iter()
             .map(|sprite_id| self.sprite(*sprite_id))
             .collect();
-        let pos = |sprite: &SpriteData| i16::from(axis.position(sprite));
+        let pos = |sprite: &SpriteData| axis.position(sprite);
 
         // The leftmost / rightmost / topmost / lowest member; the first one on a tie
         let Some(lead) = members.iter().copied().reduce(|lead, sprite| {
@@ -1163,18 +1164,35 @@ impl SpriteManager {
     }
 
     /// Generate the code that writes every sprite to the shadow OAM, at start-up: `stdlib`'s
-    /// [`draw_sprites`], in OAM order (the shadow OAM was cleared before, with
+    /// [`crate::stdlib::graphics::sprites::draw_sprites`], in OAM order (the shadow OAM was cleared before, with
     /// `stdlib::graphics::sprites::clear_objects_screen`, and an OAM DMA copies it to OAM
     /// before the LCD is turned on)
     pub(crate) fn generate_init_code(&self) -> Vec<Instr> {
         let mut sorted_sprites: Vec<_> = self.sprites.values().collect();
         sorted_sprites.sort_by_key(|s| s.oam_index);
-        // `add` checked that each position fits in OAM (B17)
-        let sprites: Vec<Sprite> = sorted_sprites
-            .into_iter()
-            .map(|s| Sprite::new(s.oam_index, s.x, s.y, s.tile_index, s.flags).in_shadow_oam())
-            .collect();
-        draw_sprites(&sprites)
+        // `add` checked the encoded position (B17). Keep the same ordered HLI writes as
+        // `draw_sprites`, but use the already encoded OAM coordinates for signed positions.
+        let mut code = Block::new();
+        let mut next_entry = None;
+        for sprite in sorted_sprites {
+            if next_entry != Some(sprite.oam_index) {
+                let address = if sprite.oam_index == 0 {
+                    SHADOW.base()
+                } else {
+                    SHADOW.entry(sprite.oam_index, hw::OAMA_Y)
+                };
+                code.ld(R16::HL, address);
+            }
+            let y = u8::try_from(sprite.y + i16::from(hw::OAM_Y_OFFSET))
+                .expect("sprite OAM Y was checked when added");
+            let x = u8::try_from(sprite.x + i16::from(hw::OAM_X_OFFSET))
+                .expect("sprite OAM X was checked when added");
+            let entry = Sprite::new(sprite.oam_index, 0, 0, sprite.tile_index, sprite.flags)
+                .in_shadow_oam();
+            code.emit_all(entry.draw_at_oam(y, x));
+            next_entry = sprite.oam_index.checked_add(1);
+        }
+        code.into_instrs()
     }
 
     /// Set a sprite's runtime attributes in shadow OAM; startup attributes are unchanged.
@@ -1188,15 +1206,10 @@ impl SpriteManager {
         flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> Vec<Instr> {
         let sprite = self.sprite(id);
-        Sprite::new(
-            sprite.oam_index,
-            sprite.x,
-            sprite.y,
-            sprite.tile_index,
-            sprite.flags,
-        )
-        .in_shadow_oam()
-        .set_flags(flags)
+        let mut code = Block::new();
+        code.ld_a(flags.into().bits())
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_FLAGS));
+        code.into_instrs()
     }
 
     /// Hide this sprite by setting shadow OAM Y=0. Tile/flags/X are kept.
@@ -1206,32 +1219,29 @@ impl SpriteManager {
     /// If `id` is not a sprite of this manager.
     pub fn hide(&self, id: SpriteId) -> Vec<Instr> {
         let sprite = self.sprite(id);
-        Sprite::new(
-            sprite.oam_index,
-            sprite.x,
-            sprite.y,
-            sprite.tile_index,
-            sprite.flags,
-        )
-        .in_shadow_oam()
-        .hide()
+        let mut code = Block::new();
+        code.ld_a(0)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_Y));
+        code.into_instrs()
     }
 
-    /// Show/place this sprite at screen pixels, keeping tile/flags. Changes A only.
+    /// Show/place this sprite at signed screen pixels, keeping tile/flags. Changes A only.
+    /// Screen X -8 or Y -16 encodes OAM coordinate zero, hiding the part.
     ///
     /// # Panics
-    /// If `id` is not a sprite of this manager, or the position is outside X 0..=247 / Y 0..=239.
-    pub fn show_at(&self, id: SpriteId, x: u8, y: u8) -> Vec<Instr> {
+    /// If `id` is not a sprite of this manager, or the position is outside X -8..=247 / Y -16..=239.
+    pub fn show_at(&self, id: SpriteId, x: i16, y: i16) -> Vec<Instr> {
         let sprite = self.sprite(id);
-        Sprite::new(
-            sprite.oam_index,
-            sprite.x,
-            sprite.y,
-            sprite.tile_index,
-            sprite.flags,
-        )
-        .in_shadow_oam()
-        .show_at(x, y)
+        let x = u8::try_from(i32::from(x) + i32::from(hw::OAM_X_OFFSET))
+            .expect("sprite OAM X is outside byte range");
+        let y = u8::try_from(i32::from(y) + i32::from(hw::OAM_Y_OFFSET))
+            .expect("sprite OAM Y is outside byte range");
+        let mut code = Block::new();
+        code.ld_a(x)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_X));
+        code.ld_a(y)
+            .ld_addr_def_a(SHADOW.entry(sprite.oam_index, hw::OAMA_Y));
+        code.into_instrs()
     }
 
     /// Hide all composite parts by setting their shadow OAM Y to zero.
@@ -1251,16 +1261,16 @@ impl SpriteManager {
     ///
     /// # Panics
     /// If `id` is not a composite of this manager, or a part would be outside
-    /// X 0..=247 / Y 0..=239.
-    pub fn show_composite_at(&self, id: CompositeSpriteId, x: u8, y: u8) -> Vec<Instr> {
+    /// X -8..=247 / Y -16..=239. OAM coordinate zero hides that part.
+    pub fn show_composite_at(&self, id: CompositeSpriteId, x: i16, y: i16) -> Vec<Instr> {
         let members = &self.composite(id).sprites;
         let first = self.sprite(members[0]);
         members
             .iter()
             .flat_map(|&id| {
                 let sprite = self.sprite(id);
-                let coordinate = |anchor: u8, value: u8, first: u8| {
-                    u8::try_from(i16::from(anchor) + i16::from(value) - i16::from(first))
+                let coordinate = |anchor: i16, value: i16, first: i16| {
+                    i16::try_from(i32::from(anchor) + i32::from(value) - i32::from(first))
                         .expect("composite part position is outside screen coordinate range")
                 };
                 self.show_at(
@@ -1306,7 +1316,7 @@ impl SpriteManager {
         let horizontal_pair = composite.sprites.len() == 2 && {
             let left = self.sprite(composite.sprites[0]);
             let right = self.sprite(composite.sprites[1]);
-            left.y == right.y && left.x.abs_diff(right.x) == hw::TILE_WIDTH
+            left.y == right.y && left.x.abs_diff(right.x) == u16::from(hw::TILE_WIDTH)
         };
         let mut code = Block::new();
         for (index, sprite_id) in composite.sprites.iter().enumerate() {
@@ -1770,10 +1780,14 @@ mod tests {
         let mut cpu = TestCpu::default();
         for sprite in sm.sprites.values() {
             let entry = sprite.oam_index * 4;
-            cpu.mem
-                .insert(format!("wShadowOAM+{}", entry), sprite.y + 16);
-            cpu.mem
-                .insert(format!("wShadowOAM+{}", entry + 1), sprite.x + 8);
+            cpu.mem.insert(
+                format!("wShadowOAM+{}", entry),
+                u8::try_from(sprite.y + i16::from(hw::OAM_Y_OFFSET)).unwrap(),
+            );
+            cpu.mem.insert(
+                format!("wShadowOAM+{}", entry + 1),
+                u8::try_from(sprite.x + i16::from(hw::OAM_X_OFFSET)).unwrap(),
+            );
         }
         cpu
     }
@@ -1873,6 +1887,51 @@ mod tests {
     #[should_panic(expected = "composite")]
     fn composite_flags_reject_unknown_id() {
         SpriteManager::new(LabelAllocator::new()).set_composite_flags(CompositeSpriteId(0), 0);
+    }
+
+    #[test]
+    fn clipped_composite_can_be_hidden_and_reshown_at_signed_positions() {
+        let mut game = RustBoy::new();
+        let parts = [
+            MetaspritePart::new(TileSource::from_raw(&[["$ff"; 8]]), 0, 0, 0),
+            MetaspritePart::new(TileSource::from_raw(&[["$00"; 8]]), -4, -8, 0x20),
+        ];
+        let id = game.add_metasprite("Clipped", 0, 0, &parts);
+        let sm = &game.sprites;
+        let mut cpu = TestCpu::default();
+        for index in 0..2 {
+            cpu.mem
+                .insert(SHADOW.entry(index, hw::OAMA_TILEID).to_string(), 10 + index);
+            cpu.mem
+                .insert(SHADOW.entry(index, hw::OAMA_FLAGS).to_string(), 0x20);
+        }
+        cpu.run(&sm.hide_composite(id));
+        for (x, y, expected) in [(0, 0, [(16, 8), (8, 4)]), (-4, -8, [(8, 4), (0, 0)])] {
+            cpu.run(&sm.show_composite_at(id, x, y));
+            for (index, (y, x)) in expected.into_iter().enumerate() {
+                let index = index as u8;
+                assert_eq!(cpu.mem[&SHADOW.entry(index, hw::OAMA_Y).to_string()], y);
+                assert_eq!(cpu.mem[&SHADOW.entry(index, hw::OAMA_X).to_string()], x);
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index, hw::OAMA_TILEID).to_string()],
+                    10 + index
+                );
+                assert_eq!(
+                    cpu.mem[&SHADOW.entry(index, hw::OAMA_FLAGS).to_string()],
+                    0x20
+                );
+            }
+        }
+        let first = sm.get_composite_sprites(id).unwrap()[0];
+        cpu.run(&sm.show_at(first, 247, 239));
+        assert_eq!(cpu.mem[&SHADOW.entry(0, hw::OAMA_X).to_string()], 255);
+        assert_eq!(cpu.mem[&SHADOW.entry(0, hw::OAMA_Y).to_string()], 255);
+        for (x, y) in [(-9, 0), (248, 0), (0, -17), (0, 240), (i16::MAX, i16::MIN)] {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sm.show_at(first, x, y)))
+                    .is_err()
+            );
+        }
     }
 
     type LimitMove = fn(&SpriteManager, SpriteId, u8, u8) -> Vec<Instr>;

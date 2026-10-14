@@ -1842,6 +1842,17 @@ impl RustBoy {
         y: u8,
         flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::SpriteId {
+        self.add_sprite_at(name, tile_source, i16::from(x), i16::from(y), flags)
+    }
+
+    fn add_sprite_at(
+        &mut self,
+        name: &str,
+        tile_source: super::tiles::TileSource,
+        x: i16,
+        y: i16,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> super::sprites::SpriteId {
         // The sprite name is checked before it names the tiles
         check_name("sprite", name);
         let count = tile_source.tile_count();
@@ -1862,8 +1873,9 @@ impl RustBoy {
     ///
     /// # Panics
     /// If parts are empty, names collide, tiles/OAM are full, a part has no tiles or
-    /// violates 8x16 alignment, or an offset position is outside supported screen coordinates
-    /// (X 0..=247, Y 0..=239). Invalid layout/capacity is checked before registration.
+    /// violates 8x16 alignment, or an offset position cannot fit in OAM after its hardware
+    /// coordinate offset (X + 8, Y + 16). This supports screen X -8..=247 and Y -16..=239;
+    /// OAM coordinate zero hides that part. Invalid layout/capacity is checked before registration.
     #[track_caller]
     pub fn add_metasprite(
         &mut self,
@@ -1911,17 +1923,17 @@ impl RustBoy {
                     <= usize::from((hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE),
                 "metasprite {name:?} tiles do not fit in VRAM"
             );
-            let mut position = [0u8; 2];
+            let mut position = [0i16; 2];
             for (slot, anchor, offset, hardware_offset) in [
                 (0, x, part.x, hw::OAM_X_OFFSET),
                 (1, y, part.y, hw::OAM_Y_OFFSET),
             ] {
                 let value = i32::from(anchor) + i32::from(offset);
                 assert!(
-                    (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
+                    (0..=i32::from(u8::MAX)).contains(&(value + i32::from(hardware_offset))),
                     "metasprite {name:?} part position is outside supported screen coordinates"
                 );
-                position[slot] = value as u8;
+                position[slot] = i16::try_from(value).expect("valid OAM positions fit i16");
             }
             positions.push((position[0], position[1]));
         }
@@ -1930,7 +1942,7 @@ impl RustBoy {
             .zip(names)
             .zip(positions)
             .map(|((part, label), (x, y))| {
-                self.add_sprite(label, part.tiles.clone(), x, y, part.flags)
+                self.add_sprite_at(label, part.tiles.clone(), x, y, part.flags)
             })
             .collect();
         self.sprites.create_composite(name, sprites)

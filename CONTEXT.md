@@ -242,8 +242,11 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   attributes, in 8x8 or 8x16 hardware size. Parts take OAM entries in list order; on DMG overlapping objects are drawn
   by smaller X first (OAM order breaks ties and picks the 10 objects of a line). Generated names are `{name}_partN`;
   `add_sprite_16x16` reuses the same constructor with its `_left`/`_right` names and unchanged output. Positions
-  (X 0..=247, Y 0..=239), capacity and 8x16 tile alignment are checked before anything is registered. Composite
+  (X -8..=247, Y -16..=239), capacity and 8x16 tile alignment are checked before anything is registered; OAM coordinate
+  zero hides a part. Composite
   moves stop the leading member at the limit and keep every part's offset; composite animation works in both sizes.
+  Engine `show_at` and `show_composite_at` accept signed positions with the same per-part ranges as creation
+  (X -8..=247, Y -16..=239), preserving tiles/flags and encoding zero as hidden.
   Emulator tests: an irregular six-part layout moved towards the four limits in both sizes (tiles and flags kept),
   animation of every part, typed flags on every part of a 16x16 sprite and of a metasprite.
 

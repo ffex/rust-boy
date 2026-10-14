@@ -8,7 +8,7 @@ fn part(x: i16, y: i16, tiles: usize) -> MetaspritePart {
 fn invalid_metasprite_layout_is_rejected_before_registration() {
     for parts in [
         vec![],
-        vec![part(-81, 0, 1)],
+        vec![part(-90, 0, 1)],
         vec![part(168, 0, 1)],
         vec![part(0, 168, 1)],
         vec![part(0, 0, 0)],
@@ -86,7 +86,7 @@ fn panic_file(f: impl FnOnce()) -> String {
 
 #[test]
 fn metasprite_panics_point_at_the_caller() {
-    for parts in [vec![], vec![part(0, 0, 0)], vec![part(-81, 0, 1)]] {
+    for parts in [vec![], vec![part(0, 0, 0)], vec![part(-90, 0, 1)]] {
         let file = panic_file(|| {
             RustBoy::new().add_metasprite("Bad", 80, 72, &parts);
         });

@@ -352,7 +352,9 @@ poll/restart snippets are caller contracts.
 
 Static sprites have `gb.sprites.hide(id)` and `show_at(id, x, y)` snippets; composite
 helpers apply to every part. Hiding sets OAM Y to 0 and preserves X/tile/flags.
-Show supplies a screen position; changing Y while hidden can make a sprite visible,
+Show accepts signed screen positions (X -8..=247, Y -16..=239 for every part); encoded OAM
+coordinate zero hides a part. `show_composite_at` places the first registered part at the supplied position
+and preserves the offsets. Changing Y while hidden can make a sprite visible,
 so keep logical positions in your game state. Runtime operations keep startup data intact.
 
 ```rust

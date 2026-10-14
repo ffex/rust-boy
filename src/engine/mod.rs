@@ -10,6 +10,7 @@
 mod animations;
 pub mod assets;
 mod background_animation;
+mod collision;
 mod config;
 mod entities;
 mod error;
@@ -28,6 +29,7 @@ mod tiles;
 mod variables;
 
 pub use animations::AnimationType;
+pub use collision::Aabb;
 pub use config::{Lcdc, Palettes, RustBoyConfig, Window};
 pub use entities::EntityPool;
 pub use error::{Definition, Error};

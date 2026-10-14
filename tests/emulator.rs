@@ -4571,3 +4571,58 @@ fn user_functions_receive_register_arguments() {
     gb.run_frames(2);
     assert_eq!(gb.read_symbol("wArgument"), 0x5A);
 }
+
+#[test]
+fn aabb_collision_uses_half_open_edges_on_the_gameboy() {
+    if !rgbds_enabled() {
+        return;
+    }
+    // ax, ay, aw, ah, bx, by, bw, bh, expected
+    for (ax, ay, aw, ah, bx, by, bw, bh, expected) in [
+        (10, 10, 8, 8, 17, 10, 8, 8, 1),
+        (10, 10, 8, 8, 18, 10, 8, 8, 0),
+        (10, 10, 8, 8, 10, 18, 8, 8, 0),
+        (10, 10, 8, 8, 9, 10, 8, 8, 1),
+        (10, 10, 8, 8, 2, 10, 8, 8, 0),
+        (10, 10, 8, 8, 10, 2, 8, 8, 0),
+        (10, 10, 8, 8, 50, 50, 8, 8, 0),
+        (10, 10, 8, 8, 50, 12, 8, 8, 0),
+        (10, 10, 12, 3, 20, 11, 2, 9, 1),
+        // Documented limitation: right edge wraps to 2, missing actual overlap.
+        (250, 10, 8, 8, 251, 10, 2, 8, 0),
+    ] {
+        let mut game = RustBoy::new();
+        let ax = game.vars.create_u8("wRectAX", ax);
+        let ay = game.vars.create_u8("wRectAY", ay);
+        let bx = game.vars.create_u8("wRectBX", bx);
+        let by = game.vars.create_u8("wRectBY", by);
+        let hit = game.vars.create_u8("wRectHit", 0);
+        let a = Aabb::new(ax.get(), ay.get(), aw, ah);
+        let b = Aabb::new(bx.get(), by.get(), bw, bh);
+        game.add_to_main_loop(a.overlaps(&b, hit.set(1)));
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(2);
+        assert_eq!(gb.read_symbol("wRectHit"), expected);
+    }
+}
+
+#[test]
+fn aabb_collision_reads_live_sprite_coordinates() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    let actor = game.add_sprite("Actor", TileSource::from_raw(&[["$FF"; 8]]), 10, 10, 0);
+    let hit = game.vars.create_u8("wSpriteRectHit", 0);
+    let a = Aabb::new(game.sprites.get_x(actor), game.sprites.get_y(actor), 8, 8);
+    let mut x = Block::new();
+    // Sprite getters return raw OAM coordinates: screen (10,10) becomes (18,26).
+    x.ld_a(25);
+    let mut y = Block::new();
+    y.ld_a(26);
+    let b = Aabb::new(x.into_instrs(), y.into_instrs(), 8, 8);
+    game.add_to_main_loop(a.overlaps(&b, hit.set(1)));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    assert_eq!(gb.read_symbol("wSpriteRectHit"), 1);
+}

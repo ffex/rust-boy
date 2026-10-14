@@ -39,7 +39,7 @@ pub use crate::asm::{
     Asm, Block, Condition, Emittable, Expr, Instr, LabelAllocator, Mem, R8, R16, Section,
 };
 pub use crate::engine::{
-    ANIM_DISABLED, AnimationType, ArrayElement, AssetError, BackgroundAnimation,
+    ANIM_DISABLED, Aabb, AnimationType, ArrayElement, AssetError, BackgroundAnimation,
     BackgroundAnimationConfig, BuiltinFunction, Chunk, CompositeSpriteId, Definition, EntityPool,
     Error, Font, InputManager, Layout, Lcdc, MemoryRegion, MetaspritePart, NumberFormat,
     NumberPrinter, Palettes, PngColorMapping, PngOptions, RustBoy, RustBoyConfig, SceneManager,

@@ -368,10 +368,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] WRAM arrays (branch `refactor-p3-wram-arrays`; HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`,
       `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
       compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
-      Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [x] RNG (`stdlib::random::random_u8`): deterministic 255-state LFSR, custom nonzero seeds
       and recovery from runtime zero states; emulator regressions cover the complete cycle.
-- [ ] Sprite-vs-sprite collision (AABB)
+- [x] Sprite-vs-sprite collision: `Aabb::overlaps` checks half-open byte-coordinate rectangles.
+- [ ] Make AABB edge comparisons safe when right/bottom edges wrap past 255.
 - [x] Generalised tile collision (`refactor-p3-tile-collision`):
       `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using
       the active map and current SCX/SCY; sample multiple points for larger objects.

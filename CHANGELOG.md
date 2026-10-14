@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **AABB collision** (`engine::Aabb`, also exported by the prelude): half-open rectangle
+  overlap checks for byte screen coordinates whose right/bottom edges do not wrap.
+
 - **Register-based function arguments**: `RustBoy::call_args` and `Call::with_args`
   emit setup immediately before each call, using the callee's register convention.
 
@@ -235,7 +238,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `Aabb`, `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 

@@ -1526,10 +1526,11 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
   Initial presses and repeats share one emitted action body, so local labels in bounded movement and
   other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
-- **Engine:** scene dispatch is available through `SceneManager`; no sprite collision; screen-pixel solid-tile checks exist as
+- **Engine:** scene dispatch is available through `SceneManager`; screen-pixel solid-tile checks exist as
   `TileCollision` (`refactor-p3-tile-collision`) (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
+  `engine::Aabb` provides half-open rectangle overlap checks (edges must not wrap).
   Register-based function arguments use `RustBoy::call_args` / `Call::with_args`.
   Signed 8.8 position/velocity/gravity integration exists in `stdlib::movement`.
   `stdlib::flow` provides `While`, fixed-count `For` and `SwitchA`; For saves BC around its body.

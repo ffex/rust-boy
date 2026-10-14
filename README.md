@@ -27,7 +27,8 @@ The [changelog](CHANGELOG.md) lists every breaking change of the refactoring, wi
 
 ## Requirements
 
-- Rust 1.85 or newer (edition 2024). No other Rust dependencies.
+- Rust 1.85 or newer (edition 2024). One Rust dependency: the pure-Rust [`png`](https://crates.io/crates/png)
+  decoder, for `TileSource::from_png` (it runs in the generating program, not on the Game Boy).
 - [RGBDS](https://rgbds.gbdev.io/) 0.9 or newer to build ROMs (CI uses 1.0.4).
 
 To use it in your own project:
@@ -157,6 +158,42 @@ assert!(out.contains("TimerHandler:\n    push af\n    ld a, [wTicks]"));
 `rSTAT` and timer set-up). The **soft reset** jumps to the entry point (`$0100`), so the whole start-up runs again,
 as at power-on: every variable is set to its initial value, the `init()` code runs again; it happens once per press
 (holding the four buttons does not reset the game again and again).
+
+## PNG and binary tile assets (`RustBoy`)
+
+Use `TileSource::from_png(path, &options)` to load tile artwork directly. Palette slots
+are pixel indices 0..=3; default colors are `[255,255,255]`, `[170,170,170]`, `[85,85,85]`,
+and black. Exact matching rejects unknown colors; nearest RGB matching is explicit.
+Fully transparent pixels map to index zero by default, and partial alpha is rejected.
+
+```no_run
+use rust_boy::prelude::*;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = PngOptions::default()
+        .mapping(PngColorMapping::Nearest)
+        .tile_order(TileOrder::Sprite8x16);
+    let artwork = TileSource::from_png("player.png", &options)?;
+    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    gb.add_sprite("Player", artwork, 80, 72, 0);
+    println!("{}", gb.build()?);
+    Ok(())
+}
+```
+
+PNG dimensions must be multiples of eight; 8×16 ordering additionally requires a
+height divisible by sixteen and emits each vertical pair consecutively. Indexed,
+grayscale, RGB, alpha, and interlaced static PNGs are supported. Packed samples expand
+to 8 bits; 16-bit samples use their high byte. Mapping does not apply gamma correction,
+dithering, deduplication, padding or cropping. Animated PNGs are rejected.
+
+`png_to_2bpp(&png_bytes, &options)` returns binary bytes that you can write as a `.2bpp`
+file. `TileSource::from_2bpp(path)` reads a nonempty multiple of sixteen bytes and derives
+the count; `from_2bpp_bytes(&bytes)` does the same for memory. Loaded sources own their
+data and emit DW pairs, so no asset INCBIN include path is needed. Paths resolve relative
+to the generating program's current directory; use `CARGO_MANIFEST_DIR` for crate assets.
+All loaders return `AssetError`; allocation limits remain the tile manager's existing
+128 background / 256 sprite tiles. The legacy `from_file(path,count)` remains available
+for deferred RGBDS INCBIN, where you supply the correct count and include directory.
 
 ## Sprites and the shadow OAM (`RustBoy`)
 
@@ -466,7 +503,7 @@ The selected layer must be enabled separately; tile patterns are loaded beforeha
 ## Palettes and fades (`RustBoy`)
 
 DMG palettes map four colour indices to shades. The background and window share BGP;
-object index 0 stays transparent. Startup `Palettes` still accepts hardware bytes.
+object index 0 stays transparent. Startup `Palettes` accepts typed `Palette` values or raw `u8` hardware bytes.
 Use typed palettes for runtime writes and `PaletteFade` for nonblocking fade-in/out:
 
 ```rust
@@ -710,6 +747,7 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
 | `unbricked_rustboy` | `engine` | The same game with `RustBoy` |
 | `fosdem` | `engine` | A 16×16 walking character with four animations (FOSDEM demo) |
 | `coin-anim` | `engine` | An animated coin: A starts the animation, B stops it |
+| `music` | `engine` | A two-note song played by the pinned, offline hUGEDriver |
 
 ## What is supported
 
@@ -724,7 +762,8 @@ RGBDS_LINK_CHECK=1 GB_TEST_ROMS=/tmp/gb-test-roms cargo test --test emulator
   typed (see above): an operand the instruction does not take either does not compile (`ld 1, 2`, `inc 5`,
   `and a, hl`) or panics with a clear message (`ld [hl], [hl]`, `bit 8`, `rst $09`). Generated labels are unique,
   and a `jr` out of range becomes a `jp` (see [Labels and jumps](#labels-and-jumps)).
-- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), typed sprite attributes (flips,
+- **Engine** (`RustBoy`): VRAM layout for sprite and background tiles and tilemaps (`$9800`, `$9C00`), tiles
+  converted from PNG or read from `.2bpp` files in Rust (see [PNG and binary tile assets](#png-and-binary-tile-assets-rustboy)), typed sprite attributes (flips,
   palette, priority; see [Typed sprite attributes](#typed-sprite-attributes)), runtime palette
   writes and fades (see [Palettes and fades](#palettes-and-fades-rustboy)), text and score printing (see
   [Text and scores](#text-and-scores-rustboy)), background tile animation (see
@@ -802,3 +841,110 @@ Special thanks to all the developers who have contributed to Game Boy homebrew t
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+### Audio startup
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+// Stereo volume 0..=7; route channel 1 to the left output only.
+gb.init(rust_boy::stdlib::audio::set_mixer(Mixer::new(4, 4, hw::AUDTERM_1_LEFT.value)));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`AudioConfig::Off` powers off at startup. `On` resets existing channels, powers on
+with the selected mixer, and leaves channels silent until triggered. `Inherit` is
+the default and leaves boot audio state unchanged. Configuration runs before user
+init on cold startup and soft reset. Runtime `power_off`, `power_on` and `set_mixer`
+snippets preserve IME and change AF only. Wave RAM is retained. Volume zero is quiet,
+not mute; use zero routing or power off to mute. `hw::NR10` through `NR52`,
+`AUD3WAVERAM`, and `AUD*` flags name the hardware.inc symbols.
+
+### One-shot sound effects
+
+```rust
+use rust_boy::prelude::*;
+let mut gb = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+let beep = Sfx::Pulse2(PulseEffect::new(
+    1750, 32, Duty::Half, Envelope::new(12, EnvelopeDirection::Decrease, 2),
+));
+gb.init(gb.play_sfx(&beep));
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+`Sfx::Pulse1` adds a `Sweep`; `Pulse2` has none. `Sfx::Wave` takes a `WaveEffect`
+with a `WavePattern` (32 samples 0..=15, or 16 packed bytes) and `WaveLevel`.
+`Sfx::Noise` takes a `NoiseEffect` with a seven- or fifteen-bit LFSR, shift 0..=13
+and divider 0..=7 (zero means 0.5). Pulse/wave period is the hardware 11-bit value,
+not Hz: pulse frequency is `131072 / (2048 - period)`, wave frequency is half that.
+Constructors panic for out-of-range fields. Sweep addition overflow can silence CH1;
+zero-volume decreasing envelopes disable the DAC. Wave hardware first plays sample 1.
+
+Every effect replaces its channel and enables a hardware length timer: pulse/noise
+length 1..=64, wave length 1..=256 ticks at 256 Hz, with tick phase affecting duration.
+Envelopes use 64 Hz ticks (pace zero disables them); sweep uses 128 Hz ticks.
+`play_sfx` changes AF only and returns carry clear when programmed, carry set with no
+writes if the APU is off. It preserves power, mixer, other channels and IME.
+`stdlib::audio::stop_channel(Channel::Pulse2)` disables just that channel's DAC.
+The standalone `stdlib::audio::play_sfx(labels, &effect)` uses the supplied label allocator.
+Serialize audio writes with music/interrupt code; reserve a channel before replacing it.
+CH3 stops before uploading wave RAM. DAC toggles may pop, and this API does not
+reset pulse phase or provide a software effect sequence. See
+[Pan Docs registers](https://gbdev.io/pandocs/Audio_Registers.html) and
+[APU details](https://gbdev.io/pandocs/Audio_details.html) for hardware behavior.
+
+### Tracker music (hUGEDriver 6.1.1)
+
+```rust
+use rust_boy::prelude::*;
+let song = Song::from_rgbds(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/music/song.asm")), "DemoSong");
+let mut gb = RustBoy::new();
+gb.enable_music(song, MusicClock::MainFrame);
+let asm = gb.build()?;
+# Ok::<(), rust_boy::engine::Error>(())
+```
+
+Export from hUGETracker 1.0.1 as RGBDS assembly and use its descriptor name.
+`Song::from_rgbds_file(path, descriptor)` reads the file at generation time;
+`from_rgbds` accepts its text. Data must be self-contained except the standard
+`hUGE.inc` include, which is expanded. Internal globals and section names are
+prefixed per descriptor, so `add_music_song` accepts additional exports with the
+same pattern/instrument names. Descriptors stay public and must be unique. ROM0
+and ROMX placement is retained: keep a ROMX song's bank mapped for its whole tick.
+Other export formats/driver versions and automatic bank switching are not supported.
+
+`enable_music` runs once, starts the first song before user init, and changes an
+inherited audio policy to `AudioConfig::On(Mixer::default())`. Explicit audio
+policies stay in effect. Soft reset initializes the driver/song again. The pinned
+public-domain driver lives in `vendor/hugedriver`; generated output embeds its
+code/data and needs only the normal hardware.inc include. It reserves 100 WRAM0
+bytes at the top of available RAM, plus two control bytes, without moving user
+variables. Read the pinned version/license/transform details in its README.
+
+`MusicClock::MainFrame` ticks after `WaitFrame` and before game logic. Long game
+frames slow playback. `MusicClock::VBlank` ticks after DMA/VRAM queue flush, saving
+all registers; complex songs can extend the handler beyond VBlank, so account for
+that before adding timing-sensitive user VBlank code. An off APU skips ticks and
+keeps song position. The engine is the single tick owner; do not tick the driver
+again. Song callbacks must return promptly and must not reenter music controls.
+
+Emit `start_music("OtherDescriptor")` to restart/switch and take all four channels;
+old channels are silenced and mute reservations reset. `pause_music` freezes song
+position and cuts music-owned channels. `resume_music` continues a pause (cut notes
+return at the next note row), returning carry set if stopped. `stop_music` requires
+`start_music` before a later resume. Controls preserve IME; start/reserve/release
+may change all registers, pause/stop/resume change AF. User interrupt handlers
+cannot call them, directly or through a registered function; `build` reports
+`MainLoopOnly`. Initialization publishes its paused flag before touching driver
+state, so the generated VBlank tick skips incomplete initialization.
+
+With music enabled, `play_sfx` returns carry set without writes unless the channel
+is reserved. Emit `reserve_music_channel(Channel::Wave)` before its effect and
+`release_music_channel` afterward. Reserved channels survive pause/stop; release
+returns ownership at the next music note and invalidates CH3's wave cache so the
+song wave is reloaded. Serialize game audio writers and avoid driver-wide mixer
+changes in song effects when sharing channels. Playback is tested as linked SM83
+execution, song state and register/wave RAM writes; the test emulator does not
+synthesize audio. Build/run the demo with `scripts/run.sh --run music`.

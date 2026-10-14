@@ -8,6 +8,7 @@
 //! [`Error`]).
 
 mod animations;
+pub mod assets;
 mod background_animation;
 mod config;
 mod entities;
@@ -32,7 +33,7 @@ pub use functions::BuiltinFunction;
 pub use inputs::InputManager;
 pub use layout::{Chunk, Layout};
 pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
-pub use rustboy::RustBoy;
+pub use rustboy::{MusicClock, RustBoy};
 pub use sprites::{
     ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
 };
@@ -52,5 +53,6 @@ pub(crate) fn panic_message<R>(f: impl FnOnce() -> R) -> String {
         .unwrap_or_default()
 }
 
+pub use assets::{AssetError, PngColorMapping, PngOptions, TileOrder, png_to_2bpp};
 pub use background_animation::{BackgroundAnimation, BackgroundAnimationConfig};
 pub use text::{Font, NumberFormat, NumberPrinter, TextPrinter};

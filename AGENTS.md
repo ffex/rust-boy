@@ -12,8 +12,8 @@ Read both before starting a task, and keep them up to date in the same branch as
 
 Codex makes the **first try** of a task: implementation, tests, documentation, snapshots, a branch,
 commits and a PR into `refactor`. Then Codex hands the PR to Claude and stops working on it.
-Claude, following [`CLAUDE.md`](CLAUDE.md), has the PR reviewed, fixes the findings on the PR
-branch, and merges it into `refactor` when everything is OK. Only the final `refactor` → `main` PR
+Claude, following [`CLAUDE.md`](CLAUDE.md), has the PR reviewed, sends the findings back to
+Codex as fix-request comments (below), and merges it into `refactor` when everything is OK. Only the final `refactor` → `main` PR
 needs the maintainer. Do not treat a Codex self-review as Claude's independent review.
 
 ## Working style
@@ -110,7 +110,7 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
   `RGBDS_LINK_CHECK=1 GB_TEST_ROMS=<dir> cargo test --lib --test emulator` (after `scripts/fetch-test-roms.sh <dir>`),
   and `cargo +1.85 test` too when Rust 1.85 is installed (CI's MSRV job).
 - Push the branch and open a **PR into `refactor`** (never straight into `main`), then hand it to Claude
-  (below). Claude reviews, fixes and merges it. When everything is done, `refactor` → `main` is the
+  (below). Claude reviews it, asks Codex for fixes and merges it. When everything is done, `refactor` → `main` is the
   final PR, which only the maintainer merges.
 - Never force-push, rewrite published history or delete branches without asking first.
 - Do not mention or link AI sessions in commit messages or PR descriptions.
@@ -120,11 +120,30 @@ No RGBDS installed (e.g. in a cloud session)? Build it from the official source:
 When the PR is open and its CI checks pass locally (or the ones that could not run are listed as
 not run), hand it to Claude: give the maintainer the PR number, the branch and, for stacked PRs,
 the merge order, and leave the PR's *Independent review* section as "pending" (Claude also picks up
-open PRs marked so). Do not push to the branch after the handoff, unless the maintainer asks you to
-(Claude's requests reach you through the maintainer). Questions go to the maintainer. If something
+open PRs marked so). Do not push to the branch after the handoff, unless a fix-request (below) or the
+maintainer asks you to: fix-request comments are Claude's only direct channel to you. Questions go to the maintainer. If something
 is unfinished or uncertain, say so in the PR's *Risks and follow-ups* section rather than in the
 handoff, so the reviewer reads it independently.
 Claude fills in the *Independent review* section.
+
+### Fix requests
+
+After its review, Claude posts the findings on the PR as one comment that mentions `@codex`:
+
+```
+@codex fix-request (review of <head-sha>)
+F1 [blocking] path/file.rs:120 — <defect>. Scenario: <…>. Expected: <…>. Test: <what to add>.
+F2 [minor] …
+```
+
+Then, on that PR branch only:
+- Fix each finding, or explain why it should not be fixed. A behaviour fix comes with a test and
+  updates `Task.md`, `CONTEXT.md` and `CHANGELOG.md`; snapshots change only for an intended asm change.
+- If the branch is behind `refactor`, merge `refactor` into it (never rebase or force-push).
+- Run the CI checks listed above, push, and reply on the PR:
+  `@claude fixed <new-head-sha>` with one line per finding: `F1 fixed in <sha>` or
+  `F1 not fixed: <reason>`, plus the checks run and their results (and the ones that could not run).
+- Do not edit the PR's *Independent review* section, and do not merge.
 
 In *How it was verified*, list each command you ran and its result. Never describe a skipped check as
 passing: name the checks that did not run and why.

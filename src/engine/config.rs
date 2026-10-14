@@ -2,6 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::stdlib::audio::AudioConfig;
+use crate::stdlib::graphics::palette::Palette;
 use crate::stdlib::interrupts::{Stat, Timer};
 
 use super::functions::BuiltinFunction;
@@ -68,6 +70,8 @@ pub struct RustBoyConfig {
     /// The timer the start-up code starts; stopped by default.
     /// [`RustBoy::on_timer`](super::RustBoy::on_timer) sets it with its handler.
     pub timer: Option<Timer>,
+    /// APU startup policy; Inherit leaves legacy boot state unchanged.
+    pub audio: AudioConfig,
 }
 
 impl Default for RustBoyConfig {
@@ -83,6 +87,7 @@ impl Default for RustBoyConfig {
             soft_reset: false,
             stat: None,
             timer: None,
+            audio: AudioConfig::Inherit,
         }
     }
 }
@@ -91,6 +96,12 @@ impl RustBoyConfig {
     /// The default configuration ([`RustBoyConfig::default`])
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Configure audio before user init, including on soft reset.
+    pub fn audio(mut self, audio: AudioConfig) -> Self {
+        self.audio = audio;
+        self
     }
 
     /// With every sprite of size `size`
@@ -159,7 +170,8 @@ impl RustBoyConfig {
 ///
 /// By default each is `%11100100`: colour i shows shade i, so the two object palettes look
 /// like the background one until the program changes them. The start-up code writes them
-/// before the user's `init()` code, which can change them again.
+/// before the user's `init()` code, which can change them again. Builders accept typed
+/// [`Palette`] values or raw `u8` hardware bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palettes {
     /// `rBGP`, the background (and window) palette
@@ -176,7 +188,8 @@ impl Palettes {
     pub const IDENTITY: u8 = 0b1110_0100;
 
     /// The three palettes set to `palette`
-    pub fn all(palette: u8) -> Self {
+    pub fn all(palette: impl Into<Palette>) -> Self {
+        let palette = palette.into().byte();
         Palettes {
             bgp: palette,
             obp0: palette,
@@ -185,20 +198,20 @@ impl Palettes {
     }
 
     /// With the background palette `palette`
-    pub fn bgp(mut self, palette: u8) -> Self {
-        self.bgp = palette;
+    pub fn bgp(mut self, palette: impl Into<Palette>) -> Self {
+        self.bgp = palette.into().byte();
         self
     }
 
     /// With the first object palette `palette`
-    pub fn obp0(mut self, palette: u8) -> Self {
-        self.obp0 = palette;
+    pub fn obp0(mut self, palette: impl Into<Palette>) -> Self {
+        self.obp0 = palette.into().byte();
         self
     }
 
     /// With the second object palette `palette`
-    pub fn obp1(mut self, palette: u8) -> Self {
-        self.obp1 = palette;
+    pub fn obp1(mut self, palette: impl Into<Palette>) -> Self {
+        self.obp1 = palette.into().byte();
         self
     }
 }
@@ -296,5 +309,15 @@ mod tests {
         for (x, y) in [(159, 0), (0, 144)] {
             assert!(std::panic::catch_unwind(|| Window::new(TilemapArea::Map9800, x, y)).is_err());
         }
+    }
+
+    #[test]
+    fn startup_palettes_accept_typed_and_raw_values() {
+        let typed = Palette::solid(crate::stdlib::graphics::palette::Shade::Dark);
+        assert_eq!(Palettes::all(typed).bgp, typed.byte());
+        assert_eq!(
+            Palettes::default().bgp(0x1Bu8).obp1(Palette::from(0)).obp1,
+            0
+        );
     }
 }

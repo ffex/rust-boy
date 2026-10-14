@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 # Every example binary. Its directory, examples/<bin>/, holds its committed assembly
 # (main.asm, the snapshot tests/snapshots.rs checks) and its INCBIN assets, if any: it goes on
 # the include path.
-examples=(basic_usage unbricked unbricked_std unbricked_rustboy fosdem coin-anim)
+examples=(basic_usage unbricked unbricked_std unbricked_rustboy fosdem coin-anim music)
 
 out_root="${CARGO_TARGET_DIR:-target}/examples"
 failed=()

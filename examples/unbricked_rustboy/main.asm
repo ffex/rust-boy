@@ -18,6 +18,10 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
+    ld a, 0
+    ldh [rSCX], a
+    ld a, 0
+    ldh [rSCY], a
     ld de, Tiles
     ld hl, $9000
     ld bc, TilesEnd - Tiles

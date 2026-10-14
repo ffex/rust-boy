@@ -255,9 +255,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `stdlib::graphics::scroll` snippets reused by `RustBoy`, wrapping at 256; emit in init or VBlank)
 - [ ] Follow-ups of the background camera (from the review of #43):
       - [x] `GetTileByScreenPixel` adds SCX/SCY to screen coordinates before the shared `GetTileByPixel` lookup.
-      - [ ] Whether sprites should get world coordinates or a "follow sprite" helper (today
-            `follow_background_point` needs world positions kept by the program).
-      - [ ] Whether start-up code should zero SCX/SCY, so a soft reset puts the camera back at (0, 0) (documented today).
+      - [ ] Decide whether engine sprites get world coordinates or a "follow sprite" helper. Open: no decision is
+            recorded (the review of #43 left it as a maintainer question). Today sprites stay in screen coordinates and
+            callers that need world positions track them and use `follow_background_point`; no code changed here.
+      - [x] Start-up resets SCX/SCY to zero on power-on and soft reset; user init can choose another position.
 - [x] Window layer (`WX`/`WY`), branch `refactor-p3-window`: optional startup `Window`,
       screen positioning, independent tilemap selection and VBlank show/hide snippets; shared tiles/BGP.
 - [ ] Follow-ups of the window layer (from the review of #44, maintainer decisions): whether `Window` should be
@@ -316,10 +317,15 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       generated before the sprite's timing or events changed (today documented: configure first; a cleared period
       leaves an undefined `wAnim_{name}_Timer` for rgbasm)
 
-### Audio *(nothing exists today)*
-- [ ] APU init (sound on/off at boot), register constants in `hw`
-- [ ] Sound-effect API for channels 1–4 (`play_sfx`)
-- [ ] Music: integrate a driver (e.g. hUGEDriver)
+### Audio
+- [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in
+      inherited/off/on startup policy, validated mixer, shared stateless power snippets)
+- [x] Sound-effect API for channels 1–4 (`play_sfx`; `refactor-p3-sfx`): typed pulse/sweep,
+      wave patterns/levels and noise effects, hardware one-shot length/envelope, channel stop,
+      powered-off rejection; mixer and other channels preserved
+- [x] Music: integrate a driver (`refactor-p3-music`, hUGEDriver 6.1.1 pinned/vendored
+      offline; multiple exports, allocator-accounted state, main-frame/VBlank clocks,
+      start/pause/resume/stop and channel reservation with wave-cache restoration)
 
 ### Input
 - [ ] Just-pressed (`wNewKeys`), released, and held as separate bindings

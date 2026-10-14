@@ -2635,6 +2635,524 @@ fn png_and_binary_tile_sources_load_exact_bytes_into_vram() {
 }
 
 #[test]
+fn engine_audio_power_and_mixer_are_configured_before_user_init() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for (config, power, volume, routing) in [
+        (AudioConfig::Off, 0, None, None),
+        (
+            AudioConfig::On(Mixer::default()),
+            0x80,
+            Some(0x77),
+            Some(0xff),
+        ),
+        (
+            AudioConfig::On(Mixer::new(2, 4, hw::AUDTERM_2_LEFT.value)),
+            0x80,
+            Some(0x24),
+            Some(0x20),
+        ),
+    ] {
+        let game = RustBoy::with_config(RustBoyConfig::default().audio(config));
+        let rom = engine_rom(&game);
+        let mut gb = rom.boot();
+        gb.run_frames(3);
+        // This emulator stores audio IO bytes but does not synthesize/clock an APU.
+        assert_eq!(gb.read(hw::NR52.value) & hw::AUDENA_ON.value, power);
+        if let Some(volume) = volume {
+            assert_eq!(gb.read(hw::NR50.value), volume);
+        }
+        if let Some(routing) = routing {
+            assert_eq!(gb.read(hw::NR51.value), routing);
+        }
+    }
+    let mut game =
+        RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::On(Mixer::default())));
+    game.init(rust_boy::stdlib::audio::set_mixer(Mixer::new(1, 2, 0)));
+    let rom = engine_rom(&game);
+    let mut gb = rom.boot();
+    gb.run_frames(3);
+    assert_eq!(gb.read(hw::NR50.value), 0x12);
+    assert_eq!(gb.read(hw::NR51.value), 0);
+}
+
+#[test]
+fn engine_audio_configuration_is_reapplied_on_soft_reset() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mixer = Mixer::new(2, 4, hw::AUDTERM_2_LEFT.value);
+    let game = RustBoy::with_config(
+        RustBoyConfig::default()
+            .audio(AudioConfig::On(mixer))
+            .soft_reset(true),
+    );
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_eq!(gb.read(hw::NR52.value) & hw::AUDENA_ON.value, 0x80);
+    assert_eq!(gb.read(hw::NR50.value), 0x24);
+    assert_eq!(gb.read(hw::NR51.value), hw::AUDTERM_2_LEFT.value);
+
+    gb.write_io(hw::NR50.value, 0);
+    assert_eq!(gb.read(hw::NR50.value), 0);
+    gb.run_script(&[(3, &[Button::A, Button::B, Button::Select, Button::Start])]);
+
+    assert_eq!(gb.read(hw::NR52.value) & hw::AUDENA_ON.value, 0x80);
+    assert_eq!(gb.read(hw::NR50.value), 0x24);
+    assert_eq!(gb.read(hw::NR51.value), hw::AUDTERM_2_LEFT.value);
+}
+
+#[test]
+fn sound_effects_program_all_channels_without_changing_power_or_mixer() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let pattern = WavePattern::from_samples(std::array::from_fn(|i| (i % 16) as u8));
+    let envelope = Envelope::new(10, EnvelopeDirection::Decrease, 2);
+    let pulse = PulseEffect::new(0x345, 32, Duty::Quarter, envelope);
+    let effects = [
+        Sfx::Pulse1(pulse, Sweep::new(3, SweepDirection::Subtract, 2)),
+        Sfx::Pulse2(pulse),
+        Sfx::Wave(WaveEffect::new(0x456, 256, WaveLevel::Full, pattern)),
+        Sfx::Noise(NoiseEffect::new(64, envelope, 5, NoiseWidth::Seven, 3)),
+    ];
+    let mut game = RustBoy::with_config(
+        RustBoyConfig::default().audio(AudioConfig::On(Mixer::new(2, 3, 0xff))),
+    );
+    let mut init = Block::new();
+    // Replacements use fresh local labels and upload wave RAM twice safely.
+    for effect in effects.iter().cycle().take(8) {
+        init.emit_all(game.play_sfx(effect));
+    }
+    game.init(init.into_instrs());
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    // The emulator stores IO bytes, not APU playback. This verifies linked snippets
+    // executing on SM83, addressing and channel isolation; unit traces check ordering.
+    for (register, value) in [
+        (hw::NR52, 0x80),
+        (hw::NR50, 0x23),
+        (hw::NR51, 0xff),
+        (hw::NR10, 0x3a),
+        (hw::NR11, 0x60),
+        (hw::NR12, 0xa2),
+        (hw::NR13, 0x45),
+        (hw::NR14, 0xc3),
+        (hw::NR21, 0x60),
+        (hw::NR22, 0xa2),
+        (hw::NR23, 0x45),
+        (hw::NR24, 0xc3),
+        (hw::NR30, 0x80),
+        (hw::NR31, 0),
+        (hw::NR32, 0x20),
+        (hw::NR33, 0x56),
+        (hw::NR34, 0xc4),
+        (hw::NR41, 0),
+        (hw::NR42, 0xa2),
+        (hw::NR43, 0x5b),
+        (hw::NR44, 0xc0),
+    ] {
+        assert_eq!(gb.read(register.value), value, "{}", register.name);
+    }
+    for (i, &value) in pattern.bytes().iter().enumerate() {
+        assert_eq!(gb.read(hw::AUD3WAVERAM.value + i as u16), value);
+    }
+    // A runtime attempt while off returns carry without touching even writable wave RAM.
+    let mut game = RustBoy::with_config(RustBoyConfig::default().audio(AudioConfig::Off));
+    let mut init = Block::new();
+    for i in 0..16 {
+        init.ld_a(0xab)
+            .ldh(Mem::addr(Expr::from(hw::AUD3WAVERAM) + i), R8::A);
+    }
+    init.emit_all(game.play_sfx(&effects[2]));
+    // Stop before any flag-changing instruction, then inspect carry.
+    init.label("SfxRejected").jr("SfxRejected");
+    game.init(init.into_instrs());
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("SfxRejected"), 3));
+    assert_ne!(gb.registers().f & 0x10, 0);
+    for i in 0..16 {
+        assert_eq!(gb.read(hw::AUD3WAVERAM.value + i), 0xab);
+    }
+}
+
+// hUGEDriver's pinned WRAM offsets (verified against driver()'s generated constants).
+const MUSIC_WAVE: u16 = 28;
+const MUSIC_MASK: u16 = 29;
+const MUSIC_TICK: u16 = 31;
+const MUSIC_ROW: u16 = 34;
+fn music_byte(gb: &GameBoy, offset: u16) -> u8 {
+    gb.read(gb.symbol(rust_boy::stdlib::audio::music::BUFFER) + offset)
+}
+fn music_game(clock: MusicClock) -> RustBoy {
+    let export = include_str!("../examples/music/song.asm");
+    let first = Song::from_rgbds(export, "DemoSong");
+    let second = Song::from_rgbds(
+        &export
+            .replace("DemoSong", "SecondSong")
+            .replacen("    db 2", "    db 1", 1)
+            .replace("dn ___, 0, 0", "dn C_4, 1, 0"),
+        "SecondSong",
+    );
+    let mut game = RustBoy::new();
+    game.enable_music(first, clock).add_music_song(second);
+    game.vars.create_u8("wMusicCommand", 0);
+    game.vars.create_u8("wMusicResult", 0);
+    let effect = Sfx::Wave(WaveEffect::new(
+        1000,
+        16,
+        WaveLevel::Half,
+        WavePattern::from_bytes([0xaa; 16]),
+    ));
+    let unreserved = Sfx::Pulse2(PulseEffect::new(
+        0,
+        1,
+        Duty::Half,
+        Envelope::new(1, EnvelopeDirection::Decrease, 0),
+    ));
+    let mut code = Block::new();
+    code.label("MusicFrame")
+        .ld(R8::A, Mem::addr("wMusicCommand"))
+        .and(R8::A)
+        .jr_cond(Condition::Z, ".done");
+    let branches = [
+        game.pause_music(),
+        game.resume_music(),
+        game.stop_music(),
+        game.start_music("SecondSong"),
+        [
+            game.reserve_music_channel(Channel::Wave),
+            game.play_sfx(&effect),
+        ]
+        .concat(),
+        game.release_music_channel(Channel::Wave),
+        game.play_sfx(&unreserved),
+        rust_boy::stdlib::audio::power_off(),
+        rust_boy::stdlib::audio::power_on(Mixer::default()),
+    ];
+    for (i, branch) in branches.into_iter().enumerate() {
+        let skip = format!(".command_skip_{i}");
+        code.cp_imm(i as u8 + 1)
+            .jr_cond(Condition::NZ, &skip)
+            .emit_all(branch)
+            .push(R16Stack::AF)
+            .pop(R16Stack::BC)
+            .ld(R8::A, R8::C)
+            .ld(Mem::addr("wMusicResult"), R8::A)
+            .xor(R8::A)
+            .ld(Mem::addr("wMusicCommand"), R8::A)
+            .jr(".done")
+            .label(&skip);
+    }
+    code.label(".done").label("MusicFrameDone").nop();
+    game.add_to_main_loop(code.into_instrs());
+    game
+}
+fn music_frame(gb: &mut GameBoy) {
+    gb.run_until_cycle(gb.cycles() + 1);
+    assert!(gb.run_until_pc(gb.symbol("MusicFrameDone"), 3));
+}
+fn music_command(gb: &mut GameBoy, command: u8) {
+    gb.write_ram(gb.symbol("wMusicCommand"), command);
+    music_frame(gb);
+    assert_eq!(gb.read_symbol("wMusicCommand"), 0);
+}
+#[test]
+fn huge_music_advances_pauses_stops_switches_and_arbitrates_wave_sfx() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for clock in [MusicClock::MainFrame, MusicClock::VBlank] {
+        let mut gb = engine_rom(&music_game(clock)).boot();
+        assert!(gb.run_until_pc(gb.symbol("MusicFrameDone"), 3));
+        assert_eq!(music_byte(&gb, MUSIC_TICK), 1);
+        assert_eq!(music_byte(&gb, MUSIC_ROW), 0);
+        let first_period = (gb.read(hw::NR14.value) & 7, gb.read(hw::NR13.value));
+        let first_wave = gb.read(hw::NR33.value);
+        music_frame(&mut gb);
+        music_frame(&mut gb);
+        assert_eq!(music_byte(&gb, MUSIC_ROW), 1);
+        assert_ne!(
+            first_period,
+            (gb.read(hw::NR14.value) & 7, gb.read(hw::NR13.value))
+        );
+        assert_ne!(first_wave, gb.read(hw::NR33.value));
+        assert_ne!(gb.read(hw::NR44.value) & 0x80, 0);
+        assert_eq!(music_byte(&gb, MUSIC_WAVE), 0);
+        music_command(&mut gb, 7); // Playback without reserving CH2 rejects.
+        assert_ne!(gb.read_symbol("wMusicResult") & 0x10, 0);
+        music_command(&mut gb, 1); // Pause freezes song position and cuts its channels.
+        let position = (music_byte(&gb, MUSIC_ROW), music_byte(&gb, MUSIC_TICK));
+        gb.run_frames(5);
+        assert_eq!(
+            position,
+            (music_byte(&gb, MUSIC_ROW), music_byte(&gb, MUSIC_TICK))
+        );
+        assert_eq!(gb.read(hw::NR12.value), 0);
+        assert_eq!(gb.read(hw::NR30.value), 0);
+        music_command(&mut gb, 2);
+        assert_eq!(gb.read_symbol("wMusicResult") & 0x10, 0);
+        music_frame(&mut gb);
+        assert_ne!(
+            position,
+            (music_byte(&gb, MUSIC_ROW), music_byte(&gb, MUSIC_TICK))
+        );
+        music_command(&mut gb, 3);
+        music_command(&mut gb, 2);
+        assert_ne!(gb.read_symbol("wMusicResult") & 0x10, 0);
+        assert_eq!(gb.read_symbol(rust_boy::stdlib::audio::music::PLAYING), 0);
+        music_command(&mut gb, 4); // Start another imported song (one tick per row).
+        assert_eq!(music_byte(&gb, MUSIC_ROW), 0);
+        assert_eq!(music_byte(&gb, MUSIC_TICK), 0);
+        music_frame(&mut gb);
+        assert_eq!(music_byte(&gb, MUSIC_ROW), 1);
+        music_command(&mut gb, 5);
+        assert_eq!(music_byte(&gb, MUSIC_MASK), 4);
+        assert_eq!(gb.read_symbol("wMusicResult") & 0x10, 0);
+        for i in 0..16 {
+            assert_eq!(gb.read(hw::AUD3WAVERAM.value + i), 0xaa);
+        }
+        music_frame(&mut gb);
+        music_frame(&mut gb);
+        for i in 0..16 {
+            assert_eq!(gb.read(hw::AUD3WAVERAM.value + i), 0xaa);
+        }
+        music_command(&mut gb, 1); // Pausing music leaves the reserved SFX alone.
+        assert_eq!(gb.read(hw::NR30.value), 0x80);
+        assert_eq!(gb.read(hw::NR32.value), 0x40);
+        music_command(&mut gb, 2);
+        music_command(&mut gb, 6);
+        assert_eq!(music_byte(&gb, MUSIC_MASK), 0);
+        assert_eq!(music_byte(&gb, MUSIC_WAVE), 100);
+        music_frame(&mut gb);
+        assert_eq!(music_byte(&gb, MUSIC_WAVE), 0);
+        assert_eq!(gb.read(hw::AUD3WAVERAM.value), 0x01);
+        music_command(&mut gb, 8); // Power off gates driver ticks without losing position.
+        let position = (music_byte(&gb, MUSIC_ROW), music_byte(&gb, MUSIC_TICK));
+        gb.run_frames(4);
+        assert_eq!(
+            position,
+            (music_byte(&gb, MUSIC_ROW), music_byte(&gb, MUSIC_TICK))
+        );
+        music_command(&mut gb, 9);
+        music_frame(&mut gb);
+        assert_ne!(
+            position,
+            (music_byte(&gb, MUSIC_ROW), music_byte(&gb, MUSIC_TICK))
+        );
+    }
+}
+
+#[test]
+fn huge_vblank_tick_skips_initialization_and_preserves_the_interrupted_registers() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = engine_rom(&music_game(MusicClock::VBlank)).boot();
+    assert!(gb.run_until_pc(gb.symbol("MusicFrameDone"), 3));
+    gb.write_ram(gb.symbol("wMusicCommand"), 4);
+    gb.run_until_cycle(gb.cycles() + 1);
+    assert!(gb.run_until_pc(
+        gb.symbol("RustBoyHuge_hUGE_init.copy_song_descriptor_loop"),
+        3
+    ));
+    assert_eq!(gb.read_symbol(rust_boy::stdlib::audio::music::PLAYING), 0);
+    let before = gb.registers();
+    gb.request_interrupt(hw::IEF_VBLANK.value);
+    gb.run_until_cycle(gb.cycles() + 1);
+    assert!(gb.run_until_pc(before.pc, 1));
+    let after = gb.registers();
+    assert_eq!(
+        (
+            before.af(),
+            before.bc(),
+            before.de(),
+            before.hl(),
+            before.sp
+        ),
+        (after.af(), after.bc(), after.de(), after.hl(), after.sp)
+    );
+    assert!(gb.run_until_pc(gb.symbol("MusicFrameDone"), 3));
+    assert_eq!(music_byte(&gb, MUSIC_ROW), 0);
+    assert_eq!(music_byte(&gb, MUSIC_TICK), 0);
+    let order1 = gb.read16(gb.symbol(rust_boy::stdlib::audio::music::BUFFER) + 1);
+    assert_eq!(order1, gb.symbol("RustBoySong_SecondSong_order1"));
+}
+
+#[test]
+fn huge_music_coexists_with_full_vram_queue_dma_and_soft_reset() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for clock in [MusicClock::MainFrame, MusicClock::VBlank] {
+        let mut game = music_game(clock);
+        game.set_soft_reset(true);
+        game.add_sprite(
+            "MusicDot",
+            TileSource::from_raw(&[["`33333333"; 8]]),
+            8,
+            8,
+            0,
+        );
+        let mut writes = Block::new();
+        for i in 0..vram_queue::CAPACITY {
+            writes.emit_all(game.queue_vram_write(hw::SCRN0.value + u16::from(i), i + 1));
+        }
+        game.add_to_main_loop(writes.into_instrs());
+        let rom = engine_rom(&game);
+        let mut gb = rom.boot();
+        gb.run_frames(8);
+        let music = gb.symbol(rust_boy::stdlib::audio::music::BUFFER);
+        for buffer in [
+            vram_queue::BUFFER,
+            vram_queue::READ,
+            vram_queue::WRITE,
+            "wShadowOAM",
+        ] {
+            assert!(music + 100 <= gb.symbol(buffer));
+        }
+        assert_eq!(gb.symbol("wShadowOAM"), hw::RAM.value + 0xf00);
+        for i in 0..vram_queue::CAPACITY {
+            assert_eq!(gb.read(hw::SCRN0.value + u16::from(i)), i + 1);
+        }
+        for dma in gb.oam_dmas().iter().filter(|d| d.lcd_on) {
+            assert_eq!(dma.first.1, Mode::VBlank);
+            assert_eq!(dma.last.unwrap().1, Mode::VBlank);
+        }
+        assert_eq!(gb.dma_conflicts(), 0);
+        assert_eq!(gb.blocked_accesses().0, 0);
+        // Select the second song, then enter the soft-reset chord. Stop exactly before
+        // main starts again to inspect the fresh first-song state and mixer.
+        music_command(&mut gb, 4);
+        for button in [Button::A, Button::B, Button::Start, Button::Select] {
+            gb.press(button);
+        }
+        assert!(gb.run_until_pc(gb.symbol("EntryPoint"), 3));
+        gb.run_until_cycle(gb.cycles() + 1);
+        assert!(gb.run_until_pc(gb.symbol("Main"), 3));
+        assert_eq!(music_byte(&gb, MUSIC_ROW), 0);
+        assert_eq!(music_byte(&gb, MUSIC_TICK), 0);
+        assert_eq!(
+            gb.read16(gb.symbol(rust_boy::stdlib::audio::music::BUFFER) + 1),
+            gb.symbol("RustBoySong_DemoSong_order1")
+        );
+        assert_eq!(gb.read(hw::NR50.value), 0x77);
+        assert_eq!(gb.read(hw::NR51.value), 0xff);
+    }
+}
+
+#[test]
+fn starting_an_empty_song_silences_previous_sustained_notes() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = music_game(MusicClock::MainFrame);
+    let mut empty = include_str!("../examples/music/song.asm").replace("DemoSong", "EmptySong");
+    for note in ["C_5", "E_5", "C_4", "E_4", "C_3", "D_3"] {
+        empty = empty.replace(&format!("dn {note}, 1, 0"), "dn ___, 0, 0");
+    }
+    game.add_music_song(Song::from_rgbds(&empty, "EmptySong"));
+    let mut code = Block::new();
+    code.ld(R8::A, Mem::addr("wMusicResult"))
+        .cp_imm(0x42)
+        .jr_cond(Condition::NZ, ".skip_empty")
+        .emit_all(game.start_music("EmptySong"))
+        .label(".skip_empty");
+    game.add_to_main_loop(code.into_instrs());
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_ne!(gb.read(hw::NR12.value), 0);
+    gb.write_ram(gb.symbol("wMusicResult"), 0x42);
+    gb.run_frames(2);
+    for dac in [hw::NR12, hw::NR22, hw::NR30, hw::NR42] {
+        assert_eq!(gb.read(dac.value), 0);
+    }
+}
+
+#[test]
+fn huge_reservation_protects_sound_effect_registers_on_each_channel() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let envelope = Envelope::new(5, EnvelopeDirection::Decrease, 3);
+    let pulse = PulseEffect::new(1234, 11, Duty::ThreeQuarters, envelope);
+    let cases = [
+        (
+            Sfx::Pulse1(pulse, Sweep::default()),
+            1,
+            vec![
+                (hw::NR11, 0xf5),
+                (hw::NR12, 0x53),
+                (hw::NR13, 0xd2),
+                (hw::NR14, 0xc4),
+            ],
+        ),
+        (
+            Sfx::Pulse2(pulse),
+            2,
+            vec![
+                (hw::NR21, 0xf5),
+                (hw::NR22, 0x53),
+                (hw::NR23, 0xd2),
+                (hw::NR24, 0xc4),
+            ],
+        ),
+        (
+            Sfx::Wave(WaveEffect::new(
+                1234,
+                11,
+                WaveLevel::Quarter,
+                WavePattern::from_bytes([0x99; 16]),
+            )),
+            4,
+            vec![
+                (hw::NR30, 0x80),
+                (hw::NR31, 245),
+                (hw::NR32, 0x60),
+                (hw::NR33, 0xd2),
+                (hw::NR34, 0xc4),
+            ],
+        ),
+        (
+            Sfx::Noise(NoiseEffect::new(11, envelope, 7, NoiseWidth::Seven, 3)),
+            8,
+            vec![
+                (hw::NR41, 53),
+                (hw::NR42, 0x53),
+                (hw::NR43, 0x7b),
+                (hw::NR44, 0xc0),
+            ],
+        ),
+    ];
+    for (effect, mask, registers) in cases {
+        let mut game = RustBoy::new();
+        game.enable_music(
+            Song::from_rgbds(include_str!("../examples/music/song.asm"), "DemoSong"),
+            MusicClock::VBlank,
+        );
+        game.init(
+            [
+                game.reserve_music_channel(effect.channel()),
+                game.play_sfx(&effect),
+            ]
+            .concat(),
+        );
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(5);
+        assert_eq!(music_byte(&gb, MUSIC_MASK), mask);
+        for (register, value) in registers {
+            assert_eq!(
+                gb.read(register.value),
+                value,
+                "{effect:?}: {}",
+                register.name
+            );
+        }
+    }
+}
+
+#[test]
 fn background_tile_animation_sequences_pause_and_restart() {
     if !rgbds_enabled() {
         return;
@@ -3506,4 +4024,39 @@ fn tile_collision_with_forty_solid_ids_assembles_and_hits_the_last() {
         run_tile_collision((0, 0), (0, 0), TilemapArea::Map9800, 0x9800, 40, 1..=40),
         (1, 40, 0x9800)
     );
+}
+
+#[test]
+fn engine_soft_reset_returns_background_camera_to_origin() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.set_soft_reset(true);
+    let done = game.labels().local("camera_set_once");
+    let mut set_once = Block::new();
+    set_once
+        .ld_a_addr_def("wCameraWritten")
+        .and(R8::A)
+        .jp_cond(Condition::NZ, &done)
+        .ld_a(1)
+        .ld_addr_def_a("wCameraWritten")
+        .ld_a(64)
+        .ldh(Mem::addr(hw::SCX), R8::A)
+        .ld_a(48)
+        .ldh(Mem::addr(hw::SCY), R8::A)
+        .label(&done);
+    game.add_to_main_loop(set_once);
+    game.raw(|asm| {
+        asm.chunk(Chunk::Data).label("wCameraWritten").ds("1");
+    });
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (64, 48));
+
+    gb.run_script(&[
+        (20, &[Button::A, Button::B, Button::Select, Button::Start]),
+        (3, &[]),
+    ]);
+    assert_eq!((gb.read(hw::SCX.value), gb.read(hw::SCY.value)), (0, 0));
 }

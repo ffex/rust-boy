@@ -120,8 +120,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
   `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded because
   WX=166 glitches on DMG. Raw coordinates are available for clipping/off-screen placement. Window
-  and background share tiles/BGP and require LCDC bit 0 on DMG. `show_window(true)` writes no
-  position: without a configured window, set one first. Existing output is unchanged.
+  and background share tiles/BGP; LCDC bit 0 gates both on DMG. `Window` is non-exhaustive, supports
+  `Window::from_raw`, and can start hidden with `visible_on_startup(false)`. The final LCDC value comes from config;
+  runtime window/LCDC snippets should run in VBlank.
+- **Window migration**: replace external `Window { tilemap, wx, wy }` literals with `Window::from_raw(tilemap, wx, wy)`
+  or `Window::new(tilemap, x, y)`; the type is now `#[non_exhaustive]` for future-compatible settings.
 - **Tile lookup** (Phase 3): `GetTileByPixel` follows the active background map through
   LCDC bit 3, including runtime selection. It returns the address and index from `$9800`
   or `$9C00`; map-pixel coordinates and the calling convention are unchanged.

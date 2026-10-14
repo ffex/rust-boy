@@ -1002,7 +1002,9 @@ impl RustBoy {
             lcdc = lcdc | self.config.background_tilemap.lcdc_bg_flag();
         }
         if let Some(window) = self.config.window {
-            lcdc = lcdc | hw::LCDCF_WINON;
+            if window.visible_on_startup {
+                lcdc = lcdc | hw::LCDCF_WINON;
+            }
             if window.tilemap == TilemapArea::Map9C00 {
                 lcdc = lcdc | hw::LCDCF_WIN9C00;
             }
@@ -1844,6 +1846,17 @@ impl RustBoy {
         y: u8,
         flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
     ) -> super::sprites::SpriteId {
+        self.add_sprite_at(name, tile_source, i16::from(x), i16::from(y), flags)
+    }
+
+    fn add_sprite_at(
+        &mut self,
+        name: &str,
+        tile_source: super::tiles::TileSource,
+        x: i16,
+        y: i16,
+        flags: impl Into<crate::stdlib::graphics::sprites::SpriteFlags>,
+    ) -> super::sprites::SpriteId {
         // The sprite name is checked before it names the tiles
         check_name("sprite", name);
         let count = tile_source.tile_count();
@@ -1864,8 +1877,9 @@ impl RustBoy {
     ///
     /// # Panics
     /// If parts are empty, names collide, tiles/OAM are full, a part has no tiles or
-    /// violates 8x16 alignment, or an offset position is outside supported screen coordinates
-    /// (X 0..=247, Y 0..=239). Invalid layout/capacity is checked before registration.
+    /// violates 8x16 alignment, or an offset position cannot fit in OAM after its hardware
+    /// coordinate offset (X + 8, Y + 16). This supports screen X -8..=247 and Y -16..=239;
+    /// OAM coordinate zero hides that part. Invalid layout/capacity is checked before registration.
     #[track_caller]
     pub fn add_metasprite(
         &mut self,
@@ -1913,17 +1927,17 @@ impl RustBoy {
                     <= usize::from((hw::VRAM_OBJ_TILES_END - hw::VRAM_OBJ_TILES) / hw::TILE_SIZE),
                 "metasprite {name:?} tiles do not fit in VRAM"
             );
-            let mut position = [0u8; 2];
+            let mut position = [0i16; 2];
             for (slot, anchor, offset, hardware_offset) in [
                 (0, x, part.x, hw::OAM_X_OFFSET),
                 (1, y, part.y, hw::OAM_Y_OFFSET),
             ] {
                 let value = i32::from(anchor) + i32::from(offset);
                 assert!(
-                    (0..=i32::from(u8::MAX - hardware_offset)).contains(&value),
+                    (0..=i32::from(u8::MAX)).contains(&(value + i32::from(hardware_offset))),
                     "metasprite {name:?} part position is outside supported screen coordinates"
                 );
-                position[slot] = value as u8;
+                position[slot] = i16::try_from(value).expect("valid OAM positions fit i16");
             }
             positions.push((position[0], position[1]));
         }
@@ -1932,7 +1946,7 @@ impl RustBoy {
             .zip(names)
             .zip(positions)
             .map(|((part, label), (x, y))| {
-                self.add_sprite(label, part.tiles.clone(), x, y, part.flags)
+                self.add_sprite_at(label, part.tiles.clone(), x, y, part.flags)
             })
             .collect();
         self.sprites.create_composite(name, sprites)
@@ -4381,7 +4395,7 @@ mod tests {
     fn test_window_from_the_config_at_start_up() {
         // The start-up code on the test CPU: WX/WY before user init, the window bits in the
         // LCD-on value. LCDC writes of init code are replaced by that value (documented on
-        // `show_window`): a configured window hidden in init shows anyway.
+        // `show_window`): a visible-by-default configured window hidden in init shows anyway.
         for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
             let mut gb =
                 RustBoy::with_config(RustBoyConfig::default().window(Window::new(map, 40, 112)));
@@ -4405,6 +4419,35 @@ mod tests {
             assert_mem(&cpu, "rWX", 47);
             assert_mem(&cpu, "rWY", 112);
             assert_mem(&cpu, "rLCDC", 0x83 | 0x20 | map_bit);
+        }
+    }
+
+    #[test]
+    fn test_window_hidden_at_start_up_keeps_map_bit_and_position() {
+        for (map, map_bit) in [(TilemapArea::Map9800, 0), (TilemapArea::Map9C00, 0x40)] {
+            let mut gb = RustBoy::with_config(
+                RustBoyConfig::default()
+                    .window(Window::new(map, 40, 112).visible_on_startup(false)),
+            );
+            let (code, mut cpu) = startup(&mut gb);
+            cpu.stubs.insert("Memcopy".to_string());
+            cpu.consts.retain(|text, _| !text.contains('|'));
+            for flag in [
+                hw::LCDCF_ON,
+                hw::LCDCF_BGON,
+                hw::LCDCF_OBJON,
+                hw::LCDCF_OBJ8,
+                hw::LCDCF_WINON,
+                hw::LCDCF_WIN9C00,
+            ] {
+                cpu.consts.insert(flag.name.to_string(), flag.value);
+            }
+            cpu.run(&code);
+            assert_mem(&cpu, "rWX", 47);
+            assert_mem(&cpu, "rWY", 112);
+            let lcdc = cpu.mem["rLCDC"];
+            assert_eq!(lcdc & 0x20, 0, "LCDCF_WINON must stay clear");
+            assert_eq!(lcdc, 0x83 | map_bit);
         }
     }
 

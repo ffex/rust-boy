@@ -242,12 +242,15 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   attributes, in 8x8 or 8x16 hardware size. Parts take OAM entries in list order; on DMG overlapping objects are drawn
   by smaller X first (OAM order breaks ties and picks the 10 objects of a line). Generated names are `{name}_partN`;
   `add_sprite_16x16` reuses the same constructor with its `_left`/`_right` names and unchanged output. Positions
-  (X 0..=247, Y 0..=239), capacity and 8x16 tile alignment are checked before anything is registered. Composite
+  (X -8..=247, Y -16..=239), capacity and 8x16 tile alignment are checked before anything is registered; OAM coordinate
+  zero hides a part. Composite
   moves stop the leading member at the limit and keep every part's offset; composite animation works in both sizes.
+  Engine `show_at` and `show_composite_at` accept signed positions with the same per-part ranges as creation
+  (X -8..=247, Y -16..=239), preserving tiles/flags and encoding zero as hidden.
   Emulator tests: an irregular six-part layout moved towards the four limits in both sizes (tiles and flags kept),
   animation of every part, typed flags on every part of a 16x16 sprite and of a metasprite.
 
-- **Per-animation speed** (since `refactor-p3-animation-speed`): `SpriteManager::set_animation_delay(sprite, index,
+- **Per-animation speed** (since `refactor-p3-animation-speed`): `SpriteManager::set_animation_period(sprite, index,
   frames)` sets a period of 1..=255 game frames for one animation at generation time. A sprite with any override gets
   its own timer and previous-selection byte (`wAnim_{name}_Timer`, `wAnim_{name}_Previous`); its other animations use
   the global period through that timer. A selection change seen by the dispatcher resets the clock; enabling the
@@ -255,8 +258,8 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   disabled frame starts a full period. Sprites without overrides keep the shared global counter, and programs without
   overrides generate the same asm. The dispatcher saves BC (B the selection, C the shared-counter predicate); the
   animation functions keep their AF-only convention and remain the only frame stepping, so Once and PingPong behave as
-  before. Composite setters (`set_composite_animation_delay`) configure every part and check all indices first;
-  `clear_animation_delay` / `clear_composite_animation_delay` remove overrides. Direct calls of an animation function
+  before. Composite setters (`set_composite_animation_period`) configure every part and check all indices first;
+  `clear_animation_period` / `clear_composite_animation_period` remove overrides. Direct calls of an animation function
   step at once, outside the dispatcher's timing.
 
 - **Animation completion events** (since `refactor-p3-animation-callbacks`): `enable_animation_events` gives an
@@ -283,7 +286,10 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   only their DMG bit (priority 7, Y flip 6, X flip 5, palette 4). `Sprite::set_flags` and `SpriteManager::set_flags`
   write the attribute byte at runtime (A only); the engine one writes the shadow OAM, which DMA copies at the next
   VBlank. Behind-background priority hides the sprite behind background/window colours 1-3, not 0. Flips act on each
-  hardware sprite: a flipped 16x16 composite mirrors each half in place. Tests: all 16 DMG combinations, raw-byte
+  hardware sprite. `SpriteManager::set_composite_flags` writes every member's flags and, for exactly two
+  horizontal neighbours, swaps creation-time tile assignments on X flip (clearing it restores them). This resets
+  animated tiles rather than mirroring the current frame. Other layouts get flags only; Y flip never reorders parts.
+  Tests: all 16 DMG combinations, raw-byte
   compatibility, independent bit clearing, the whole OAM entry on the emulator at start-up and after a runtime change.
 
 - **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,
@@ -303,7 +309,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   window shares the background tiles and BGP and needs LCDC bit 0 on DMG. `show_window(true)` without a configured
   window writes no position: it shows at the boot values WX=0, WY=0 unless the program sets one. `build()` writes the
   whole LCD-on LCDC value after init code, so `show_window` and `select_window_tilemap` act from VBlank code, not from
-  init (`test_window_from_the_config_at_start_up`); a configured window cannot start hidden today.
+  init (`test_window_from_the_config_at_start_up`). `Window` is non-exhaustive, with `new` for screen coordinates and
+  `from_raw` for clipping; it defaults visible and can start hidden with `visible_on_startup(false)`. A configured
+  window is allowed when `Lcdc.background` is false, though LCDC bit 0 makes it invisible on DMG.
 
 - **Runtime tilemaps** (since `refactor-p3-runtime-tilemaps`): `TileManager::add_tilemap_rom` keeps level or screen
   maps in ROM, emitted in creation order and left out of the start-up copies: they reserve no VRAM map (`get_address`
@@ -1518,10 +1526,15 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
   Initial presses and repeats share one emitted action body, so local labels in bounded movement and
   other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
-- **Engine:** register-based function arguments use `RustBoy::call_args` / `Call::with_args`; signed 8.8 position/velocity/gravity integration exists in `stdlib::movement`;  no scenes, RNG, sprite collision, 16-bit math, loops/switch; screen-pixel solid-tile checks exist as
+- **Engine:** scene dispatch is available through `SceneManager`; no sprite collision; screen-pixel solid-tile checks exist as
   `TileCollision` (`refactor-p3-tile-collision`) (the VBlank interrupt + `halt` main loop, the
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
+  Register-based function arguments use `RustBoy::call_args` / `Call::with_args`.
+  Signed 8.8 position/velocity/gravity integration exists in `stdlib::movement`.
+  `stdlib::flow` provides `While`, fixed-count `For` and `SwitchA`; For saves BC around its body.
+  Unsigned 16-bit add/subtract/compare, 8×8 multiply and 16÷8 divide are available in `stdlib::math`.
+  Deterministic pseudo-random bytes are available through `stdlib::random::random_u8` (an 8-bit LFSR).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.

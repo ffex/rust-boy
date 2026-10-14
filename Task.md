@@ -3,12 +3,12 @@
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
 [`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review,
-fixes and merges.
+fix requests and merges.
 
 ## How we work
 
 - Codex makes the first try of a task and opens its PR into `refactor`. Claude then has it reviewed by a
-  context-free agent, fixes the findings, has it reviewed again and merges it. Only the final
+  context-free agent, sends the findings to Codex as an `@codex fix-request` comment, has it reviewed again and merges it. Only the final
   `refactor` → `main` PR waits for the maintainer.
 - `refactor` is the integration branch (created from `main` at `4601a5c`).
 - Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
@@ -273,9 +273,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out (branch `refactor-p3-palettes`):
       typed `Palette`/`Shade`/`PaletteRegister`, runtime writes, four-stage nonblocking `PaletteFade`;
       progress supplied in A, clamps at 3, supports fades from/to white or black (or either grey).
-- [ ] Follow-ups of the palettes (from the review of #48, maintainer decisions): whether the start-up `Palettes` should
-      take `impl Into<Palette>` (today raw bytes, `Palette::byte()` converts), and whether the start-up palette write
-      should reuse `stdlib::graphics::palette::set_palette` (`ldh` instead of `ld [rBGP], a`: changes every example's asm)
+- [x] Follow-ups of the palettes (from the review of #48): startup `Palettes` accepts `impl Into<Palette>` while
+      retaining raw `u8` support, and startup writes reuse `stdlib::graphics::palette::set_palette` (`ldh`).
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
@@ -285,27 +284,59 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [ ] Follow-up of the metasprites (from the review of #50, maintainer decision): whether a metasprite may start partly
       off-screen to the left or top (anchor + offset < 0; OAM X/Y 0 hide an object), rejected at creation today
 - [x] Follow-up of the sprite attributes (from the review of #49): `SpriteManager::set_composite_flags` sets every
-      member's flags and swaps the tile assignments of a two-part composite on X flip. For animated composites,
-      call after animation updates because those update each member's tile byte.
-- [ ] Sprite show / hide, OAM slot allocation
-- [ ] Text: font loading, print string, print number / BCD score
-- [ ] Background tile animation
-- [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
+      member's flags; two horizontal neighbours swap creation-time tile assignments on X flip
+      (clearing it restores them). Other layouts get flags only; Y flip never reorders parts.
+- [x] Sprite show / hide, OAM slot allocation (branch `refactor-p3-sprite-pools`, depends on #51):
+      static/composite hide and show-at snippets; reserved runtime `SpritePool` ranges share OAM
+      with static sprites, allocate lowest free slots, release/clear and reuse them, rejecting invalid
+      operations with carry. Pools have a single init/main producer and handler use is rejected.
+- [x] Text: font loading, print string, print number / BCD score (`refactor-p3-text`, stacked on
+      WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
+- [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
+      loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
+- [x] PNG → 2bpp conversion in Rust (tile count derived from file size): `refactor-p3-png-assets`,
+      owned PNG/binary loaders, palette/transparency rules and 8×16 tile ordering; FOSDEM/coin migrated
+- [ ] Follow-up of the background tile animation (from the review of #88): a variable named like an animation's ROM
+      tables (`BgAnim{name}Targets`, `…Frames`, `…Frame{i}`) passes `build()` and fails in rgbasm ("already defined"); the
+      name-conflict check should cover these raw labels, as it does for functions
+
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
-- [ ] Per-animation speed (today only a global delay)
-- [ ] End-of-animation events / callbacks
+- [x] Per-animation speed (`refactor-p3-animation-speed`, stacked on metasprites: 1..=255-frame
+      overrides, independent selection clocks, default/global fallback, composite setters)
+- [x] Follow-up of the per-animation speed (review of the #50 chain): distinguish per-animation
+      overrides from global `RustBoy::set_animation_delay` (renamed to `set_animation_period`
+      and the composite/clear counterparts).
+- [x] End-of-animation events / callbacks (`refactor-p3-animation-callbacks`, stacked on timing:
+      coalescing flags, deferred callbacks, one logical metasprite event, explicit replay)
+- [ ] Follow-up of the animation events (from the review of the #50 chain, maintainer decision): re-enabling a finished
+      Once (switching away and back, or disable then enable) re-arms its event without replaying the frames, so the event
+      or callback fires again one period later; should re-arming need `restart_animation` instead? (documented today)
+- [ ] Follow-up of the animation events (from review 2 of the #50 chain): `build()` could reject restart snippets
+      generated before the sprite's timing or events changed (today documented: configure first; a cleared period
+      leaves an undefined `wAnim_{name}_Timer` for rgbasm)
 
-### Audio *(nothing exists today)*
-- [ ] APU init (sound on/off at boot), register constants in `hw`
-- [ ] Sound-effect API for channels 1–4 (`play_sfx`)
-- [ ] Music: integrate a driver (e.g. hUGEDriver)
+
+### Audio
+- [x] APU init (sound on/off at boot), register constants in `hw` (`refactor-p3-apu`: opt-in
+      inherited/off/on startup policy, validated mixer, shared stateless power snippets)
+- [x] Sound-effect API for channels 1–4 (`play_sfx`; `refactor-p3-sfx`): typed pulse/sweep,
+      wave patterns/levels and noise effects, hardware one-shot length/envelope, channel stop,
+      powered-off rejection; mixer and other channels preserved
+- [x] Music: integrate a driver (`refactor-p3-music`, hUGEDriver 6.1.1 pinned/vendored
+      offline; multiple exports, allocator-accounted state, main-frame/VBlank clocks,
+      start/pause/resume/stop and channel reservation with wave-cache restoration)
 
 ### Input
-- [ ] Just-pressed (`wNewKeys`), released, and held as separate bindings
-- [ ] Auto-repeat
-- [ ] Multiple bindings for the same button
+- [x] Just-pressed (`wNewKeys`), released (`wReleasedKeys`), and held as separate bindings
+      (`InputManager::on_just_pressed`, `on_release`, and `on_held`; `on_press` remains a
+      backwards-compatible alias for held actions)
+- [x] Auto-repeat (`on_repeat(button, delay, interval, action)` runs on press immediately,
+      then after the delay and at each interval while held; counters are per binding;
+      label-bearing actions share one emitted body for initial presses and repeats)
+- [x] Multiple bindings for the same button (all bindings run in registration order); multiple
+      managers share one `UpdateKeys` sample per frame (PR #61 review F5).
 
 ### Engine
 - [x] VBlank interrupt + `halt` main loop (instead of busy-polling `LY`) (branch `refactor-p3-interrupts`: the vector
@@ -323,9 +354,14 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `RustBoyConfig::stat` / `timer`; `hw`: `rDIV`, `rTIMA`, `rTMA`, `rTAC`, `TACF_*`, the vectors, `STACK_TOP`.
       The test emulator now requests the joypad interrupt only for a selected group, as the hardware does)
 - [ ] Scenes / game states
-- [ ] Entities: spawn / despawn
+- [x] Entities: spawn / despawn (branch `refactor-p3-entities`, stacked on sprite pools: `RustBoy::create_entity_pool` reserves
+      reusable OAM entries; `EntityPool::spawn` returns a hidden slot index in `A`, `set_sprite` shows/updates it,
+      `hide` keeps it alive, and `despawn` clears and frees it. One entity is one hardware sprite.)
 - [ ] Fixed-point sub-pixel movement, velocity, gravity
-- [ ] WRAM arrays (HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`, `VariableManager::create_hram_*`)
+- [x] WRAM arrays (branch `refactor-p3-wram-arrays`; HRAM variables: done in Phase 2, `refactor-p2-engine-api-memory`,
+      `VariableManager::create_hram_*`): contiguous typed byte/word arrays,
+      compact uniform initialization, static bounds/value checks and BC-indexed access with carry rejection.
+      Arrays share WRAM0 allocation and return `MemoryFull` when the program exceeds it.
 - [ ] RNG
 - [ ] Sprite-vs-sprite collision (AABB), generalised tile collision
 - [ ] 16-bit math helpers (add/sub/compare, multiply/divide)
@@ -337,7 +373,13 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 
 ### Platform
 - [ ] MBC1/MBC5 ROM banking (> 32 KB)
+  - [x] Low-level `stdlib::banking` bank selectors for MBC1 (7-bit, skipping forbidden banks)
+        and MBC5 (9-bit); `Section::romx(...).bank(n)` places data explicitly.
+  - [ ] Engine-managed mapper headers and banked asset access.
 - [ ] SRAM save games
+  - [x] Low-level MBC1/MBC5 RAM enable/disable and MBC5 RAM-bank selection
+        (`stdlib::sram`, stacked on #76).
+  - [ ] Persistent save API, mapper/header configuration and MBC1 RAM banking mode.
 - [ ] *(optional)* Game Boy Color: palettes, VRAM bank 1, double speed
 
 ### Tooling
@@ -374,11 +416,15 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
       functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
       "`Player` already defined" in rgbasm)
-- [ ] Follow-ups of the shadow OAM and the VRAM queue (from the reviews of #39 and #40):
-      document that writes queued with the LCD off wait until it is on; `ldh` for `rLY` in `FlushVramQueue`
-      (1 M-cycle an entry); an `hw` constant for `cp 153` in the late-flush test; whether `build()` should also
-      reject `raw()` producers and calls to `FlushVramQueue` outside the VBlank handler (documented limits today);
-      whether `hOAMDMA` should move away from the stack (31 entries above it) or the DMA get an `rLY` guard
+- [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
+      after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
+      branch `refactor-p3-vram-queue-followups`.
+- [x] Use `hw::LY_LAST_LINE` for the late-flush test and STAT line validation
+      (branch `refactor-p3-last-ly-line`, stacked on the VRAM queue follow-ups).
+- [ ] Remaining shadow OAM and VRAM queue review follow-ups: whether `build()` should reject raw producers
+      and calls to `FlushVramQueue` outside the VBlank
+      handler (current limits are documented); whether `hOAMDMA` should move away from the stack or DMA get
+      an `rLY` guard.
 
 ## Phase 4 — Documentation
 

@@ -924,6 +924,42 @@ fn engine_rom(gb: &RustBoy) -> Rom {
 }
 
 #[test]
+fn scene_dispatcher_runs_the_selected_scene_and_switches_next_frame() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wTitleTicks", 0);
+    game.vars.create_u8("wPlayTicks", 0);
+
+    let mut title = Block::new();
+    title.label("UpdateTitle");
+    title.emit_all(count("wTitleTicks").into_instrs());
+    title.ret();
+    let title = Routine::new("UpdateTitle", title.into_instrs());
+
+    let mut play = Block::new();
+    play.label("UpdatePlay");
+    play.emit_all(count("wPlayTicks").into_instrs());
+    play.ret();
+    let play = Routine::new("UpdatePlay", play.into_instrs());
+
+    let mut scenes = SceneManager::new("UpdateScene", "wCurrentScene");
+    scenes.add_scene(0, title).add_scene(2, play);
+    let dispatcher = scenes.dispatcher();
+    let dispatch = game.call_routine(&dispatcher);
+    game.add_to_main_loop(dispatch);
+    game.add_to_main_loop(scenes.switch_to(2));
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(3);
+    assert_eq!(gb.read_symbol("wTitleTicks"), 1);
+    assert_eq!(gb.read_symbol("wPlayTicks"), 2);
+    assert_eq!(gb.read_symbol("wCurrentScene"), 2);
+}
+
+#[test]
 fn sram_control_routines_assemble_and_return() {
     if !rgbds_enabled() {
         return;
@@ -983,6 +1019,35 @@ fn mbc_bank_selectors_assemble_and_return_to_the_caller() {
     gb.run_frames(5);
     assert_eq!(gb.read_symbol("wBankHigh"), 1);
     assert_eq!(gb.read_symbol("wBankLow"), 0xFF);
+}
+
+#[test]
+fn scene_dispatcher_ignores_unknown_ids_and_empty_scene_lists() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for with_scene in [false, true] {
+        let mut game = RustBoy::new();
+        game.vars.create_u8("wSceneTicks", 0);
+        game.vars.create_u8("wMainTicks", 0);
+        let mut scenes = SceneManager::new("UpdateScene", "wCurrentScene");
+        if with_scene {
+            let mut body = Block::new();
+            body.label("UpdateKnown")
+                .emit_all(count("wSceneTicks").into_instrs())
+                .ret();
+            scenes.add_scene(0, Routine::new("UpdateKnown", body.into_instrs()));
+        }
+        let call = game.call_routine(&scenes.dispatcher());
+        game.init(scenes.switch_to(9));
+        game.add_to_main_loop(call);
+        game.add_to_main_loop(count("wMainTicks"));
+        let mut gb = engine_rom(&game).boot();
+        gb.run_frames(5);
+        assert_eq!(gb.read_symbol("wSceneTicks"), 0);
+        assert!(gb.read_symbol("wMainTicks") > 0);
+        assert_eq!(gb.read_symbol("wCurrentScene"), 9);
+    }
 }
 
 /// The share of `samples` moments, spread over `frames` frames, at which the CPU is in a
@@ -2393,6 +2458,68 @@ fn composite_x_flip_swaps_halves_and_sets_flags_on_both() {
 }
 
 #[test]
+fn random_u8_advances_a_nonzero_state_and_returns_it_in_a() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::new();
+    game.vars.create_u8("wRandomOutput", 0);
+    let random = rust_boy::stdlib::random::random_u8();
+    let mut call = game.call_routine(&random);
+    let mut store = rust_boy::asm::Block::new();
+    store.ld_addr_def_a("wRandomOutput");
+    call.extend(store.into_instrs());
+    game.add_to_main_loop(call);
+
+    let mut gb = engine_rom(&game).boot();
+    assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+    gb.run_frames(3);
+    let seed = gb.read_symbol("wRandomSeed");
+    assert_ne!(
+        seed, 0,
+        "a zero initial state is replaced by the default seed"
+    );
+    assert_eq!(gb.read_symbol("wRandomOutput"), seed);
+    assert_eq!(seed, 0xDE, "three LFSR steps from the default $A7 seed");
+}
+
+#[test]
+fn random_u8_cycles_custom_seeds_and_recovers_a_runtime_zero() {
+    if !rgbds_enabled() {
+        return;
+    }
+    for seed in [1, 0x42, 0xA7] {
+        let mut game = RustBoy::new();
+        game.vars.create_u8("wRandomSeed", seed);
+        let call = game.call_routine(&rust_boy::stdlib::random::random_u8());
+        game.add_to_main_loop(call);
+        let mut gb = engine_rom(&game).boot();
+        assert!(gb.run_until_pc(gb.symbol("Main"), 10));
+        assert_eq!(gb.read_symbol("wRandomSeed"), seed);
+        let mut seen = std::collections::BTreeSet::new();
+        seen.insert(seed);
+        for step in 1..=255 {
+            gb.run_frames(1);
+            let state = gb.read_symbol("wRandomSeed");
+            assert_ne!(state, 0);
+            if step < 255 {
+                assert!(seen.insert(state), "seed {seed}: repeated at step {step}");
+            } else {
+                assert_eq!(state, seed);
+            }
+        }
+        assert_eq!(seen.len(), 255);
+        gb.write_ram(gb.symbol("wRandomSeed"), 0);
+        gb.run_frames(1);
+        assert_eq!(
+            gb.read_symbol("wRandomSeed"),
+            0xEB,
+            "default seed is stepped after runtime zero"
+        );
+    }
+}
+
+#[test]
 fn palettes_and_nonblocking_fades_follow_progress_in_vblank() {
     if !rgbds_enabled() {
         return;
@@ -2621,6 +2748,36 @@ fn window_init_position_override_and_disabled_default() {
     gb.run_frames(2);
     assert_eq!(gb.read(hw::WX.value), 47);
     assert_eq!(gb.read(hw::WY.value), 80);
+}
+
+#[test]
+fn configured_window_can_start_hidden_even_with_background_disabled() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut game = RustBoy::with_config(
+        RustBoyConfig::default()
+            .lcdc(Lcdc::default().background(false))
+            .window(Window::from_raw(TilemapArea::Map9C00, 7, 112).visible_on_startup(false)),
+    );
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    let lcdc = gb.read(hw::LCDC.value);
+    assert_eq!(lcdc & hw::LCDCF_BGON.value, 0);
+    assert_eq!(lcdc & hw::LCDCF_WINON.value, 0, "configured hidden");
+    assert_ne!(
+        lcdc & hw::LCDCF_WIN9C00.value,
+        0,
+        "map config still applies"
+    );
+    assert_eq!((gb.read(hw::WX.value), gb.read(hw::WY.value)), (7, 112));
+
+    game.on_vblank(game.show_window(true));
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(2);
+    let lcdc = gb.read(hw::LCDC.value);
+    assert_ne!(lcdc & hw::LCDCF_WINON.value, 0, "runtime show is retained");
+    assert_eq!(lcdc & hw::LCDCF_BGON.value, 0, "DMG master bit remains off");
 }
 
 #[test]

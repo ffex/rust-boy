@@ -761,7 +761,7 @@ mod tests {
         let used = registry
             .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
-        assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
+        assert_eq!(used.variables, ["wCurKeys", "wNewKeys", "wReleasedKeys"]);
     }
 
     #[test]
@@ -779,7 +779,7 @@ mod tests {
         let used = registry
             .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
-        assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
+        assert_eq!(used.variables, ["wCurKeys", "wNewKeys", "wReleasedKeys"]);
         // Not the ones the program defines
         let mut main = Block::new();
         main.call("ReadKeys");
@@ -791,7 +791,7 @@ mod tests {
                 &BTreeSet::new(),
             )
             .unwrap();
-        assert_eq!(used.variables, ["wCurKeys"]);
+        assert_eq!(used.variables, ["wCurKeys", "wReleasedKeys"]);
     }
 
     #[test]
@@ -887,7 +887,7 @@ mod tests {
         let used = registry
             .generate_used(&[&main.into_instrs()], [], &[], &BTreeSet::new())
             .unwrap();
-        assert_eq!(used.variables, ["wCurKeys", "wNewKeys"]);
+        assert_eq!(used.variables, ["wCurKeys", "wNewKeys", "wReleasedKeys"]);
     }
 
     /// A routine named like a builtin, with other code

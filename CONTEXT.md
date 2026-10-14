@@ -6,7 +6,8 @@ built, how the code is layered, what is broken and why. The actionable checklist
 [`AGENTS.md`](AGENTS.md), and Claude's review, fix and merge rules in [`CLAUDE.md`](CLAUDE.md).
 
 Codex makes the first try of a task and opens its PR into `refactor`; Claude has it reviewed by a
-context-free agent, fixes the findings and merges it. Only the `refactor` → `main` PR waits for the maintainer.
+context-free agent, sends the findings to Codex as an `@codex fix-request` comment (Codex fixes
+them) and merges it. Only the `refactor` → `main` PR waits for the maintainer.
 
 > Snapshot taken on branch `refactor` at commit `4601a5c` (October 2026). Line numbers refer to
 > that commit. Since `refactor-p2-engine-api-prelude` the layers are `asm`, `stdlib` and `engine`, in `src/asm/`,
@@ -27,7 +28,8 @@ into a ROM:
 your_game.rs ──cargo run──▶ main.asm ──rgbasm──▶ main.o ──rgblink──▶ main.gb ──rgbfix──▶ playable ROM
 ```
 
-- Zero Rust dependencies, edition 2024.
+- Edition 2024. The snapshot had zero Rust dependencies; `refactor-p3-png-assets` adds the pure-Rust
+  `png` decoder (0.18.1, declared MSRV 1.73) for host-side asset conversion.
 - The project is built with RGBDS 1.0 (the `.o` files once committed were object format `RGB9`). Generated code uses `0x05`-style
   constants, which needs **RGBDS ≥ 0.9**. `rgbasm -L` (the old README used it) was removed in RGBDS 0.8.
 - `hardware.inc` (v4.x) lives once in `include/hardware.inc` (it used to be copied 6 times under
@@ -71,7 +73,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 | Build API | ✅ since Phase 2 (`refactor-p2-engine-api-errors`) `RustBoy::build(&self) -> Result<String, Error>`: building changes nothing (the variables it adds go to a copy), so it can be called any number of times; what only the whole program shows is an `Err` (`rust_boy::Error`: `UnknownFunction`, `NameConflict`, `MemoryFull`, `Section`), and what is wrong at a call panics there, so `build()` itself does not panic on what a program contains (see [§3](#3-are-the-levels-correct-assessment), item 6) |
 | Memory | ✅ VRAM tiles and OAM entries are allocated through `MemoryAllocator` when they are added ([B17](#b17)); the WRAM0 and, since Phase 2 (`refactor-p2-engine-api-memory`), HRAM variables are laid out by `build()` (full is `Error::MemoryFull`), and each variable section is printed at the address the allocator gives it (`WRAM0[$C000]`, `HRAM[$FF80]`), so `get_address` is the linked address once the program's variables are created (the variables `build()` adds go at the end of the last `WRAM0` section and move none; checked against the RGBDS `.sym`); HRAM variables are read and written with `ldh` |
 | Snapshot tests | ✅ since Phase 3 (`refactor-p3-tooling`) the asm each example prints is committed as `examples/<bin>/main.asm` (the old files were stale snapshots from `main`, regenerated), and `tests/snapshots.rs` fails with a unified diff when the output differs; `UPDATE_SNAPSHOTS=1 cargo test --test snapshots` rewrites them |
-| Rust source comments | ✅ since Phase 3, opt-in `RustBoyConfig::source_comments` / `RustBoy::set_source_comments` uses `#[track_caller]` to put a Rust file and line comment before each non-empty init, main-loop, or interrupt-handler snippet; disabled by default, preserving existing generated output |
+| Rust source comments | ✅ since Phase 3, opt-in `RustBoyConfig::source_comments` / `RustBoy::set_source_comments` uses `#[track_caller]` to put a Rust file and line comment before each non-empty init, main-loop, or interrupt-handler snippet; disabled by default, preserving existing generated output. Paths remain as rustc reports them, can be machine-dependent or remapped, and are unsuitable for committed snapshots |
 | Headless-emulator tests | ✅ since Phase 3 (`refactor-p3-tooling-emulator`) `tests/emulator.rs` builds ROMs with RGBDS and runs them on a DMG emulator written for the tests (`tests/support/gameboy.rs`, no dependency: the SM83 M-cycle by M-cycle, interrupts with the `ei` delay, `halt` and the halt bug, timer, PPU timing without pixels, OAM DMA, joypad (its interrupt only from a selected group of keys, since `refactor-p3-interrupts`), MBC1/MBC5 ROM banking; OAM blocked in modes 2-3 and VRAM in mode 3, as on the hardware; its known limits are listed at its top), checked against Blargg's `cpu_instrs` (11), `instr_timing` and `mem_timing` (3) ROMs and by its own tests of interrupts (VBlank with a `halt` loop, `ei; halt` and `halt` with one pending, `ei; di`, the `ei` delay, STAT on `LYC`, timer), the first line after LCD on and the OAM DMA window; a test runs frames with scripted input and reads WRAM, HRAM, VRAM, OAM, the registers and every OAM write with its PPU mode. One test per example (the Unbricked ball moves and bounces, bricks break, the paddle stops at its limit; the FOSDEM player walks as one block with its animation; the coin animates on A, stops on B; `basic_usage` loops), each also checking that every OAM write lands in VBlank (since `refactor-codex-p3-sprites`, for the 4 examples with a shadow OAM: that the sprites reach OAM only through OAM DMAs in VBlank; the emulator logs each DMA), and [B12](#b12) (today's behaviour until `refactor-codex-p3-sprites` fixed it). They run with `RGBDS_LINK_CHECK` (in CI); cross-checked once against PyBoy 2.6.0 (identical OAM traces over 390 frames with input for the 3 Unbricked examples) |
 | Build & run | ✅ since Phase 3 (`refactor-p3-tooling-run`) `scripts/run.sh <bin>` builds `target/examples/<bin>/main.{gb,sym,map}` with RGBDS, and `--run` opens it in an emulator (`$GB_EMULATOR`, or the first found of SameBoy, mGBA, Gambatte, bgb, also through wine, PyBoy; none: it prints the paths); `scripts/assemble-examples.sh` uses it, and CI keeps the `.sym` and `.map` files with the ROMs |
 | Sprites and OAM | ✅ since Phase 3 (`refactor-codex-p3-sprites`) the sprites live in a shadow OAM in WRAM (`wShadowOAM`, the last page of WRAM0), which the VBlank handler copies to OAM with an OAM DMA from HRAM (`hOAMDMA`), so a sprite moves whatever the main loop does before the move (it was lost in modes 2 and 3, fixed — [B12](#b12)); the buffers are allocated at the top of their region, and no variable moves. Tests on the test emulator: the B12 sprite after 0 to 2300 `Delay` iterations, every example's DMAs (one a frame, from `wShadowOAM`, in VBlank, no CPU write to OAM with the LCD on), the handler's length |
@@ -197,7 +199,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   calls, jumps to or reads, given as values, so a routine brings what it needs: `Routine::with_deps` lists it and every
   dependency, each once, dependencies first (a name is one routine: two different routines with one name panic), and
   `code_with_deps` is their code, the routine first. Its **variables** are the WRAM bytes it needs (`UpdateKeys`:
-  `wCurKeys`, `wNewKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
+  `wCurKeys`, `wNewKeys`, `wReleasedKeys`). Its **calling convention** is three `Regs` (a set of `a`, `b`, `c`, `d`, `e`, `h`, `l` and
   the flags `f`, printed `a, bc, f`): the registers it **reads**, **returns** and **clobbers**; every other register is
   **preserved**. A routine whose convention is not given may change every register (`Regs::ALL`). Every `gb_std`
   routine is a `Routine` (`memcopy()`, `wait_vblank()`, `wait_not_vblank()`, `update_keys()`, `get_tile_by_pixel()`,
@@ -208,7 +210,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   |---|---|---|---|---|
   | `Memcopy` | `bc` (length), `de` (source), `hl` (destination) | `bc` = 0, `de`, `hl` after the bytes | `a`, `f` | |
   | `WaitVBlank`, `WaitNotVBlank` | | | `a`, `f` | |
-  | `UpdateKeys` | | | `a`, `b`, `f` | `wCurKeys`, `wNewKeys` |
+  | `UpdateKeys` | | | `a`, `b`, `c`, `f` | `wCurKeys`, `wNewKeys`, `wReleasedKeys` |
   | `GetTileByPixel` | `b` (X), `c` (Y) | `a` (tile), `hl` (its address) | `bc`, `f` | |
   | `Delay` | `bc` (count) | | `a`, `bc` (`$FFFF`), `f` | |
   | `is_specific_tile` | `a` (tile) | `f` (Z: one of the tiles) | none | |
@@ -287,7 +289,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
 
 - **Palettes and fades** (since `refactor-p3-palettes`): `stdlib::graphics::palette` has the typed DMG `Palette`,
   `Shade` and `PaletteRegister` and stateless snippets, reused by `RustBoy::set_palette` and `fade_palette`. The
-  start-up `Palettes` keep taking hardware bytes. `PaletteFade` has four shade-saturating stages, fade-in from a
+  Startup `Palettes` accepts `Palette` or raw `u8`; writes reuse `set_palette`'s `ldh` form. `PaletteFade` has four shade-saturating stages, fade-in from a
   solid shade or fade-out to one; A selects the stage at runtime and values >= 3 stay complete. The game owns
   progress and timing: no hidden variables, waits or loops; emit in init or VBlank. Writes change A, fades A and
   flags (local labels from the allocator). BGP is shared by the background and the window; object colour 0 stays
@@ -327,6 +329,69 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   anchor: SCX = B − anchor X. `GetTileByPixel` takes map pixels, which equal screen pixels only without scrolling.
   Start-up code does not write SCX/SCY, so a soft reset keeps the camera unless init sets it.
 
+- **PNG and binary tile assets** (since `refactor-p3-png-assets`): `engine::assets::png_to_2bpp` converts a static PNG
+  to tile bytes with the `png` crate (decompression, sample expansion, interlacing, checksums). Palette slots map
+  colours to pixel indices, exactly by default or by nearest RGB distance (deterministic ties); fully transparent
+  pixels map to an index (0 by default) and partial alpha is rejected; 16-bit samples use their high byte; no gamma,
+  dithering, deduplication, cropping or padding. Tiles are row-major, or in 8x16 top/bottom pairs; animated PNGs are
+  rejected; output is limited to 64 MiB before allocating. `TileSource::from_png`, `from_2bpp` and `from_2bpp_bytes`
+  derive the tile count, own their bytes and return `AssetError`; they reuse the raw source as little-endian `dw`
+  pairs (no new enum variant), so no INCBIN include path is needed; paths resolve in the generating process. The old
+  `from_file(path, count)` still defers INCBIN to RGBDS with a manual count. FOSDEM loads its right half from its PNG
+  (byte-for-byte equal to the committed 2bpp, tested) and its left half and the coin with derived counts; their
+  snapshots inline the tile data as `dw`, the rest of their output is unchanged.
+
+- **Sprite visibility and runtime OAM pools** (since `refactor-p3-sprite-pools`): `Sprite`/`SpriteManager::hide` sets
+  Y=0 and keeps X, tile and flags; `show_at` takes screen coordinates and writes Y last; `hide_composite` /
+  `show_composite_at` apply to every member, placing the first registered part and keeping the offsets. A hidden
+  sprite is shown again by any Y write; the game owns logical positions. `RustBoy::create_sprite_pool` reserves a
+  contiguous shadow-OAM range in the OAM allocator, apart from static sprites and other pools, with one WRAM array
+  byte per entry for occupancy. Its stdlib routines allocate the lowest free index (relative to the pool; the entry
+  comes back cleared and hidden in HL), release (clearing all four OAM bytes before marking it free), hide without
+  freeing, or write B/C position and D/E tile/flags with Y last. Full pools, invalid or free indices, invalid
+  positions, double releases and odd 8x16 tiles return carry without writing. A pool alone enables shadow OAM and DMA;
+  IME is unchanged. One init/main producer, enforced through `Error::MainLoopOnly` for handler calls (transitively).
+  Multi-byte OAM writes can span a DMA: write in VBlank or keep the state in the game when a frame must be coherent.
+  Emulator tests: static sprites with pools, two pools, both sizes, exhaustion, reuse, every rejection, static
+  visibility; unit tests: capacity and handler reachability.
+
+- **Background tile animation** (since `refactor-p3-bg-animation`): `stdlib::graphics::tile_animation` is a frame state
+  machine that writes tile IDs through the VRAM queue; the engine's `create_background_animation` takes a
+  `BackgroundAnimationConfig` (fixed cells on either map, preloaded tile-ID frames) and allocates seven WRAM bytes
+  (cursor word, frame, timer, direction, enabled, finished) and ROM tables of targets and frames. `step`, once per game
+  frame from init/main, finishes queueing a frame before advancing, so a full queue cannot skip part of a frame. Loop,
+  ping-pong or once, 1 to 256 frames, a hold of 1..=255 calls per frame. Pause keeps the cursor and timer; restart
+  replays from frame 0 and keeps writes already queued. Once's finished flag means its last frame is queued, not
+  flushed. Frames of several cells are not atomic: the queue can flush part of one. Handler steps are rejected through
+  the queue dependency check. The target and frame tables go to the single ROM0 bank; too large ones make rgblink fail (past $4000
+  bytes), or rgbasm already (past $8000).
+
+- **Text and scores** (since `refactor-p3-text`): `stdlib::graphics::text` maps ASCII to glyph tiles, lays text out on
+  a map, prints it resumably through the VRAM queue, and encodes unsigned decimal / packed-BCD scores. The engine
+  loads fonts through the background tile allocator (`load_font`) and reserves each printer's cursor (a `u16` variable)
+  and each score's digit buffer (a WRAM array). A print job queues until the queue is full and resumes at its cursor
+  on the next main-loop call; carry clear means queued, not yet shown; it never writes VRAM directly. Newlines and wrapping return to the first X
+  column; unsupported glyphs and layouts past the map panic before anything is allocated. Decimal scores have five
+  digits with leading zeros, BCD scores four; invalid BCD keeps the previous buffer and cursor. One main/init
+  producer per job; handlers that reach `step` are rejected through the queue's dependency check. Replacing a number
+  or resetting a job keeps the writes already queued, so part of the old value can show while they drain. No
+  proportional fonts or Unicode.
+
+- **Entity pools** (since `refactor-p3-entities`): `RustBoy::create_entity_pool` wraps a sprite pool in entity words:
+  `spawn` allocates a hidden slot (A = the entity's relative index, carry when full), `set_sprite` writes and shows it
+  (A = index, B/C = position, D/E = tile/flags), `hide` keeps it alive, `despawn` clears and frees it. One hardware
+  sprite per entity; the game keeps any per-entity state, and entity composition is not part of this API. Same
+  registers, carry results and init/main-only rule as the pool routines it calls.
+
+- **WRAM arrays** (since `refactor-p3-wram-arrays`): `ArrayElement` (signed or unsigned bytes and words), `WramArray`
+  and `VariableManager::create_array(name, element, len, initial)`. Arrays are nonempty WRAM0 variables, contiguous `ds`
+  bytes in the variable allocator's creation order, initialised by a compact local-label loop. Static
+  `get`/`set`/`address` panic on an index or value out of range; the BC-indexed `address_indexed`/`get_indexed`/
+  `set_indexed` set carry on an index >= len and then touch no memory (setters take E/DE and keep BC/DE). Words are
+  little-endian; getters return A or HL. The array's shape is part of its `VarType` (`VarType::Array`) and of the
+  name-conflict checks. Emulator tests: all four element types, page crossings, every initialised byte, guard bytes,
+  indices 300, 512 and 65535 on a 300-element array, a nearly full 4095-byte WRAM0 array.
+
 - **VRAM write queue** (since `refactor-codex-p3-vram-queue`):
   `stdlib::graphics::vram_queue` owns the `QueueVramWrite` and `FlushVramQueue` routines.
   `RustBoy::queue_vram_write(address, value)` or `queue_vram_write_from_registers()` opts in:
@@ -334,7 +399,9 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   `wVramQueue` (39 bytes), `wVramQueueRead` and `wVramQueueWrite` (one byte each) are reserved
   at the top of WRAM0, below shadow OAM when present, without moving user variables. Competing
   definitions return `Error::NameConflict`; insufficient memory is `Error::MemoryFull`.
-  Startup clears the cursors before user init code. Enqueue takes `hl` and `a`, changes all
+  Startup clears the cursors before user init code. Accepted writes queued while the LCD is off
+  remain pending until a VBlank after the LCD turns on; the queue does not poll or flush during
+  initialization. Enqueue takes `hl` and `a`, changes all
   registers and flags, and preserves IME. Carry clear means accepted; carry set means full or
   a runtime destination outside VRAM (constant errors panic at the API call). Rejection retains
   queued entries; callers retry if necessary. There is one producer, in init/main, never in an
@@ -343,7 +410,10 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
   code are not followed, and a main-loop call to `FlushVramQueue`, a second consumer, is not rejected:
   both are documented limits). The write cursor is published after all bytes, so the consumer sees only
   complete entries even when enqueue is interrupted. Flush consumes FIFO entries with interrupts
-  off, beginning writes only on lines 144–152 and retaining entries if late. Unit tests cover
+  off, reading `rLY` with `ldh` (one M-cycle saved per entry), beginning writes only on lines
+  144–152 and retaining entries if late. `hw::LY_LAST_LINE` names 153, derived from
+  `SCRN_Y` and `VBLANK_LINES`, and is used by STAT validation and the late-flush test.
+  Unit tests cover
   wrapping, overflow, invalid destinations, FIFO order and routine conventions; emulator tests
   cover delayed main-loop work, rejection/IME at init, full-queue timing alongside OAM DMA,
   late deferral and VBlank injected at every enqueue instruction boundary. The interruption
@@ -434,7 +504,7 @@ scripts/run.sh [--run] <bin>             # all of the above, plus .sym and .map;
    `use_function` / `keep_function` (`InitOamDma` with sprites, its DMA routine after it, at `OamDmaCode`); then the
    `Anim_*` functions; then the interrupt handlers (`VBlankHandler`, which starts with the OAM DMA with sprites, and
    one for each other interrupt with code, since `refactor-p3-interrupts`). The variables an emitted routine needs (`wCurKeys`,
-   `wNewKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
+   `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are then created, unless the program defines them, so the
    variable initialisation (step 3) and the Data chunk include them.
 7. **Tiles / Tilemap**: `Label:` + `dw`/`INCBIN` + `LabelEnd:`; **Data**: `SECTION "Variables", WRAM0` + `name: db/dw`
    (since `refactor-p2-engine-api-memory`: `SECTION "HRAM Variables", HRAM[$FF80]` first when the program has HRAM
@@ -763,7 +833,7 @@ use `enable_animation(coin, idx)` / `disable_animation(coin)`.
 **Status: fixed** on `refactor-p0-fix-build` (A starts the animation, B stops it).
 
 #### B3
-**Duplicate labels `wCurKeys` / `wNewKeys` in `unbricked_rustboy`.** The example creates them
+**Duplicate input-state labels in `unbricked_rustboy`.** The example creates `wCurKeys` / `wNewKeys`
 (`src/bin/unbricked_rustboy/main.rs:50-51`) and `RustBoy::add_inputs` creates them again
 (`src/engine/rustboy.rs:487-488`); `VariableManager::create_var` (`src/engine/variables.rs:146`) never
 rejects duplicates, so `wCurKeys: db` is emitted twice → rgbasm "already defined". The same would happen
@@ -1115,7 +1185,8 @@ screen are identical on every frame, and every frame of every animation is shown
 `test_variables_must_fit_in_wram0`, `test_animation_frames_must_be_the_sprite_tiles`,
 `test_loop_animation_ending_on_the_last_sprite_tile` (runs the animation on `gb_asm::test_cpu` in 8x8 and 8x16; it
 overflowed before), `test_allocation_stops_at_the_end_of_the_region`, `test_regions`; all the new ones failed before.
-Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (its size is only known when
+Not covered: a `.2bpp` file shorter or longer than the tile count given to `from_file` (since `refactor-p3-png-assets`,
+`from_2bpp` derives the count from the file instead; for `from_file` its size is only known when
 assembled).
 
 #### B18
@@ -1301,7 +1372,7 @@ where `build()` cannot see are not known: an `INCLUDE`d file (not read: its path
 include directories), a macro, a symbol made by `EQUS` interpolation; a program declares those with
 **`RustBoy::external_symbol(name)`** (`src/engine/rustboy.rs:361`): a function of that name is never emitted,
 nor the variables of a builtin of that name. Then the variables the emitted builtins need
-(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys` for `UpdateKeys`) are created, unless the program already
+(`BuiltinFunction::variables`: `wCurKeys`, `wNewKeys`, `wReleasedKeys` for `UpdateKeys`) are created, unless the program already
 defines them (as variables, of any type, in raw code, or as external symbols), before the variable initialisation
 and the Data chunk are emitted (`:743-763`), so `UpdateKeys` called without `add_inputs` links too. The scan is
 linear: each user function body is read once, when it is registered, and maps (name → function, and each other
@@ -1329,7 +1400,7 @@ calls even when nothing names it (a jump table in an `INCLUDE`d file). The scan 
 `symbols` moved to `gb_asm::labels` and reads typed operands by type. The variables of every emitted routine are
 created (`Routine::variables`; they were the builtins' only). Every behaviour above is unchanged and its tests pass
 (`keep_function`, `external_symbol`, `use_function`, a user function replacing a builtin, second entry points, the
-name conflicts, `wCurKeys`/`wNewKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
+name conflicts, `wCurKeys`/`wNewKeys`/`wReleasedKeys`, the order). New tests: `test_a_typed_call_brings_the_routine_and_its_dependencies`
 (each routine once, in a fixed order, linked), `test_a_dependency_nothing_names_is_emitted`,
 `test_a_routine_and_a_function_of_one_name`, `test_define_routine_replaces_a_builtin_with_its_variables`, and in
 `functions.rs` `test_a_routine_brings_its_dependencies`, `test_a_dependency_is_shared_not_replaced`,
@@ -1425,7 +1496,7 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 | `enable_animation` on a sprite without animations references an undefined variable | API misuse; covered by "fail loudly" in [B20](#b20) (it panics since). |
 | 8×16 tile indices not aligned after an odd-sized 8×8 sprite | Only happens when mixing sizes; since [B4](#b4) the size is set once, before the first sprite. |
 | `0x05` constants require RGBDS ≥ 0.9 | The project toolchain is RGBDS 1.0; handled by pinning the version in CI. |
-| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size). |
+| `TileSource::from_file` tile count not checked against the file | Caller error; became a feature (derive the count from the file size): `TileSource::from_2bpp` / `from_png` since `refactor-p3-png-assets`. |
 
 ---
 
@@ -1433,21 +1504,32 @@ Claims that were investigated and **rejected**, kept here so nobody re-investiga
 
 Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 
-- **Audio: nothing at all** (no APU registers, no sound effects, no music driver).
-- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, no text/numbers. Background scrolling exists since
+- **Audio:** opt-in power/mixer initialization and typed one-shot effects exist; pinned hUGEDriver music integration exists.
+- **Graphics:** arbitrary metasprites since `refactor-p3-metasprites`, sprite show/hide and runtime sprite and
+  entity pools since `refactor-p3-sprite-pools` / `refactor-p3-entities`, text and scores since `refactor-p3-text`,
+  background tile animation since `refactor-p3-bg-animation`. Background scrolling exists since
   `refactor-p3-scrolling`, the window layer since `refactor-p3-window` and palettes/fades since `refactor-p3-palettes`
   (see §2); `GetTileByPixel` still takes map pixels, so collisions need SCX/SCY added while scrolled.
 - **Animation:** per-animation periods since `refactor-p3-animation-speed`, completion events and callbacks since
   `refactor-p3-animation-callbacks` (`Loop`, `PingPong` and `Once` work since [B10](#b10)).
-- **Engine:** no scenes, RNG, collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
-  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`).
+- **Input:** (p3-input) held/just-pressed/released/repeat bindings. Multiple input managers share
+  one controller sample per frame, preserving press/release edges and repeat timing (PR #61 F5).
+  Initial presses and repeats share one emitted action body, so local labels in bounded movement and
+  other action snippets remain unique; a whole-program RGBDS regression covers bounded movement.
+- **Engine:** `engine::Aabb` provides half-open rectangle overlap checks (edges must not wrap);  register-based function arguments use `RustBoy::call_args` / `Call::with_args`;  signed 8.8 position/velocity/gravity integration exists in `stdlib::movement`; no scenes, RNG, generalised tile collision, 16-bit math, loops/switch (the VBlank interrupt + `halt` main loop, the
+  interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
+  `refactor-p3-wram-arrays`).
 - **ISA:** complete since Phase 2 (`refactor-p2-isa`; `push/pop`, `halt`, `di/ei`, `reti`, `sbc`, `bit/set/res`,
   rotates/shifts, `cpl`, `ld [hl-]`… were missing); the engine uses `halt`, `di`/`ei`, `reti`, `push`/`pop` since
   `refactor-p3-interrupts`.
-- **Platform:** single ROM0 bank, no SRAM saves, no GBC.
+- **Platform:** generated engine programs still use ROM0 and do not select a cartridge mapper;
+  `stdlib::banking` has low-level MBC1/MBC5 ROM bank selectors (`refactor-p3-mbc-banking`), but
+  mapper headers and engine-managed banked asset access remain. `stdlib::sram` provides low-level
+  MBC1/MBC5 RAM gating and MBC5 bank selection; persistent saves and GBC support remain.
 - **Tooling:** CI exists now (fmt, clippy, tests, assembling every example), and snapshot tests of the examples'
   generated asm (Phase 3, `refactor-p3-tooling`), headless-emulator tests (`refactor-p3-tooling-emulator`) and a
-  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`).
+  one-command "build ROM and run", `scripts/run.sh` (`refactor-p3-tooling-run`). PNG → 2bpp conversion and
+  `.2bpp` files with a derived tile count exist since `refactor-p3-png-assets` (see §2).
 
 ---
 
@@ -1471,3 +1553,72 @@ Tags `v0.1.0-poc` (`032f8ce`) and `v0.2.0-poc` (`41d3eb1`) preserve the historic
 **Status (2026-10-07):** the 7 *Delete* branches were deleted by the maintainer. To restore one:
 `git push origin <last commit>:refs/heads/<branch>`; only `unbricked-example` had commits that are not in
 `main`, so it can only be restored while GitHub still keeps those commits.
+
+### Phase 3 APU initialization (`refactor-p3-apu`)
+
+`stdlib::audio` owns the stateless power/mixer snippets. `AudioConfig::Inherit` is the
+compatibility default and emits no audio instructions; `Off` writes NR52 off; `On`
+first powers off to reset channel state, then powers on and writes NR50/NR51. The
+configuration runs before user init on both cold startup and soft reset. `Mixer`
+validates 0..=7 left/right volume, disconnects VIN, and accepts NR51 routing flags;
+zero volume is not mute. Wave RAM is not cleared and no channel is triggered. All
+audio registers, wave RAM and existing hardware.inc flags are exported through hw.
+The emulator currently stores audio IO but does not synthesize or clock APU channels;
+tests verify register writes/startup ordering and assembly, with NR52 reset semantics
+checked against Pan Docs. Sound effects and driver integration remain separate tasks.
+
+### Phase 3 sound effects (`refactor-p3-sfx`, depends on APU initialization)
+
+`stdlib::audio::sfx` supplies validated `PulseEffect`, `Sweep`, `WaveEffect`,
+`WavePattern` and `NoiseEffect` values selected by `Sfx`. `play_sfx` tests NR52
+before writing (carry set on rejection), stops only the selected DAC, enables its
+length timer before loading a maximum-length setup value, then programs and triggers
+it and loads the requested duration last. This avoids extra-clock/trigger reload
+and a regular length clock during setup changing a one-tick effect into a 63/255-tick
+effect. CH3 is stopped throughout wave RAM upload and triggered
+only after re-enabling its DAC, avoiding DMG active-wave access/corruption. The
+hardware advances length/envelope/sweep; no software sequencer or state is allocated.
+NR50/NR51/NR52 and other channels are untouched; snippets clobber AF and preserve IME.
+The caller serializes audio writers, including interrupt handlers. DAC toggles can
+pop; sample zero is skipped on first wave playback, and channel phase is not reset.
+Unit tests execute the snippets and compare writes, model the extra-length clock,
+check bounds, unique local labels in an If, and register preservation. Linked-ROM
+checks verify channel register values and wave uploads, but the test emulator has
+no APU synthesis, so audible output is not verified. Music arbitration is the driver
+integration task. No existing example output changes.
+
+### Phase 3 tracker music (`refactor-p3-music`, depends on sound effects)
+
+Pinned public-domain hUGEDriver 6.1.1 (`13a26513498637baee9997bd3cad9476224db723`)
+files are vendored unchanged with upstream license/readme and checksums. The stdlib
+embeds/expands includes, modernizes legacy EQU declarations for RGBDS >=0.9,
+namespaces driver globals/macros, disables preview/GBDK branches, and turns the
+100-byte WRAM declarations into constants pointing into the engine buffer. The
+engine allocator reserves that buffer (and two zero-initialized control bytes),
+checks exhaustion/conflicts, and emits its numeric base before the driver. User
+variable addresses stay stable; generated assembly is deterministic and offline.
+`Song` imports self-contained hUGETracker 1.0.1 exports, retaining the public
+descriptor but prefixing internal labels/constants and section names. Multiple
+songs share the one driver and are emitted in insertion order. ROMX songs must
+remain mapped; banking is the later platform task.
+
+`enable_music` starts the first song before user init on cold/soft startup and
+turns inherited audio into On(default mixer), preserving explicit On/Off. Ticks
+run once per completed main frame by default, or in VBlank after DMA/queue flush
+with all registers saved. Long main frames slow music; complex VBlank ticks can
+spill beyond VBlank. Off APU skips ticks. Start pauses the consumer, silences all
+channels, initializes pointers/state, then publishes ready/playing. Pause freezes
+position and cuts only unreserved channels; stop also disarms resume; resume after
+pause continues with notes retriggered at the next note row. Reserved SFX channels
+survive pause/stop. CH3 release invalidates the wave cache before unmuting. Engine
+SFX rejects unreserved channels. User handlers reaching music controls/driver tick
+are rejected transitively; only the engine owns the consumer. Song callbacks must
+not reenter controls, and game audio writers must be serialized.
+
+Tests assemble/run multiple namespaced songs on the SM83, check note progression,
+clock modes, pause/stop/switch, APU gating, channel ownership/wave restoration,
+register preservation and injected VBlank during initialization. Exhaustion and
+symbol-conflict tests cover reserved state. The ROM test symbol parser now skips
+exported EQU constants rather than treating them as addresses (with a fixture test).
+The emulator still has no APU synthesis; audible output is not verified. The new
+music example/snapshot exercises offline generation; older snapshots are unchanged.

@@ -21,6 +21,7 @@ mod rustboy;
 mod sprite_pool;
 mod sprites;
 mod text;
+mod tile_collision;
 pub use sprite_pool::SpritePool;
 mod tiles;
 mod variables;
@@ -37,6 +38,7 @@ pub use rustboy::{MusicClock, RustBoy};
 pub use sprites::{
     ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
 };
+pub use tile_collision::{TileCollision, TileCollisionCheck};
 pub use tiles::{TileId, TileManager, TileSource, TilemapArea};
 pub use variables::{ArrayElement, Var, VarId, VarType, VariableManager, WramArray};
 

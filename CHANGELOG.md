@@ -8,6 +8,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **Tile collision checks** (`engine::TileCollision`): test screen pixels against a set of
+  solid tile IDs using the active background map and current camera scroll.
+
 - **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
   select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
 
@@ -108,8 +111,11 @@ together: every breaking change of the refactoring is in this release, so a prog
   `ldh`, saving one M-cycle per queued entry.
 - **Background camera** (Phase 3): `RustBoy::set_background_scroll`, `scroll_background_by`
   and `follow_background_point`, backed by `stdlib::graphics::scroll`. Pixel coordinates wrap
-  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. A soft reset
-  keeps the scroll: set it in init.
+  at 256; emit in init or VBlank to avoid tearing. Sprites stay in screen coordinates. Startup resets the camera to
+  (0, 0), including after soft reset; init can set a custom position. The music example also
+  includes these startup writes in its generated snapshot.
+- **Scrolled tile collision** (Phase 3): `GetTileByScreenPixel` adds the current `rSCX`/`rSCY` to screen-pixel
+  coordinates before the shared `GetTileByPixel` routine; use in VBlank or with the LCD off.
 - **Window** (Phase 3): optional `RustBoyConfig::window(Window::new(map, x, y))` or `RustBoy::set_window`,
   `set_window_position`, `show_window` and `select_window_tilemap`; stateless snippets in
   `stdlib::graphics::window`. Screen X includes the WX +7 conversion; X=159 is excluded because
@@ -168,11 +174,25 @@ together: every breaking change of the refactoring is in this release, so a prog
   tiles when it is created), and `SpriteManager::is_empty` is false once a pool reserves OAM.
   Pool mutation belongs in init/main; handler calls return `MainLoopOnly`.
   Hiding uses Y=0, so changing Y can show a sprite again; game code owns logical positions.
+- **Input bindings** (Phase 3): held (`on_press` / `on_held`), just-pressed, released, repeat, and multiple actions
+  per button. `on_press` keeps its existing held behavior. Multiple managers poll once per frame,
+  preserving press/release events and initial repeats in later managers (PR #61 F5).
+  Initial presses and repeats now share one emitted action body, allowing actions with local labels
+  (such as bounded sprite movement) to assemble without duplicate definitions.
+- **Input migration**: standalone users of `stdlib::inputs::update_keys()` must provide the new one-byte
+  `wReleasedKeys` variable. `RustBoy::add_inputs` creates it automatically.
 - **Hardware line bound** (Phase 3): `hw::LY_LAST_LINE` names the final LY value and is shared by STAT line
   validation and the late-VBlank queue test.
 - **Tooling**:
   - CI builds and tests on stable and on Rust 1.85, and assembles every example with RGBDS 1.0.4;
   - tests run the generated code on a model of the CPU, and link whole programs with RGBDS.
+  - user-defined constants (including hexadecimal constants), functions, external symbols and label names
+    (including plain sprites) reject RGBDS keywords; `build()` reports collisions with `hardware.inc`
+    and duplicate global definitions as `Error::NameConflict` before assembly. Raw RGBDS conditional
+    definitions are deferred to the assembler, and `PURGE` permits a fresh definition; a conditional
+    purge conservatively forgets the previous definition. Unexpanded macro bodies are skipped.
+    `REPT`/`FOR` bodies and tails skipped by `BREAK` are deferred too, so zero iterations and breaks
+    no longer cause false conflicts; definite duplicate checks resume after the iteration.
   - the pinned test-ROM download script compares the digest itself instead of using GNU `sha256sum --check`, which
     macOS's `sha256sum` lacks (verified with GNU `sha256sum` only).
 
@@ -328,6 +348,7 @@ of each VBlank (B12; see [CONTEXT.md](CONTEXT.md#b12)).
 | the VBlank handler took 26 M-cycles with nothing of the program's; the main loop's code started 44 M-cycles after line 144 | with sprites, 193 M-cycles (the DMA); the main loop's code starts about 220 M-cycles after line 144 |
 | WRAM0 had 4096 bytes for variables, HRAM 64 | with sprites, the last page of WRAM0 is the shadow OAM's (`$CF00`-`$CFFF`, so 3840 bytes for variables) and the top 8 bytes of the HRAM variables' are the DMA routine's (`$FFB8`-`$FFBF`, so 56). No variable moves; a `raw()` section fixed there overlaps them (rgblink fails), and variables that no longer fit make `build()` return `Error::MemoryFull` |
 | `BuiltinFunction::ALL: [BuiltinFunction; 8]` | `InitOamDma` is a builtin (it copies the DMA routine to HRAM): an exhaustive `match` needs its arm |
+| an exhaustive `match` on `BuiltinFunction` | `GetTileByScreenPixel` is a new variant (and in `ALL`): add its arm; the enum is not `#[non_exhaustive]` |
 | `Definition` had 6 variants | `Definition::GeneratedBuffer`: a variable named `wShadowOAM` or `hOAMDMA` in a program with sprites is `Error::NameConflict`; `Definition::BuiltinLabel`: so is a label or variable `OamDmaCode` or `OamDmaCodeEnd` |
 | `stdlib` `Sprite { id, x, y, tile, flags }` (a struct literal) | it has a field `oam: OamTarget` (`OamTarget::Oam`, as `Sprite::new` sets it, or `OamTarget::Shadow`): add it, or use `Sprite::new(..)` and `.in_shadow_oam()` |
 | `flags: u8` in `Sprite::new`, `RustBoy::add_sprite`, `add_sprite_16x16` | `flags: impl Into<SpriteFlags>`: `u8` values and literals still work; an argument typed only by inference (`x.into()`, `Default::default()`) is ambiguous now: write `0u8` or `SpriteFlags::new()` |

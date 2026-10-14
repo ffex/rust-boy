@@ -11,6 +11,10 @@
     call WaitVBlank
     ld a, 0
     ld [rLCDC], a
+    ld a, 0
+    ldh [rSCX], a
+    ld a, 0
+    ldh [rSCY], a
     ld de, player_left
     ld hl, $8000
     ld bc, player_leftEnd - player_left
@@ -56,6 +60,8 @@
     ld [wCurKeys], a
     ld a, 0
     ld [wNewKeys], a
+    ld a, 0
+    ld [wReleasedKeys], a
     ld a, 0
     ld [wVBlankFlag], a
     ld a, 0
@@ -249,9 +255,14 @@
     ld a, P1F_GET_NONE
     ldh [rP1], a
     ld a, [wCurKeys]
+    ld c, a
     xor a, b
     and a, b
     ld [wNewKeys], a
+    ld a, b
+    cpl
+    and a, c
+    ld [wReleasedKeys], a
     ld a, b
     ld [wCurKeys], a
     ret
@@ -1446,6 +1457,7 @@
     SECTION "Variables", WRAM0[$C000]
     wCurKeys: db
     wNewKeys: db
+    wReleasedKeys: db
     wVBlankFlag: db
     wFrameCounter: db
     wAnim_player_left_Current: db

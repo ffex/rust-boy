@@ -3,12 +3,12 @@
 The actionable roadmap. Background, the levels assessment and the full bug catalogue (B1–B30, with
 file:line, failure scenario and fix) are in [`CONTEXT.md`](CONTEXT.md). Working rules are in
 [`AGENTS.md`](AGENTS.md) for Codex's first implementation and [`CLAUDE.md`](CLAUDE.md) for Claude's review,
-fixes and merges.
+fix requests and merges.
 
 ## How we work
 
 - Codex makes the first try of a task and opens its PR into `refactor`. Claude then has it reviewed by a
-  context-free agent, fixes the findings, has it reviewed again and merges it. Only the final
+  context-free agent, sends the findings to Codex as an `@codex fix-request` comment, has it reviewed again and merges it. Only the final
   `refactor` → `main` PR waits for the maintainer.
 - `refactor` is the integration branch (created from `main` at `4601a5c`).
 - Each phase, or each major edit inside a phase, is done on its own branch cut from `refactor`,
@@ -273,9 +273,8 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Palette API (`BGP`, `OBP0`, `OBP1`) + fade in / fade out (branch `refactor-p3-palettes`):
       typed `Palette`/`Shade`/`PaletteRegister`, runtime writes, four-stage nonblocking `PaletteFade`;
       progress supplied in A, clamps at 3, supports fades from/to white or black (or either grey).
-- [ ] Follow-ups of the palettes (from the review of #48, maintainer decisions): whether the start-up `Palettes` should
-      take `impl Into<Palette>` (today raw bytes, `Palette::byte()` converts), and whether the start-up palette write
-      should reuse `stdlib::graphics::palette::set_palette` (`ldh` instead of `ld [rBGP], a`: changes every example's asm)
+- [x] Follow-ups of the palettes (from the review of #48): startup `Palettes` accepts `impl Into<Palette>` while
+      retaining raw `u8` support, and startup writes reuse `stdlib::graphics::palette::set_palette` (`ldh`).
 - [x] Typed sprite flags (branch `refactor-p3-sprite-flags`): `SpriteFlags`,
       `ObjectPalette`, `SpritePriority`; typed constructors and runtime shadow-OAM attribute writes,
       with raw u8 compatibility and no changes to default/example output.
@@ -294,7 +293,11 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       WRAM arrays: contiguous ASCII fonts, resumable VBlank-queue jobs, five-digit u16 / four-digit BCD scores)
 - [x] Background tile animation (`refactor-p3-bg-animation`: preloaded tile-ID frames on either map,
       loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
-- [ ] PNG → 2bpp conversion in Rust (tile count derived from file size)
+- [x] PNG → 2bpp conversion in Rust (tile count derived from file size): `refactor-p3-png-assets`,
+      owned PNG/binary loaders, palette/transparency rules and 8×16 tile ordering; FOSDEM/coin migrated
+- [ ] Follow-up of the background tile animation (from the review of #88): a variable named like an animation's ROM
+      tables (`BgAnim{name}Targets`, `…Frames`, `…Frame{i}`) passes `build()` and fails in rgbasm ("already defined"); the
+      name-conflict check should cover these raw labels, as it does for functions
 
 ### Animation
 - [x] `PingPong` and `Once` ([B10](CONTEXT.md#b10)) (branch `refactor-p1-animations`)
@@ -362,7 +365,13 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 
 ### Platform
 - [ ] MBC1/MBC5 ROM banking (> 32 KB)
+  - [x] Low-level `stdlib::banking` bank selectors for MBC1 (7-bit, skipping forbidden banks)
+        and MBC5 (9-bit); `Section::romx(...).bank(n)` places data explicitly.
+  - [ ] Engine-managed mapper headers and banked asset access.
 - [ ] SRAM save games
+  - [x] Low-level MBC1/MBC5 RAM enable/disable and MBC5 RAM-bank selection
+        (`stdlib::sram`, stacked on #76).
+  - [ ] Persistent save API, mapper/header configuration and MBC1 RAM banking mode.
 - [ ] *(optional)* Game Boy Color: palettes, VRAM bank 1, double speed
 
 ### Tooling
@@ -399,11 +408,15 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `"Coin"` and `"CoinEnd"` both define `CoinEnd`, a sprite `"Main"` clashes with `Main`; tiles, variables,
       functions and constants are not checked at all, e.g. `add_sprite_tiles(player, "Player", ..)` gives
       "`Player` already defined" in rgbasm)
-- [ ] Follow-ups of the shadow OAM and the VRAM queue (from the reviews of #39 and #40):
-      document that writes queued with the LCD off wait until it is on; `ldh` for `rLY` in `FlushVramQueue`
-      (1 M-cycle an entry); an `hw` constant for `cp 153` in the late-flush test; whether `build()` should also
-      reject `raw()` producers and calls to `FlushVramQueue` outside the VBlank handler (documented limits today);
-      whether `hOAMDMA` should move away from the stack (31 entries above it) or the DMA get an `rLY` guard
+- [x] VRAM queue follow-ups: document that accepted writes queued with the LCD off wait for the next VBlank
+      after it turns on; read `rLY` with `ldh` in `FlushVramQueue` (saves one M-cycle per entry),
+      branch `refactor-p3-vram-queue-followups`.
+- [x] Use `hw::LY_LAST_LINE` for the late-flush test and STAT line validation
+      (branch `refactor-p3-last-ly-line`, stacked on the VRAM queue follow-ups).
+- [ ] Remaining shadow OAM and VRAM queue review follow-ups: whether `build()` should reject raw producers
+      and calls to `FlushVramQueue` outside the VBlank
+      handler (current limits are documented); whether `hOAMDMA` should move away from the stack or DMA get
+      an `rLY` guard.
 
 ## Phase 4 — Documentation
 

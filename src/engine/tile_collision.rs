@@ -25,7 +25,7 @@ impl TileCollision {
     /// accessible (the engine main loop runs during VBlank).
     ///
     /// When `body` runs, `a` is the tile ID and `hl` is its map address. The check clobbers
-    /// `a`, `bc`, `d` and flags; other registers are preserved except for changes made by
+    /// `a`, `bc`, `d`, `hl` and flags; other registers are preserved except for changes made by
     /// the coordinate snippets and `body`.
     pub fn at_screen_pixel(
         &self,

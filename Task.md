@@ -299,6 +299,12 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       loop/ping-pong/once, per-animation holds, pause/restart, resumable queue backpressure)
 - [x] PNG → 2bpp conversion in Rust (tile count derived from file size): `refactor-p3-png-assets`,
       owned PNG/binary loaders, palette/transparency rules and 8×16 tile ordering; FOSDEM/coin migrated
+- [ ] Background PNG → unique tiles + tilemap (found writing olive-empire): today `png_to_2bpp` keeps duplicate tiles
+      (`src/engine/assets.rs`) and `add_tilemap` takes hand-written `[[u8; 32]]` rows, so a 160×144 picture is 360
+      tiles and does not fit the 128 background tiles. Proposal: `TileManager::add_background_png(name, path,
+      &PngOptions)` (to `$9800` or `$9C00`) that keeps each distinct 8×8 tile once, in first-seen order (deterministic),
+      builds the map up to 32×32 with the unused cells of each row filled, and returns an error naming the unique-tile
+      count when it is over the free background tiles; with a test
 - [ ] Follow-up of the background tile animation (from the review of #88): a variable named like an animation's ROM
       tables (`BgAnim{name}Targets`, `…Frames`, `…Frame{i}`) passes `build()` and fails in rgbasm ("already defined"); the
       name-conflict check should cover these raw labels, as it does for functions

@@ -29,6 +29,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
     );
 
+    // Background: one 8x8 tile, the first at $9000 (tile 0), repeated over the whole $9800 map
+    gb.tiles.add_background(
+        "BgTile",
+        TileSource::from_png(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/olive-empire/background.png"
+            ),
+            &PngOptions::default(),
+        )?,
+    );
+    gb.tiles.add_tilemap("BgMap", &[[0u8; 32]; 32]);
+
     //Animation
     //
     let anim_walk_front =

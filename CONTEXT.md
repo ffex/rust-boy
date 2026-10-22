@@ -1566,7 +1566,7 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
 ---
 
 The on-demand `scripts/report.sh [bin]` report (`refactor-p3-build-report`) measures linked ROM
-occupancy and dynamic main-loop/VBlank-handler cycle ranges for all seven examples. VBlank
+occupancy and dynamic main-loop/VBlank-handler cycle ranges for every example. VBlank
 samples include the CPU's interrupt dispatch and vector jump (9 M-cycles) through `reti`;
 an empty-handler regression checks the full 26 M-cycles. Measurements describe the exercised
 no-input path, not static worst-case bounds. CI runs the live report via

@@ -8,8 +8,11 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 ### Highlights
 
+- **New example `olive-empire`** (`src/bin/olive-empire/`): a top-down 16x16 character on a grass map, walking
+  with the D-pad and its four walk animations; its PNG art loads with `TileSource::from_png`.
+
 - **Build report** (Phase 3): `scripts/report.sh [bin]` reports linked ROM occupancy and observed main-loop and
-  VBlank-handler cycle budgets for all seven examples. VBlank timing includes interrupt dispatch
+  VBlank-handler cycle budgets for every example. VBlank timing includes interrupt dispatch
   and the vector jump (9 M-cycles), with a linked empty-handler regression.
 
 - **AABB collision** (`engine::Aabb`, also exported by the prelude): half-open rectangle

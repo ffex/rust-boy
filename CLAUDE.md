@@ -47,7 +47,8 @@ UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # rewrite examples/<bin>/main.a
 cargo clippy --all-targets                # lint
 cargo fmt                                 # format
 cargo run --bin <name> > main.asm         # bins: basic_usage, unbricked, unbricked_std,
-                                          #       unbricked_rustboy, fosdem, coin-anim
+                                          #       unbricked_rustboy, fosdem, coin-anim, music,
+                                          #       olive-empire
 scripts/run.sh <bin>                      # one bin -> target/examples/<bin>/main.{gb,sym,map,asm} via RGBDS
 scripts/run.sh --run <bin>                # ... and open it in an emulator ($GB_EMULATOR, sameboy, mgba, gambatte,
                                           # bgb (also through wine), pyboy); none found: prints where the files are

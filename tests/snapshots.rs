@@ -82,6 +82,7 @@ snapshot_tests! {
     snapshot_fosdem: "fosdem";
     snapshot_coin_anim: "coin-anim";
     snapshot_music: "music";
+    snapshot_olive_empire: "olive-empire";
 }
 
 /// The binaries in `src/bin`, sorted: `name.rs` files and `name/main.rs` directories

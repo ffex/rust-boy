@@ -9,7 +9,7 @@ use support::gameboy::{FRAME_MCYCLES, GameBoy};
 use support::rom::{Rom, rgbds_enabled};
 
 const VBLANK_MCYCLES: u64 = 10 * 114;
-const EXAMPLES: [&str; 7] = [
+const EXAMPLES: [&str; 8] = [
     "basic_usage",
     "unbricked",
     "unbricked_std",
@@ -17,6 +17,7 @@ const EXAMPLES: [&str; 7] = [
     "fosdem",
     "coin-anim",
     "music",
+    "olive-empire",
 ];
 
 fn rom_used_bytes(map: &str) -> usize {

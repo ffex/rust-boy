@@ -4791,9 +4791,31 @@ fn olive_empire_trunks_stop_the_player_and_paths_stay_open() {
     assert_eq!(position(&gb), (82, y), "stopped by the trunk on the right");
     gb.run_script(&[(30, &[Button::Left])]);
     assert_eq!(position(&gb), (78, y), "stopped by the trunk on the left");
-    // The 2-tile path up between the trees is open to the top limit (OAM Y 1)
+    // The 2-tile path up between the trees is open to the top of the screen
     gb.run_script(&[(4, &[Button::Right]), (100, &[Button::Up])]);
-    assert_eq!(gb.oam_entry(0)[0], 1, "walked up the path to the top limit");
+    assert_eq!(position(&gb).1, 0, "walked up the path to the top edge");
+    // The screen edges: the player stays whole on the screen
+    gb.run_script(&[(200, &[Button::Down])]);
+    assert_eq!(
+        position(&gb).1,
+        128,
+        "the bottom edge: the last line on 143"
+    );
+    // Up to a free row: the feet (y + 8 ..= y + 15) in rows 10-12 (y 80..=103), no trunk
+    while position(&gb).1 > 84 {
+        gb.run_script(&[(1, &[Button::Up])]);
+    }
+    gb.run_script(&[(2, &[])]);
+    let row = position(&gb).1;
+    assert!((72..=88).contains(&row), "y {row}");
+    gb.run_script(&[(200, &[Button::Right])]);
+    assert_eq!(
+        position(&gb),
+        (144, row),
+        "the right edge: the last pixel on 159"
+    );
+    gb.run_script(&[(200, &[Button::Left])]);
+    assert_eq!(position(&gb), (0, row), "the left edge");
     assert_eq!(
         dmas(&gb) - dmas_at_start,
         gb.frame() - frame_at_start,

@@ -1,8 +1,17 @@
 use rust_boy::{
     asm::Instr,
     engine::{CompositeSpriteId, Hitbox, InputManager, SpriteManager, TileCollision},
+    hw,
     stdlib::inputs::PadButton,
 };
+
+// The screen edges as OAM limits (screen x + 8, screen y + 16), for the sprite that leads the
+// move: the leftmost / topmost one at screen 0, the rightmost one at screen x 152 (its last
+// pixel on 159), the lowest 8x16 one at screen y 128 (its last line on 143)
+const LEFT_LIMIT: u8 = hw::OAM_X_OFFSET;
+const RIGHT_LIMIT: u8 = hw::SCRN_X.value - 8 + hw::OAM_X_OFFSET;
+const TOP_LIMIT: u8 = hw::OAM_Y_OFFSET;
+const BOTTOM_LIMIT: u8 = hw::SCRN_Y.value - 16 + hw::OAM_Y_OFFSET;
 
 /// Indices of the player's walk animations, as `add_composite_animation` returned them
 pub struct WalkAnimations {
@@ -14,8 +23,8 @@ pub struct WalkAnimations {
 // TODO can be do better? in RUST there is the class concept? or an interface to implement events?
 /// D-pad: move the player 1 px per frame and play the walk animation of that direction;
 /// the player does not move when its `feet` would step on a `solid` tile.
-/// Limits are OAM coordinates (screen x + 8, screen y + 16), included; the player moves as
-/// one block and its leading half stops on the limit. On release, the walk stops on its
+/// The player stays whole on the screen: it moves as one block and its leading half stops on
+/// the screen edge. On release, the walk stops on its
 /// first frame (the standing pose of that direction)
 pub fn player_inputs(
     sprites: &SpriteManager,
@@ -28,7 +37,7 @@ pub fn player_inputs(
     inputs.on_press(
         PadButton::Left,
         [
-            sprites.move_composite_left_blocked(player, 1, 1, solid, feet),
+            sprites.move_composite_left_blocked(player, 1, LEFT_LIMIT, solid, feet),
             sprites.enable_composite_animation(player, walk.left),
         ]
         .concat(),
@@ -36,7 +45,7 @@ pub fn player_inputs(
     inputs.on_press(
         PadButton::Right,
         [
-            sprites.move_composite_right_blocked(player, 1, 149, solid, feet),
+            sprites.move_composite_right_blocked(player, 1, RIGHT_LIMIT, solid, feet),
             sprites.enable_composite_animation(player, walk.right),
         ]
         .concat(),
@@ -44,7 +53,7 @@ pub fn player_inputs(
     inputs.on_press(
         PadButton::Up,
         [
-            sprites.move_composite_up_blocked(player, 1, 1, solid, feet),
+            sprites.move_composite_up_blocked(player, 1, TOP_LIMIT, solid, feet),
             sprites.enable_composite_animation(player, walk.back),
         ]
         .concat(),
@@ -52,7 +61,7 @@ pub fn player_inputs(
     inputs.on_press(
         PadButton::Down,
         [
-            sprites.move_composite_down_blocked(player, 1, 149, solid, feet),
+            sprites.move_composite_down_blocked(player, 1, BOTTOM_LIMIT, solid, feet),
             sprites.enable_composite_animation(player, walk.front),
         ]
         .concat(),

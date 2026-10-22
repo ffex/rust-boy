@@ -182,13 +182,13 @@
     cp a, 4
     jp z, .solid_tile_blocked_1
     ld a, [wShadowOAM+1]
-    sub a, 1
+    sub a, 8
     jp c, .sprite0_left_limit_end_0
     sub a, 1
     jp nc, .sprite0_left_limit_store_0
     ld a, 0
     .sprite0_left_limit_store_0:
-    add a, 1
+    add a, 8
     ld [wShadowOAM+1], a
     add a, 8
     ld [wShadowOAM+5], a
@@ -232,13 +232,13 @@
     cp a, 4
     jp z, .solid_tile_blocked_3
     ld a, [wShadowOAM+5]
-    sub a, 149
+    sub a, 160
     jp nc, .sprite1_right_limit_end_2
     add a, 1
     jp nc, .sprite1_right_limit_store_2
     ld a, 0
     .sprite1_right_limit_store_2:
-    add a, 149
+    add a, 160
     ld [wShadowOAM+5], a
     sub a, 8
     ld [wShadowOAM+1], a
@@ -296,13 +296,13 @@
     cp a, 4
     jp z, .solid_tile_blocked_5
     ld a, [wShadowOAM+0]
-    sub a, 1
+    sub a, 16
     jp c, .sprite0_up_limit_end_4
     sub a, 1
     jp nc, .sprite0_up_limit_store_4
     ld a, 0
     .sprite0_up_limit_store_4:
-    add a, 1
+    add a, 16
     ld [wShadowOAM+0], a
     ld [wShadowOAM+4], a
     .sprite0_up_limit_end_4:
@@ -356,13 +356,13 @@
     cp a, 4
     jp z, .solid_tile_blocked_7
     ld a, [wShadowOAM+0]
-    sub a, 149
+    sub a, 144
     jp nc, .sprite0_down_limit_end_6
     add a, 1
     jp nc, .sprite0_down_limit_store_6
     ld a, 0
     .sprite0_down_limit_store_6:
-    add a, 149
+    add a, 144
     ld [wShadowOAM+0], a
     ld [wShadowOAM+4], a
     .sprite0_down_limit_end_6:

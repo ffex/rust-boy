@@ -27,6 +27,10 @@
     ld hl, $9000
     ld bc, BgTileEnd - BgTile
     call Memcopy
+    ld de, OliveTree
+    ld hl, $9010
+    ld bc, OliveTreeEnd - OliveTree
+    call Memcopy
     ld de, BgMap
     ld hl, $9800
     ld bc, BgMapEnd - BgMap
@@ -35,10 +39,10 @@
     ld a, 0
     ld b, 160
     ld hl, wShadowOAM
-    .clear_oam_12:
+    .clear_oam_16:
     ld [hli], a
     dec b
-    jp nz, .clear_oam_12
+    jp nz, .clear_oam_16
     ld hl, wShadowOAM
     ld a, 88
     ld [hli], a
@@ -92,63 +96,91 @@
     inc a
     ld [wFrameCounter], a
     cp a, 8
-    jp c, .anim_end_13
+    jp c, .anim_end_17
     ld a, 0
     ld [wFrameCounter], a
     ld a, [wAnim_player_left_Current]
     cp a, 255
-    jp z, .anim_player_left_end_14
+    jp z, .anim_player_left_end_18
     cp a, 0
-    jr nz, .skip_player_left_playerWalkFront_15
+    jr nz, .skip_player_left_playerWalkFront_19
     call Anim_player_left_playerWalkFront
-    jp .anim_player_left_end_14
-    .skip_player_left_playerWalkFront_15:
+    jp .anim_player_left_end_18
+    .skip_player_left_playerWalkFront_19:
     cp a, 1
-    jr nz, .skip_player_left_playerWalkBack_16
+    jr nz, .skip_player_left_playerWalkBack_20
     call Anim_player_left_playerWalkBack
-    jp .anim_player_left_end_14
-    .skip_player_left_playerWalkBack_16:
+    jp .anim_player_left_end_18
+    .skip_player_left_playerWalkBack_20:
     cp a, 2
-    jr nz, .skip_player_left_playerWalkLeft_17
+    jr nz, .skip_player_left_playerWalkLeft_21
     call Anim_player_left_playerWalkLeft
-    jp .anim_player_left_end_14
-    .skip_player_left_playerWalkLeft_17:
+    jp .anim_player_left_end_18
+    .skip_player_left_playerWalkLeft_21:
     cp a, 3
-    jr nz, .skip_player_left_playerWalkRight_18
+    jr nz, .skip_player_left_playerWalkRight_22
     call Anim_player_left_playerWalkRight
-    jp .anim_player_left_end_14
-    .skip_player_left_playerWalkRight_18:
-    .anim_player_left_end_14:
+    jp .anim_player_left_end_18
+    .skip_player_left_playerWalkRight_22:
+    .anim_player_left_end_18:
     ld a, [wAnim_player_right_Current]
     cp a, 255
-    jp z, .anim_player_right_end_19
+    jp z, .anim_player_right_end_23
     cp a, 0
-    jr nz, .skip_player_right_playerWalkFront_20
+    jr nz, .skip_player_right_playerWalkFront_24
     call Anim_player_right_playerWalkFront
-    jp .anim_player_right_end_19
-    .skip_player_right_playerWalkFront_20:
+    jp .anim_player_right_end_23
+    .skip_player_right_playerWalkFront_24:
     cp a, 1
-    jr nz, .skip_player_right_playerWalkBack_21
+    jr nz, .skip_player_right_playerWalkBack_25
     call Anim_player_right_playerWalkBack
-    jp .anim_player_right_end_19
-    .skip_player_right_playerWalkBack_21:
+    jp .anim_player_right_end_23
+    .skip_player_right_playerWalkBack_25:
     cp a, 2
-    jr nz, .skip_player_right_playerWalkLeft_22
+    jr nz, .skip_player_right_playerWalkLeft_26
     call Anim_player_right_playerWalkLeft
-    jp .anim_player_right_end_19
-    .skip_player_right_playerWalkLeft_22:
+    jp .anim_player_right_end_23
+    .skip_player_right_playerWalkLeft_26:
     cp a, 3
-    jr nz, .skip_player_right_playerWalkRight_23
+    jr nz, .skip_player_right_playerWalkRight_27
     call Anim_player_right_playerWalkRight
-    jp .anim_player_right_end_19
-    .skip_player_right_playerWalkRight_23:
-    .anim_player_right_end_19:
-    .anim_end_13:
+    jp .anim_player_right_end_23
+    .skip_player_right_playerWalkRight_27:
+    .anim_player_right_end_23:
+    .anim_end_17:
     call UpdateKeys
-    .check_left_4:
+    .check_left_8:
     ld a, [wCurKeys]
     and a, PADF_LEFT
-    jp z, .check_left_end_4
+    jp z, .check_left_end_8
+    ld a, [wShadowOAM+1]
+    add a, 249
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 248
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_1
+    cp a, 4
+    jp z, .solid_tile_blocked_1
+    ld a, [wShadowOAM+1]
+    add a, 249
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 255
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_1
+    cp a, 4
+    jp z, .solid_tile_blocked_1
     ld a, [wShadowOAM+1]
     sub a, 1
     jp c, .sprite0_left_limit_end_0
@@ -161,76 +193,189 @@
     add a, 8
     ld [wShadowOAM+5], a
     .sprite0_left_limit_end_0:
+    .solid_tile_blocked_1:
     ld a, 2
     ld [wAnim_player_left_Current], a
     ld a, 2
     ld [wAnim_player_right_Current], a
-    .check_left_end_4:
-    .check_right_5:
+    .check_left_end_8:
+    .check_right_9:
     ld a, [wCurKeys]
     and a, PADF_RIGHT
-    jp z, .check_right_end_5
+    jp z, .check_right_end_9
+    ld a, [wShadowOAM+1]
+    add a, 6
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 248
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_3
+    cp a, 4
+    jp z, .solid_tile_blocked_3
+    ld a, [wShadowOAM+1]
+    add a, 6
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 255
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_3
+    cp a, 4
+    jp z, .solid_tile_blocked_3
     ld a, [wShadowOAM+5]
     sub a, 149
-    jp nc, .sprite1_right_limit_end_1
+    jp nc, .sprite1_right_limit_end_2
     add a, 1
-    jp nc, .sprite1_right_limit_store_1
+    jp nc, .sprite1_right_limit_store_2
     ld a, 0
-    .sprite1_right_limit_store_1:
+    .sprite1_right_limit_store_2:
     add a, 149
     ld [wShadowOAM+5], a
     sub a, 8
     ld [wShadowOAM+1], a
-    .sprite1_right_limit_end_1:
+    .sprite1_right_limit_end_2:
+    .solid_tile_blocked_3:
     ld a, 3
     ld [wAnim_player_left_Current], a
     ld a, 3
     ld [wAnim_player_right_Current], a
-    .check_right_end_5:
-    .check_up_6:
+    .check_right_end_9:
+    .check_up_10:
     ld a, [wCurKeys]
     and a, PADF_UP
-    jp z, .check_up_end_6
+    jp z, .check_up_end_10
+    ld a, [wShadowOAM+1]
+    add a, 250
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 247
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_5
+    cp a, 4
+    jp z, .solid_tile_blocked_5
+    ld a, [wShadowOAM+1]
+    add a, 2
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 247
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_5
+    cp a, 4
+    jp z, .solid_tile_blocked_5
+    ld a, [wShadowOAM+1]
+    add a, 5
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 247
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_5
+    cp a, 4
+    jp z, .solid_tile_blocked_5
     ld a, [wShadowOAM+0]
     sub a, 1
-    jp c, .sprite0_up_limit_end_2
+    jp c, .sprite0_up_limit_end_4
     sub a, 1
-    jp nc, .sprite0_up_limit_store_2
+    jp nc, .sprite0_up_limit_store_4
     ld a, 0
-    .sprite0_up_limit_store_2:
+    .sprite0_up_limit_store_4:
     add a, 1
     ld [wShadowOAM+0], a
     ld [wShadowOAM+4], a
-    .sprite0_up_limit_end_2:
+    .sprite0_up_limit_end_4:
+    .solid_tile_blocked_5:
     ld a, 1
     ld [wAnim_player_left_Current], a
     ld a, 1
     ld [wAnim_player_right_Current], a
-    .check_up_end_6:
-    .check_down_7:
+    .check_up_end_10:
+    .check_down_11:
     ld a, [wCurKeys]
     and a, PADF_DOWN
-    jp z, .check_down_end_7
+    jp z, .check_down_end_11
+    ld a, [wShadowOAM+1]
+    add a, 250
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_7
+    cp a, 4
+    jp z, .solid_tile_blocked_7
+    ld a, [wShadowOAM+1]
+    add a, 2
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_7
+    cp a, 4
+    jp z, .solid_tile_blocked_7
+    ld a, [wShadowOAM+1]
+    add a, 5
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 3
+    jp z, .solid_tile_blocked_7
+    cp a, 4
+    jp z, .solid_tile_blocked_7
     ld a, [wShadowOAM+0]
     sub a, 149
-    jp nc, .sprite0_down_limit_end_3
+    jp nc, .sprite0_down_limit_end_6
     add a, 1
-    jp nc, .sprite0_down_limit_store_3
+    jp nc, .sprite0_down_limit_store_6
     ld a, 0
-    .sprite0_down_limit_store_3:
+    .sprite0_down_limit_store_6:
     add a, 149
     ld [wShadowOAM+0], a
     ld [wShadowOAM+4], a
-    .sprite0_down_limit_end_3:
+    .sprite0_down_limit_end_6:
+    .solid_tile_blocked_7:
     ld a, 0
     ld [wAnim_player_left_Current], a
     ld a, 0
     ld [wAnim_player_right_Current], a
-    .check_down_end_7:
-    .check_left_8:
+    .check_down_end_11:
+    .check_left_12:
     ld a, [wReleasedKeys]
     and a, PADF_LEFT
-    jp z, .check_left_end_8
+    jp z, .check_left_end_12
     ld a, 2
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -245,11 +390,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_left_end_8:
-    .check_right_9:
+    .check_left_end_12:
+    .check_right_13:
     ld a, [wReleasedKeys]
     and a, PADF_RIGHT
-    jp z, .check_right_end_9
+    jp z, .check_right_end_13
     ld a, 3
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -264,11 +409,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_right_end_9:
-    .check_up_10:
+    .check_right_end_13:
+    .check_up_14:
     ld a, [wReleasedKeys]
     and a, PADF_UP
-    jp z, .check_up_end_10
+    jp z, .check_up_end_14
     ld a, 1
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -283,11 +428,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_up_end_10:
-    .check_down_11:
+    .check_up_end_14:
+    .check_down_15:
     ld a, [wReleasedKeys]
     and a, PADF_DOWN
-    jp z, .check_down_end_11
+    jp z, .check_down_end_15
     ld a, 0
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -302,7 +447,7 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_down_end_11:
+    .check_down_end_15:
     jp Main
 
     ; Copy bytes from one area to another
@@ -358,6 +503,48 @@
     ldh a, [rP1]
     or a, 240
     .knowret:
+    ret
+    ; Convert a pixel position to a tilemap address and read the tile there
+    ; hl = active background map + X / 8 + (Y / 8) * 32
+    ; @param b: X
+    ; @param c: Y
+    ; @return hl: tile address
+    ; @return a: tile index at that address
+    ; changes bc
+    GetTileByPixel:
+    ld a, c
+    and a, 248
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    ld a, b
+    srl a
+    srl a
+    srl a
+    add a, l
+    ld l, a
+    adc a, h
+    sub a, l
+    ld h, a
+    ld bc, $9800
+    ld a, [rLCDC]
+    and a, LCDCF_BG9C00
+    jr z, .map_selected
+    ld bc, $9C00
+    .map_selected:
+    add hl, bc
+    ld a, [hl]
+    ret
+    ; Add the camera scroll to screen coordinates, then look up that map pixel
+    GetTileByScreenPixel:
+    ldh a, [rSCX]
+    add a, b
+    ld b, a
+    ldh a, [rSCY]
+    add a, c
+    ld c, a
+    call GetTileByPixel
     ret
     ; Wait for the next VBlank, asleep: the VBlank handler sets wVBlankFlag
     WaitFrame:
@@ -1541,38 +1728,72 @@
     dw $44BB
     dw $00FF
     BgTileEnd:
+    OliveTree:
+    dw $00FF
+    dw $42BD
+    dw $02FD
+    dw $17EF
+    dw $18FF
+    dw $72AD
+    dw $65DA
+    dw $6BD4
+    dw $00FF
+    dw $42BD
+    dw $02FD
+    dw $F0FF
+    dw $B84F
+    dw $5EA3
+    dw $AF51
+    dw $EF11
+    dw $77C8
+    dw $7FC1
+    dw $FFE1
+    dw $7FFD
+    dw $39EF
+    dw $43BF
+    dw $4FBC
+    dw $07F9
+    dw $EF11
+    dw $FF03
+    dw $FFE7
+    dw $7CBF
+    dw $708F
+    dw $58AF
+    dw $BE47
+    dw $F8E7
+    OliveTreeEnd:
 
     BgMap:
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-    db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+    db $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00, $01, $02, $00, $00
+    db $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00, $03, $04, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     BgMapEnd:

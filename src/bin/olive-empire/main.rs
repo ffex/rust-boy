@@ -1,9 +1,12 @@
 mod inputs;
 
 use rust_boy::engine::{
-    ANIM_DISABLED, AnimationType, PngOptions, RustBoy, RustBoyConfig, SpriteSize, TileOrder,
-    TileSource,
+    ANIM_DISABLED, AnimationType, Hitbox, PngOptions, RustBoy, RustBoyConfig, SpriteSize,
+    TileCollision, TileOrder, TileSource,
 };
+
+/// One olive tree (2x2 tiles) every `TREE_STEP` tiles across and down: a 2-tile path between trees
+const TREE_STEP: usize = 4;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16)); //TODO check: This can be done more simple?
@@ -29,8 +32,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
     );
 
-    // Background: one 8x8 tile, the first at $9000 (tile 0), repeated over the whole $9800 map
-    gb.tiles.add_background(
+    // Background: the grass tile over the whole $9800 map, and olive trees on it
+    let grass = gb.tiles.add_background(
         "BgTile",
         TileSource::from_png(
             concat!(
@@ -40,7 +43,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &PngOptions::default(),
         )?,
     );
-    gb.tiles.add_tilemap("BgMap", &[[0u8; 32]; 32]);
+    let tree = gb.tiles.add_background(
+        "OliveTree",
+        TileSource::from_png(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/olive-empire/olive-tree.png"
+            ),
+            &PngOptions::default(),
+        )?,
+    );
+    let grass_tile = gb.tiles.background_tile_index(grass);
+    // The tree's 4 tiles, row by row: top-left, top-right, bottom-left, bottom-right
+    let tree_tile = gb.tiles.background_tile_index(tree);
+    gb.tiles
+        .add_tilemap("BgMap", &olive_grove(grass_tile, tree_tile));
+
+    // Obstacles: the trunk row of the trees stops the player's feet; the leaves do not
+    let trunks = TileCollision::new([tree_tile + 2, tree_tile + 3]);
+    let feet = Hitbox::new(2, 8, 12, 8);
 
     //Animation
     //
@@ -66,9 +87,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         left: anim_walk_left,
         right: anim_walk_right,
     };
-    let inputs = inputs::player_inputs(&gb.sprites, player, &walk);
+    let inputs = inputs::player_inputs(&gb.sprites, player, &walk, &trunks, feet);
     gb.add_inputs(inputs);
 
     println!("{}", gb.build()?);
     Ok(())
+}
+
+/// The map: grass, and a tree every `TREE_STEP` tiles from the top-left corner
+fn olive_grove(grass: u8, tree: u8) -> [[u8; 32]; 32] {
+    let mut map = [[grass; 32]; 32];
+    for row in (0..32).step_by(TREE_STEP) {
+        for column in (0..32).step_by(TREE_STEP) {
+            map[row][column] = tree;
+            map[row][column + 1] = tree + 1;
+            map[row + 1][column] = tree + 2;
+            map[row + 1][column + 1] = tree + 3;
+        }
+    }
+    map
 }

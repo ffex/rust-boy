@@ -4762,3 +4762,41 @@ fn blocked_composite_moves_stop_the_hitbox_against_solid_tiles() {
     );
     assert_sprites_shown_by_dma_in_vblank(&gb);
 }
+
+#[test]
+fn olive_empire_trunks_stop_the_player_and_paths_stay_open() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = Rom::example("olive-empire").boot();
+    gb.run_frames(10);
+    // The start-up copies 4 KiB of character tiles with the LCD off, longer than the other
+    // examples: from here on, count one OAM DMA a frame
+    let dmas = |gb: &GameBoy| gb.oam_dmas().iter().filter(|dma| dma.lcd_on).count() as u64;
+    let (dmas_at_start, frame_at_start) = (dmas(&gb), gb.frame());
+    // Screen coordinates of the player's top-left corner, from its left half
+    let position = |gb: &GameBoy| {
+        let (left, right) = (gb.oam_entry(0), gb.oam_entry(1));
+        assert_eq!(right[1], left[1] + 8, "the halves move together");
+        (left[1] - 8, left[0] - 16)
+    };
+    assert_eq!(position(&gb), (80, 72), "the start, on a path");
+    // Feet (x + 2 ..= x + 13, y + 8 ..= y + 15) up into the trunk row 9 (y 72..=79)
+    gb.run_script(&[(8, &[Button::Up]), (2, &[])]);
+    let (x, y) = position(&gb);
+    assert_eq!(x, 80);
+    assert!((57..=64).contains(&y), "the feet in the trunk row: y {y}");
+    // The trunks of the trees at columns 12-13 (x 96) and 8-9 (x 64..=79)
+    gb.run_script(&[(30, &[Button::Right])]);
+    assert_eq!(position(&gb), (82, y), "stopped by the trunk on the right");
+    gb.run_script(&[(30, &[Button::Left])]);
+    assert_eq!(position(&gb), (78, y), "stopped by the trunk on the left");
+    // The 2-tile path up between the trees is open to the top limit (OAM Y 1)
+    gb.run_script(&[(4, &[Button::Right]), (100, &[Button::Up])]);
+    assert_eq!(gb.oam_entry(0)[0], 1, "walked up the path to the top limit");
+    assert_eq!(
+        dmas(&gb) - dmas_at_start,
+        gb.frame() - frame_at_start,
+        "one OAM DMA a frame while walking: the blocked moves fit in the frame"
+    );
+}

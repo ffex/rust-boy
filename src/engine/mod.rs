@@ -42,7 +42,7 @@ pub use scenes::SceneManager;
 pub use sprites::{
     ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
 };
-pub use tile_collision::{TileCollision, TileCollisionCheck};
+pub use tile_collision::{Hitbox, TileCollision, TileCollisionCheck};
 pub use tiles::{TileId, TileManager, TileSource, TilemapArea};
 pub use variables::{ArrayElement, Var, VarId, VarType, VariableManager, WramArray};
 

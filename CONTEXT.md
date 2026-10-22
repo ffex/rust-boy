@@ -1533,6 +1533,8 @@ Detailed list in [`Task.md`](Task.md) Phase 3. Biggest gaps:
   interrupt handlers, the timer and a soft reset exist since `refactor-p3-interrupts`, WRAM arrays since
   `refactor-p3-wram-arrays`).
   `engine::Aabb` provides half-open rectangle overlap checks (edges must not wrap).
+  Composites move unless a `Hitbox` would step on solid tiles (`SpriteManager::move_composite_*_blocked`, on
+  `TileCollision::when_free`); `TileManager::background_tile_index` names background tiles' IDs.
   Register-based function arguments use `RustBoy::call_args` / `Call::with_args`.
   Signed 8.8 position/velocity/gravity integration exists in `stdlib::movement`.
   `stdlib::flow` provides `While`, fixed-count `For` and `SwitchA`; For saves BC around its body.

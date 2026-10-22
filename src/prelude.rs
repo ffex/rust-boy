@@ -41,7 +41,7 @@ pub use crate::asm::{
 pub use crate::engine::{
     ANIM_DISABLED, Aabb, AnimationType, ArrayElement, AssetError, BackgroundAnimation,
     BackgroundAnimationConfig, BuiltinFunction, Chunk, CompositeSpriteId, Definition, EntityPool,
-    Error, Font, InputManager, Layout, Lcdc, MemoryRegion, MetaspritePart, NumberFormat,
+    Error, Font, Hitbox, InputManager, Layout, Lcdc, MemoryRegion, MetaspritePart, NumberFormat,
     NumberPrinter, Palettes, PngColorMapping, PngOptions, RustBoy, RustBoyConfig, SceneManager,
     SpriteId, SpriteSize, TextPrinter, TileCollision, TileCollisionCheck, TileOrder, TileSource,
     TilemapArea, Var, VarType, Window, WramArray, png_to_2bpp,

@@ -26,6 +26,10 @@ together: every breaking change of the refactoring is in this release, so a prog
   multiply two bytes, and divide a 16-bit value by a byte with explicit register and flag contracts.
 - **Tile collision checks** (`engine::TileCollision`): test screen pixels against a set of
   solid tile IDs using the active background map and current camera scroll.
+- **Obstacles** (`SpriteManager::move_composite_{left,right,up,down}_blocked`, `engine::Hitbox`): a composite
+  sprite stops against solid background tiles, tested on a hitbox (e.g. a character's feet);
+  `TileCollision::when_free` runs code when no pixel of a list is solid, and
+  `TileManager::background_tile_index` gives the tile ID of background tiles for maps and collision sets.
 
 - **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
   select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.
@@ -257,7 +261,7 @@ uses its module names: `gb_asm`, `gb_std`, `rust_boy::rust_boy`. APIs that were 
 | `use rust_boy::gb_std::flow::If` (any `gb_std::` path) | `use rust_boy::stdlib::flow::If` |
 | `use rust_boy::rust_boy::{RustBoy, ...}` | `use rust_boy::engine::{RustBoy, ...}`, or `use rust_boy::prelude::*` |
 | `use rust_boy::gb_asm::Chunk` | `use rust_boy::engine::Chunk` (the game layout is the engine's: `Chunk`, `Layout`) |
-| (none) | `use rust_boy::prelude::*`: `Aabb`, `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
+| (none) | `use rust_boy::prelude::*`: `Aabb`, `Hitbox`, `RustBoy`, `RustBoyConfig`, `Error`, `SpriteSize`, `TileSource`, `TilemapArea`, `InputManager`, `AnimationType`, `Var`, `VarType`, `SpriteId`, `CompositeSpriteId`, `ANIM_DISABLED`, `BuiltinFunction`, `Chunk`, `Layout`, `Lcdc`, `Palettes`, `Window`, `MetaspritePart`, `ArrayElement`, `WramArray`, `SpritePool`, `EntityPool`, `Font`, `TextPrinter`, `NumberPrinter`, `NumberFormat`, `BackgroundAnimation`, `BackgroundAnimationConfig`, `AssetError`, `PngOptions`, `PngColorMapping`, `TileOrder`, `png_to_2bpp`, `Definition`, `MemoryRegion`, `If`, `IfA`, `IfConst`, `IfCall`, `Call`, `Routine`, `Regs`, `PadButton`, `Interrupt`, `Stat`, `Timer`, `TimerClock`, `Palette`, `PaletteFade`, `PaletteRegister`, `Shade`, `SpriteFlags`, `ObjectPalette`, `SpritePriority`, `Asm`, `Block`, `Emittable`, `LabelAllocator`, `Expr`, `Instr`, `R8`, `R16`, `Mem`, `Condition`, `Section`, and `hw` |
 
 ### 2. Building a program (`engine::RustBoy`)
 

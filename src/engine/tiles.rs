@@ -401,6 +401,24 @@ impl TileManager {
         cp_in_memory(&tile.name, Expr::hex(area.address()))
     }
 
+    /// The tile index of the first tile of the background tiles `id`, as a tilemap or a
+    /// [`TileCollision`](super::TileCollision) names it: the engine's background tiles are
+    /// at `$9000` (LCDC bit 4 off), where tile 0 is, so their indices are 0 to 127. The
+    /// next tiles of `id` have the next indices.
+    ///
+    /// # Panics
+    /// If `id` is not background tiles of this manager.
+    #[track_caller]
+    pub fn background_tile_index(&self, id: TileId) -> u8 {
+        let tile = self
+            .tiles
+            .get(&id)
+            .filter(|tile| !tile.is_sprite && !tile.is_tilemap)
+            .unwrap_or_else(|| panic!("tiles {:?} are not background tiles of this program", id));
+        u8::try_from((tile.vram_address - hw::VRAM_BG_TILES) / hw::TILE_SIZE)
+            .expect("background tiles are allocated in the 128 background tiles")
+    }
+
     /// Get the label name for a tile
     pub fn get_label(&self, id: TileId) -> Option<&str> {
         self.tiles.get(&id).map(|t| t.name.as_str())
@@ -528,6 +546,31 @@ impl TileManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_tile_index_counts_from_9000_and_rejects_other_tiles() {
+        let mut tiles = TileManager::new();
+        let grass = tiles.add_background("Grass", TileSource::from_raw(&[["$00"; 8]]));
+        let sprite = tiles.add_sprite("Hero", TileSource::from_raw(&[["$ff"; 8]; 2]));
+        let tree = tiles.add_background("Tree", TileSource::from_raw(&[["$ff"; 8]; 4]));
+        let rock = tiles.add_background("Rock", TileSource::from_raw(&[["$ff"; 8]]));
+        let map = tiles.add_tilemap("Map", &[[0; 32]]);
+        assert_eq!(
+            [grass, tree, rock].map(|id| tiles.background_tile_index(id)),
+            [0, 1, 5]
+        );
+        for id in [sprite, map] {
+            let message = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tiles.background_tile_index(id)
+            }))
+            .expect_err("not background tiles");
+            let message = message
+                .downcast_ref::<String>()
+                .cloned()
+                .unwrap_or_default();
+            assert!(message.contains("are not background tiles"), "{message}");
+        }
+    }
 
     #[test]
     fn rom_maps_do_not_reserve_or_initialize_vram() {

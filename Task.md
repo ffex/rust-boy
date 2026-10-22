@@ -381,6 +381,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
 - [x] Generalised tile collision (`refactor-p3-tile-collision`):
       `TileCollision::at_screen_pixel` checks a configurable set of solid tile IDs using
       the active map and current SCX/SCY; sample multiple points for larger objects.
+- [x] Blocked moves against solid tiles (found writing olive-empire, branch `olive-empire-blocked-moves`):
+      `SpriteManager::move_composite_{left,right,up,down}_blocked` move a composite as the limited moves do unless
+      its `Hitbox` would step on a `TileCollision` tile (steps of 1..=8 pixels), built on `TileCollision::when_free`;
+      `TileManager::background_tile_index` gives a background tile's ID for maps and collision sets.
 - [x] 16-bit math helpers (branch `refactor-p3-math`): unsigned 16-bit add/subtract/compare,
       8×8 multiply and 16÷8 divide with documented register/flag contracts. Regression tests
       link all routines and cover borrow-free subtraction, greater-than comparison, asymmetric

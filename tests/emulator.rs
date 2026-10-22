@@ -4680,3 +4680,85 @@ fn aabb_collision_reads_live_sprite_coordinates() {
     gb.run_frames(2);
     assert_eq!(gb.read_symbol("wSpriteRectHit"), 1);
 }
+
+#[test]
+fn blocked_composite_moves_stop_the_hitbox_against_solid_tiles() {
+    if !rgbds_enabled() {
+        return;
+    }
+    // A 16x16 player at screen (80, 72), whose hitbox is its feet: the lower 8 rows
+    let mut game = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16));
+    let tiles = || TileSource::from_raw(&[["$ff"; 8]; 2]);
+    let player = game.add_sprite_16x16("Player", tiles(), tiles(), 80, 72, 0);
+    let blank = game
+        .tiles
+        .add_background("Blank", TileSource::from_raw(&[["$00"; 8]]));
+    let rock = game
+        .tiles
+        .add_background("Rock", TileSource::from_raw(&[["$ff"; 8]]));
+    let rock_tile = game.tiles.background_tile_index(rock);
+    assert_eq!((game.tiles.background_tile_index(blank), rock_tile), (0, 1));
+    // One rock on each side of the walk below (map row, column; 8 pixels each)
+    let mut map = [[0u8; 32]; 32];
+    for (row, column) in [(10, 8), (10, 13), (7, 12), (13, 11)] {
+        map[row][column] = rock_tile;
+    }
+    game.tiles.add_tilemap("Map", &map);
+
+    let solid = TileCollision::new([rock_tile]);
+    let feet = Hitbox::new(0, 8, 16, 8);
+    let sprites = &game.sprites;
+    let mut inputs = InputManager::new();
+    inputs
+        .on_press(
+            PadButton::Left,
+            sprites.move_composite_left_blocked(player, 1, 8, &solid, feet),
+        )
+        .on_press(
+            PadButton::Right,
+            sprites.move_composite_right_blocked(player, 1, 160, &solid, feet),
+        )
+        .on_press(
+            PadButton::Up,
+            sprites.move_composite_up_blocked(player, 1, 1, &solid, feet),
+        )
+        .on_press(
+            PadButton::Down,
+            sprites.move_composite_down_blocked(player, 1, 150, &solid, feet),
+        );
+    game.add_inputs(inputs);
+
+    let mut gb = engine_rom(&game).boot();
+    gb.run_frames(3);
+    let position = |gb: &GameBoy| {
+        let (left, right) = (gb.oam_entry(0), gb.oam_entry(1));
+        assert_eq!(
+            (right[0], right[1]),
+            (left[0], left[1] + 8),
+            "the halves move together"
+        );
+        // Screen coordinates of the player's top-left corner
+        (left[1] - 8, left[0] - 16)
+    };
+    assert_eq!(position(&gb), (80, 72));
+    // The rock at column 8 ends at x 71: the feet stop touching it
+    gb.run_script(&[(30, &[Button::Left])]);
+    assert_eq!(position(&gb), (72, 72), "stopped by the rock on the left");
+    // The rock at column 13 starts at x 104
+    gb.run_script(&[(40, &[Button::Right])]);
+    assert_eq!(position(&gb), (88, 72), "stopped by the rock on the right");
+    // The rock at row 7 ends at y 63: the feet stop at 64, the head overlaps its row
+    gb.run_script(&[(40, &[Button::Up])]);
+    assert_eq!(position(&gb), (88, 56), "stopped by the rock above");
+    // The rock at row 13 starts at y 104
+    gb.run_script(&[(60, &[Button::Down])]);
+    assert_eq!(position(&gb), (88, 88), "stopped by the rock below");
+    // Free again on the left: the walk goes on to the rock-free screen edge
+    gb.run_script(&[(100, &[Button::Left])]);
+    assert_eq!(
+        position(&gb),
+        (0, 88),
+        "no rock on row 12 to the left: the left limit, OAM X 8"
+    );
+    assert_sprites_shown_by_dma_in_vblank(&gb);
+}

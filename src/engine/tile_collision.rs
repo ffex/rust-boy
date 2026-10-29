@@ -44,6 +44,37 @@ impl TileCollision {
         }
     }
 
+    /// Check the tiles under several screen pixels, in order, and run `body` once for the
+    /// first one on a solid tile (for example, an obstacle next to a sprite to act on).
+    ///
+    /// Each point is a pair of snippets that leave the unsigned screen `x` and `y` in `a`,
+    /// as for [`TileCollision::at_screen_pixel`], with the same VRAM-access rule. The checks
+    /// stop at the first solid pixel; when `body` runs, `a` is its tile ID and `hl` its map
+    /// address. With no points or no solid tiles, `body` never runs. The check clobbers `a`,
+    /// `bc`, `d`, `hl` and flags; other registers are preserved except for changes made by
+    /// the snippets and `body`.
+    pub fn at_first_solid<X, Y>(
+        &self,
+        points: impl IntoIterator<Item = (X, Y)>,
+        body: impl Emittable + 'static,
+    ) -> TileCollisionCheck
+    where
+        X: Emittable + 'static,
+        Y: Emittable + 'static,
+    {
+        TileCollisionCheck {
+            points: points
+                .into_iter()
+                .map(|(x, y)| -> (Box<dyn Emittable>, Box<dyn Emittable>) {
+                    (Box::new(x), Box::new(y))
+                })
+                .collect(),
+            body: Box::new(body),
+            solid_tiles: self.solid_tiles.clone(),
+            when: When::Solid,
+        }
+    }
+
     /// Check the tiles under several screen pixels and run `body` only when none of them
     /// is solid (for example, the pixels a sprite is about to step on).
     ///
@@ -77,7 +108,7 @@ impl TileCollision {
 
 /// When a [`TileCollisionCheck`] runs its body
 enum When {
-    /// The (single) pixel is on a solid tile
+    /// The first pixel on a solid tile, in order (one pixel for `at_screen_pixel`)
     Solid,
     /// No pixel is on a solid tile
     Free,
@@ -148,11 +179,19 @@ impl Emittable for TileCollisionCheck {
         match self.when {
             When::Solid => {
                 let [hit, end] = labels.locals(["solid_tile_hit", "solid_tile_end"]);
+                // One point (`at_screen_pixel`) is near its body: `jr`. Several
+                // (`at_first_solid`) can be farther than `jr` reaches
+                let near = self.points.len() == 1;
                 for point in &mut self.points {
                     Self::lookup(&mut code, point, labels);
-                }
-                for tile in &self.solid_tiles {
-                    code.cp_imm(*tile).jr_cond(Condition::Z, &hit);
+                    for tile in &self.solid_tiles {
+                        code.cp_imm(*tile);
+                        if near {
+                            code.jr_cond(Condition::Z, &hit);
+                        } else {
+                            code.jp_cond(Condition::Z, &hit);
+                        }
+                    }
                 }
                 code.jp(&end)
                     .label(&hit)
@@ -222,6 +261,48 @@ mod tests {
             .expect("the body");
         assert!(lines[body + 1].starts_with(".solid_tile_blocked"));
         assert_eq!(body + 2, lines.len());
+    }
+
+    #[test]
+    fn at_first_solid_compares_after_each_lookup_and_runs_the_body_once() {
+        let lines = text(
+            TileCollision::new([3, 4])
+                .at_first_solid([(at(1), at(2)), (at(5), at(6))], vec![Instr::Ret]),
+        );
+        let calls: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains("call GetTileByScreenPixel"))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(calls.len(), 2, "{lines:#?}");
+        // Right after each lookup, while a and hl are that point's: jump to the body
+        for call in calls {
+            assert!(lines[call + 1].contains("cp") && lines[call + 1].contains('3'));
+            assert!(lines[call + 2].starts_with("jp z, .solid_tile_hit"));
+            assert!(lines[call + 3].contains("cp") && lines[call + 3].contains('4'));
+            assert!(lines[call + 4].starts_with("jp z, .solid_tile_hit"));
+        }
+        assert_eq!(
+            lines.iter().filter(|line| *line == "ret").count(),
+            1,
+            "one body: {lines:#?}"
+        );
+        let body = lines.iter().position(|line| line == "ret").unwrap();
+        assert!(lines[body - 2].starts_with("jp .solid_tile_end"));
+        assert!(lines[body - 1].starts_with(".solid_tile_hit"));
+        assert!(lines[body + 1].starts_with(".solid_tile_end"));
+    }
+
+    #[test]
+    fn at_screen_pixel_keeps_its_short_jumps() {
+        let lines = text(TileCollision::new([3]).at_screen_pixel(at(1), at(2), vec![Instr::Ret]));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("jr z, .solid_tile_hit"))
+        );
+        assert!(!lines.iter().any(|line| line.starts_with("jp z")));
     }
 
     #[test]

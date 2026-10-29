@@ -30,6 +30,12 @@ together: every breaking change of the refactoring is in this release, so a prog
   sprite stops against solid background tiles, tested on a hitbox (e.g. a character's feet);
   `TileCollision::when_free` runs code when no pixel of a list is solid, and
   `TileManager::background_tile_index` gives the tile ID of background tiles for maps and collision sets.
+- **Acting on what a sprite touches** (`SpriteManager::when_composite_touches`): runs code once when a
+  composite's hitbox touches a solid tile on any side, with the tile ID in `a` and its map address in `hl`; built
+  on `TileCollision::at_first_solid` (the first solid pixel of a list).
+- **Map blocks at run time** (`RustBoy::queue_tile_block_write`): queues a block of map tiles (e.g. a 2x2
+  metatile) from the map address in `hl`, one VRAM-queue entry a tile.
+- **`Var::increment`**: adds 1 to an 8- or 16-bit variable, wrapping, and leaves the new value in `a` / `hl`.
 
 - **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
   select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.

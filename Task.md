@@ -379,6 +379,10 @@ the next step is Phase 3, and the `refactor` → `main` PR, whose release notes 
       `SpriteManager::move_composite_{left,right,up,down}_blocked` move a composite as the limited moves do unless
       its `Hitbox` would step on a `TileCollision` tile (steps of 1..=8 pixels), built on `TileCollision::when_free`;
       `TileManager::background_tile_index` gives a background tile's ID for maps and collision sets.
+- [x] Harvest in olive-empire (found writing it, branch `olive-empire-harvest`): `Var::increment` (8/16-bit, wraps);
+      `SpriteManager::when_composite_touches` runs code once for the first solid tile 1 px around a hitbox, on
+      `TileCollision::at_first_solid` (`When::Solid` now compares after each lookup; one point emits the same code);
+      `RustBoy::queue_tile_block_write` queues a WxH block of map tiles from `hl` through the VRAM queue.
 - [x] 16-bit math helpers (branch `refactor-p3-math`): unsigned 16-bit add/subtract/compare,
       8×8 multiply and 16÷8 divide with documented register/flag contracts. Regression tests
       link all routines and cover borrow-free subtraction, greater-than comparison, asymmetric

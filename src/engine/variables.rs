@@ -265,6 +265,33 @@ impl Var {
         asm.into_instrs()
     }
 
+    /// The code that adds 1 to the variable, wrapping (255 + 1 = 0 for a `U8`, 65535 + 1 = 0
+    /// for a `U16`), and leaves the new value where [`Var::get`] does
+    ///
+    /// - 8-bit: `inc a` between a load and a store; the new value is in `a`.
+    /// - 16-bit: `inc hl` between a [`Var::get`] and a store of both bytes; the new value is in
+    ///   `hl` and `a` holds its high byte.
+    ///
+    /// Changes the flags too (`inc` sets Z when an 8-bit value wraps to 0).
+    ///
+    /// # Panics
+    /// If the variable is an array: use its [`WramArray`] handle.
+    #[track_caller]
+    pub fn increment(&self) -> Vec<Instr> {
+        let mut asm = Block::new();
+        asm.emit_all(self.get());
+        if self.var_type.size() == 2 {
+            asm.inc(R16::HL).ld(R8::A, R8::L);
+            store_a(&mut asm, Expr::sym(&self.name), self.region);
+            asm.ld(R8::A, R8::H);
+            store_a(&mut asm, Expr::sym(&self.name) + 1, self.region);
+        } else {
+            asm.inc(R8::A);
+            store_a(&mut asm, Expr::sym(&self.name), self.region);
+        }
+        asm.into_instrs()
+    }
+
     /// Get the variable name/label
     pub fn name(&self) -> &str {
         &self.name
@@ -1096,6 +1123,37 @@ mod tests {
         cpu.run(&speed.get());
         assert_eq!(u16::from_be_bytes([cpu.h, cpu.l]) as i16, -2);
         assert!(cpu.trace.is_empty(), "get writes nothing: {:?}", cpu.trace);
+    }
+
+    #[test]
+    fn test_increment_adds_one_and_wraps() {
+        let mut vm = VariableManager::new();
+        let olives = vm.create_u16("wOlives", 0x00FF);
+        let lives = vm.create_u8("wLives", 254);
+        let fast = vm.create_hram_u8("hFast", 0);
+        let mut cpu = cpu_after_init(&vm);
+        cpu.run(&olives.increment());
+        assert_eq!(
+            word(&cpu, "wOlives"),
+            0x0100,
+            "the carry reaches the high byte"
+        );
+        assert_eq!(
+            u16::from_be_bytes([cpu.h, cpu.l]),
+            0x0100,
+            "the new value in hl"
+        );
+        cpu.run(&olives.set(0xFFFF));
+        cpu.run(&olives.increment());
+        assert_eq!(word(&cpu, "wOlives"), 0);
+        cpu.run(&lives.increment());
+        assert_eq!((cpu.mem["wLives"], cpu.a), (255, 255));
+        cpu.run(&lives.increment());
+        assert_eq!(cpu.mem["wLives"], 0, "255 + 1 wraps to 0");
+        assert_eq!(
+            lines(fast.increment()),
+            ["ldh a, [hFast]", "inc a", "ldh [hFast], a"]
+        );
     }
 
     #[test]

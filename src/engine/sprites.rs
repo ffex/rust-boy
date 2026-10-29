@@ -1204,6 +1204,38 @@ impl SpriteManager {
         solid.when_free(points, moving).emit(&self.labels)
     }
 
+    /// Run `body` once when the composite's `hitbox` touches one of the `solid` background
+    /// tiles: a tile on the line of pixels just outside the hitbox, on any side (the pixels a
+    /// 1-pixel blocked move would read, left, right, up, then down)
+    ///
+    /// For an action on an obstacle next to a character, like using a door or a tree. When
+    /// `body` runs, `a` is the touched tile's ID and `hl` its map address (see
+    /// [`TileCollision::at_first_solid`]); with several tiles touched, the first in that
+    /// order. It reads the map, so it has the VRAM-access rule of the blocked moves: put it
+    /// in an input binding (they run at the start of the main loop, in VBlank).
+    ///
+    /// # Panics
+    /// If there is no composite `id`, or if the hitbox does not fit in the composite.
+    #[track_caller]
+    pub fn when_composite_touches(
+        &self,
+        id: CompositeSpriteId,
+        hitbox: Hitbox,
+        solid: &TileCollision,
+        body: impl crate::asm::Emittable + 'static,
+    ) -> Vec<Instr> {
+        let points: Vec<_> = [
+            (Axis::X, MoveDir::Decrease),
+            (Axis::X, MoveDir::Increase),
+            (Axis::Y, MoveDir::Decrease),
+            (Axis::Y, MoveDir::Increase),
+        ]
+        .into_iter()
+        .flat_map(|(axis, dir)| self.blocked_points(id, axis, dir, 1, hitbox))
+        .collect();
+        solid.at_first_solid(points, body).emit(&self.labels)
+    }
+
     /// The screen pixels a blocked move of the composite reads, as (x, y) snippets that
     /// each leave the coordinate in `a`: the lines 1 and `distance` pixels ahead of the
     /// hitbox, every 8 pixels along its edge and at the edge's last pixel. A tile is 8
@@ -2480,6 +2512,43 @@ mod tests {
         let mut cpu = cpu_with_oam(&gb.sprites);
         cpu.run(&points[0].0);
         assert_eq!(cpu.a, 255);
+    }
+
+    #[test]
+    fn test_touching_reads_the_line_around_the_hitbox_and_runs_the_body_once() {
+        let (gb, player) = player_16x16();
+        let feet = Hitbox::new(0, 8, 16, 8);
+        let lines: Vec<String> = gb
+            .sprites
+            .when_composite_touches(player, feet, &TileCollision::new([5]), vec![Instr::Ret])
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        // The 1-pixel blocked-move points: 2 left, 2 right, 3 up, 3 down
+        let lookups = lines
+            .iter()
+            .filter(|line| line.contains("call GetTileByScreenPixel"))
+            .count();
+        assert_eq!(lookups, 2 + 2 + 3 + 3, "{lines:#?}");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("jp z, .solid_tile_hit"))
+                .count(),
+            lookups,
+            "a jump to the body after each lookup"
+        );
+        assert_eq!(lines.iter().filter(|line| *line == "ret").count(), 1);
+        // The hitbox must fit, as for the blocked moves
+        assert!(
+            !panic_message(|| gb.sprites.when_composite_touches(
+                player,
+                Hitbox::new(0, 8, 17, 8),
+                &TileCollision::new([5]),
+                vec![Instr::Ret]
+            ))
+            .is_empty()
+        );
     }
 
     #[test]

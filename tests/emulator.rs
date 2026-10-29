@@ -4798,8 +4798,8 @@ fn olive_empire_trunks_stop_the_player_and_paths_stay_open() {
     gb.run_script(&[(200, &[Button::Down])]);
     assert_eq!(
         position(&gb).1,
-        128,
-        "the bottom edge: the last line on 143"
+        112,
+        "the bottom edge: the last line on 127, above the 16-line HUD"
     );
     // Up to a free row: the feet (y + 8 ..= y + 15) in rows 10-12 (y 80..=103), no trunk
     while position(&gb).1 > 84 {

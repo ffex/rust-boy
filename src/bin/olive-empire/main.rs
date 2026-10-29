@@ -1,15 +1,28 @@
 mod inputs;
 
+use rust_boy::hw;
+
 use rust_boy::engine::{
-    ANIM_DISABLED, AnimationType, Hitbox, PngOptions, RustBoy, RustBoyConfig, SpriteSize,
-    TileCollision, TileOrder, TileSource,
+    ANIM_DISABLED, AnimationType, Hitbox, NumberFormat, PngOptions, RustBoy, RustBoyConfig,
+    SpriteSize, TileCollision, TileOrder, TileSource, TilemapArea, Window,
 };
 
 /// One olive tree (2x2 tiles) every `TREE_STEP` tiles across and down: a 2-tile path between trees
 const TREE_STEP: usize = 4;
+/// Height in pixels of the HUD strip at the bottom of the screen (the window, 2 tile rows)
+pub const HUD_HEIGHT: u8 = 16;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut gb = RustBoy::with_config(RustBoyConfig::default().sprite_size(SpriteSize::Size8x16)); //TODO check: This can be done more simple?
+    // The HUD is the window, on the $9C00 map, over the bottom `HUD_HEIGHT` lines of the screen
+    let mut gb = RustBoy::with_config(
+        RustBoyConfig::default()
+            .sprite_size(SpriteSize::Size8x16)
+            .window(Window::new(
+                TilemapArea::Map9C00,
+                0,
+                hw::SCRN_Y.value - HUD_HEIGHT,
+            )),
+    );
 
     let player = gb.add_sprite_16x16(
         "player",
@@ -70,6 +83,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Every tree starts with olives
     gb.tiles
         .add_tilemap("BgMap", &olive_grove(grass_tile, full_tile));
+
+    // HUD: the olive icon (2x2 tiles) at columns 1-2 and the harvest counter on its lower row,
+    // on a blank (colour 0) strip
+    let hud_blank = gb
+        .tiles
+        .add_background("HudBlank", TileSource::from_2bpp_bytes(&[0; 16])?);
+    let hud_olive = gb.tiles.add_background(
+        "HudOlive",
+        TileSource::from_png(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/olive-empire/olive-hud.edited.png"
+            ),
+            &PngOptions::default(),
+        )?,
+    );
+    let digits = gb.load_font(
+        "Digits",
+        TileSource::from_png(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/olive-empire/digits.png"
+            ),
+            &PngOptions::default(),
+        )?,
+        b'0',
+    );
+    let blank_tile = gb.tiles.background_tile_index(hud_blank);
+    let olive_tile = gb.tiles.background_tile_index(hud_olive);
+    let mut hud = [[blank_tile; 32]; 2];
+    hud[0][1] = olive_tile;
+    hud[0][2] = olive_tile + 1;
+    hud[1][1] = olive_tile + 2;
+    hud[1][2] = olive_tile + 3;
+    gb.tiles.add_tilemap_at("Hud", TilemapArea::Map9C00, &hud);
+    let olives = gb.create_number_printer(
+        "Olives",
+        digits,
+        TilemapArea::Map9C00,
+        4,
+        1,
+        NumberFormat::DecimalU16,
+    );
+    gb.add_to_main_loop(olives.step());
 
     // Obstacles: the trunk row of the trees, with or without olives, stops the player's feet;
     // the leaves do not

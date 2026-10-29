@@ -7,11 +7,11 @@ use rust_boy::{
 
 // The screen edges as OAM limits (screen x + 8, screen y + 16), for the sprite that leads the
 // move: the leftmost / topmost one at screen 0, the rightmost one at screen x 152 (its last
-// pixel on 159), the lowest 8x16 one at screen y 128 (its last line on 143)
+// pixel on 159), the lowest 8x16 one on the line above the HUD
 const LEFT_LIMIT: u8 = hw::OAM_X_OFFSET;
 const RIGHT_LIMIT: u8 = hw::SCRN_X.value - 8 + hw::OAM_X_OFFSET;
 const TOP_LIMIT: u8 = hw::OAM_Y_OFFSET;
-const BOTTOM_LIMIT: u8 = hw::SCRN_Y.value - 16 + hw::OAM_Y_OFFSET;
+const BOTTOM_LIMIT: u8 = hw::SCRN_Y.value - crate::HUD_HEIGHT - 16 + hw::OAM_Y_OFFSET;
 
 /// Indices of the player's walk animations, as `add_composite_animation` returned them
 pub struct WalkAnimations {

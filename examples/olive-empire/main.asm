@@ -39,6 +39,22 @@
     ld hl, $9800
     ld bc, BgMapEnd - BgMap
     call Memcopy
+    ld de, HudBlank
+    ld hl, $9090
+    ld bc, HudBlankEnd - HudBlank
+    call Memcopy
+    ld de, HudOlive
+    ld hl, $90A0
+    ld bc, HudOliveEnd - HudOlive
+    call Memcopy
+    ld de, Digits
+    ld hl, $90E0
+    ld bc, DigitsEnd - Digits
+    call Memcopy
+    ld de, Hud
+    ld hl, $9C00
+    ld bc, HudEnd - Hud
+    call Memcopy
     call InitOamDma
     ld a, 0
     ld b, 160
@@ -72,6 +88,19 @@
     ldh [rOBP0], a
     ld a, 228
     ldh [rOBP1], a
+    ld hl, wTextOlivesGlyphs
+    ld bc, 5
+    .array_init_28:
+    ld a, 14
+    ld [hli], a
+    dec bc
+    ld a, b
+    or a, c
+    jr nz, .array_init_28
+    ld a, 0
+    ld [wTextOlivesCursor], a
+    ld a, 0
+    ld [wTextOlivesCursor+1], a
     ld a, 0
     ld [wCurKeys], a
     ld a, 0
@@ -86,9 +115,16 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
+    xor a, a
+    ld [wVramQueueRead], a
+    ld [wVramQueueWrite], a
     ld a, IEF_VBLANK
     ldh [rIE], a
-    ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16
+    ld a, 7
+    ldh [rWX], a
+    ld a, 128
+    ldh [rWY], a
+    ld a, LCDCF_ON | LCDCF_BGON | LCDCF_OBJON | LCDCF_OBJ16 | LCDCF_WINON | LCDCF_WIN9C00
     ld [rLCDC], a
     xor a, a
     ldh [rIF], a
@@ -152,6 +188,7 @@
     .skip_player_right_playerWalkRight_27:
     .anim_player_right_end_23:
     .anim_end_17:
+    call PrintTextOlives
     call UpdateKeys
     .check_left_8:
     ld a, [wCurKeys]
@@ -400,13 +437,13 @@
     cp a, 4
     jp z, .solid_tile_blocked_7
     ld a, [wShadowOAM+0]
-    sub a, 144
+    sub a, 128
     jp nc, .sprite0_down_limit_end_6
     add a, 1
     jp nc, .sprite0_down_limit_store_6
     ld a, 0
     .sprite0_down_limit_store_6:
-    add a, 144
+    add a, 128
     ld [wShadowOAM+0], a
     ld [wShadowOAM+4], a
     .sprite0_down_limit_end_6:
@@ -629,6 +666,114 @@
     jr nz, .wait
     ret
     OamDmaCodeEnd:
+    QueueVramWrite:
+    ld d, a
+    ld a, h
+    cp a, 128
+    ret c
+    cp a, 160
+    jr nc, .reject
+    ld b, h
+    ld c, l
+    ld a, [wVramQueueWrite]
+    ld e, a
+    add a, 3
+    cp a, 39
+    jr c, .next
+    xor a, a
+    .next:
+    ld h, a
+    ld a, [wVramQueueRead]
+    cp a, h
+    jr z, .reject
+    ld l, e
+    ld e, h
+    ld h, 0
+    push bc
+    ld bc, wVramQueue
+    add hl, bc
+    pop bc
+    ld a, c
+    ld [hli], a
+    ld a, b
+    ld [hli], a
+    ld [hl], d
+    .publish:
+    ld a, e
+    ld [wVramQueueWrite], a
+    and a, a
+    ret
+    .reject:
+    scf
+    ret
+    FlushVramQueue:
+    .next:
+    ldh a, [rLY]
+    cp a, 144
+    ret c
+    cp a, 153
+    ret nc
+    ld a, [wVramQueueRead]
+    ld e, a
+    ld a, [wVramQueueWrite]
+    cp a, e
+    ret z
+    ld l, e
+    ld h, 0
+    ld bc, wVramQueue
+    add hl, bc
+    ld a, [hli]
+    ld e, a
+    ld a, [hli]
+    ld d, a
+    ld a, [hl]
+    .write:
+    ld [de], a
+    ld a, [wVramQueueRead]
+    add a, 3
+    cp a, 39
+    jr c, .advance
+    xor a, a
+    .advance:
+    ld [wVramQueueRead], a
+    jr .next
+    PrintTextOlives:
+    .next:
+    ld a, [wTextOlivesCursor]
+    ld e, a
+    ld a, [wTextOlivesCursor+1]
+    ld d, a
+    cp a, 0
+    jr c, .write
+    jr nz, .done
+    ld a, e
+    cp a, 5
+    jr nc, .done
+    .write:
+    push de
+    ld hl, TextOlivesTargets
+    add hl, de
+    add hl, de
+    ld a, [hli]
+    ld c, a
+    ld b, [hl]
+    push bc
+    ld hl, wTextOlivesGlyphs
+    add hl, de
+    ld a, [hl]
+    pop hl
+    call QueueVramWrite
+    pop de
+    ret c
+    inc de
+    ld a, e
+    ld [wTextOlivesCursor], a
+    ld a, d
+    ld [wTextOlivesCursor+1], a
+    jr .next
+    .done:
+    xor a, a
+    ret
     Anim_player_left_playerWalkFront:
     ld a, [wShadowOAM+2]
     cp a, 0
@@ -727,10 +872,17 @@
     ret
     VBlankHandler:
     push af
+    push bc
+    push de
+    push hl
     ld a, HIGH(wShadowOAM)
     call hOAMDMA
+    call FlushVramQueue
     ld a, 1
     ld [wVBlankFlag], a
+    pop hl
+    pop de
+    pop bc
     pop af
     reti
 
@@ -1840,6 +1992,134 @@
     dw $BE47
     dw $F8E7
     OliveTreeFullEnd:
+    HudBlank:
+    dw $0000
+    dw $0000
+    dw $0000
+    dw $0000
+    dw $0000
+    dw $0000
+    dw $0000
+    dw $0000
+    HudBlankEnd:
+    HudOlive:
+    dw $0000
+    dw $0303
+    dw $0704
+    dw $0E09
+    dw $1D12
+    dw $3B25
+    dw $372A
+    dw $6F5C
+    dw $0000
+    dw $F0F0
+    dw $B0F0
+    dw $D858
+    dw $F8F8
+    dw $F818
+    dw $B848
+    dw $9868
+    dw $5774
+    dw $6F68
+    dw $0F08
+    dw $0F08
+    dw $0F08
+    dw $0706
+    dw $0101
+    dw $0000
+    dw $CC34
+    dw $CC34
+    dw $9868
+    dw $F808
+    dw $F010
+    dw $E060
+    dw $8080
+    dw $0000
+    HudOliveEnd:
+    Digits:
+    dw $3838
+    dw $4444
+    dw $4C4C
+    dw $5454
+    dw $6464
+    dw $4444
+    dw $3838
+    dw $0000
+    dw $1010
+    dw $3030
+    dw $1010
+    dw $1010
+    dw $1010
+    dw $1010
+    dw $3838
+    dw $0000
+    dw $3838
+    dw $4444
+    dw $0404
+    dw $0808
+    dw $1010
+    dw $2020
+    dw $7C7C
+    dw $0000
+    dw $7C7C
+    dw $0808
+    dw $1010
+    dw $0808
+    dw $0404
+    dw $4444
+    dw $3838
+    dw $0000
+    dw $0808
+    dw $1818
+    dw $2828
+    dw $4848
+    dw $7C7C
+    dw $0808
+    dw $0808
+    dw $0000
+    dw $7C7C
+    dw $4040
+    dw $7878
+    dw $0404
+    dw $0404
+    dw $4444
+    dw $3838
+    dw $0000
+    dw $1818
+    dw $2020
+    dw $4040
+    dw $7878
+    dw $4444
+    dw $4444
+    dw $3838
+    dw $0000
+    dw $7C7C
+    dw $0404
+    dw $0808
+    dw $1010
+    dw $2020
+    dw $2020
+    dw $2020
+    dw $0000
+    dw $3838
+    dw $4444
+    dw $4444
+    dw $3838
+    dw $4444
+    dw $4444
+    dw $3838
+    dw $0000
+    dw $3838
+    dw $4444
+    dw $4444
+    dw $3C3C
+    dw $0404
+    dw $0808
+    dw $3030
+    dw $0000
+    DigitsEnd:
+    TextOlivesTargets:
+    dw $9C24, $9C25, $9C26, $9C27, $9C28
 
     BgMap:
     db $05, $06, $00, $00, $05, $06, $00, $00, $05, $06, $00, $00, $05, $06, $00, $00, $05, $06, $00, $00, $05, $06, $00, $00, $05, $06, $00, $00, $05, $06, $00, $00
@@ -1875,6 +2155,10 @@
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
     BgMapEnd:
+    Hud:
+    db $09, $0A, $0B, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09
+    db $09, $0C, $0D, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09, $09
+    HudEnd:
 
     SECTION "Shadow OAM", WRAM0[$CF00]
     wShadowOAM:
@@ -1882,7 +2166,19 @@
     SECTION "OAM DMA", HRAM[$FFB8]
     hOAMDMA:
     ds 8
+    SECTION "VRAM queue", WRAM0[$CED9]
+    wVramQueue:
+    ds 39
+    SECTION "VRAM queue read cursor", WRAM0[$CED8]
+    wVramQueueRead:
+    ds 1
+    SECTION "VRAM queue write cursor", WRAM0[$CED7]
+    wVramQueueWrite:
+    ds 1
     SECTION "Variables", WRAM0[$C000]
+    wTextOlivesGlyphs:
+    ds 5
+    wTextOlivesCursor: dw
     wCurKeys: db
     wNewKeys: db
     wReleasedKeys: db

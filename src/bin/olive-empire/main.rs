@@ -53,14 +53,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &PngOptions::default(),
         )?,
     );
+    let full_tree = gb.tiles.add_background(
+        "OliveTreeFull",
+        TileSource::from_png(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/olive-empire/olive-tree-olive.png"
+            ),
+            &PngOptions::default(),
+        )?,
+    );
     let grass_tile = gb.tiles.background_tile_index(grass);
-    // The tree's 4 tiles, row by row: top-left, top-right, bottom-left, bottom-right
-    let tree_tile = gb.tiles.background_tile_index(tree);
+    // Each tree's 4 tiles, row by row: top-left, top-right, bottom-left, bottom-right
+    let bare_tile = gb.tiles.background_tile_index(tree);
+    let full_tile = gb.tiles.background_tile_index(full_tree);
+    // Every tree starts with olives
     gb.tiles
-        .add_tilemap("BgMap", &olive_grove(grass_tile, tree_tile));
+        .add_tilemap("BgMap", &olive_grove(grass_tile, full_tile));
 
-    // Obstacles: the trunk row of the trees stops the player's feet; the leaves do not
-    let trunks = TileCollision::new([tree_tile + 2, tree_tile + 3]);
+    // Obstacles: the trunk row of the trees, with or without olives, stops the player's feet;
+    // the leaves do not
+    let trunks = TileCollision::new([full_tile + 2, full_tile + 3, bare_tile + 2, bare_tile + 3]);
     let feet = Hitbox::new(2, 8, 12, 8);
 
     //Animation

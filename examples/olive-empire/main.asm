@@ -59,10 +59,10 @@
     ld a, 0
     ld b, 160
     ld hl, wShadowOAM
-    .clear_oam_16:
+    .clear_oam_19:
     ld [hli], a
     dec b
-    jp nz, .clear_oam_16
+    jp nz, .clear_oam_19
     ld hl, wShadowOAM
     ld a, 88
     ld [hli], a
@@ -90,17 +90,21 @@
     ldh [rOBP1], a
     ld hl, wTextOlivesGlyphs
     ld bc, 5
-    .array_init_28:
+    .array_init_31:
     ld a, 14
     ld [hli], a
     dec bc
     ld a, b
     or a, c
-    jr nz, .array_init_28
+    jr nz, .array_init_31
     ld a, 0
     ld [wTextOlivesCursor], a
     ld a, 0
     ld [wTextOlivesCursor+1], a
+    ld a, 0
+    ld [wOlivesHarvested], a
+    ld a, 0
+    ld [wOlivesHarvested+1], a
     ld a, 0
     ld [wCurKeys], a
     ld a, 0
@@ -136,64 +140,64 @@
     inc a
     ld [wFrameCounter], a
     cp a, 8
-    jp c, .anim_end_17
+    jp c, .anim_end_20
     ld a, 0
     ld [wFrameCounter], a
     ld a, [wAnim_player_left_Current]
     cp a, 255
-    jp z, .anim_player_left_end_18
+    jp z, .anim_player_left_end_21
     cp a, 0
-    jr nz, .skip_player_left_playerWalkFront_19
+    jr nz, .skip_player_left_playerWalkFront_22
     call Anim_player_left_playerWalkFront
-    jp .anim_player_left_end_18
-    .skip_player_left_playerWalkFront_19:
+    jp .anim_player_left_end_21
+    .skip_player_left_playerWalkFront_22:
     cp a, 1
-    jr nz, .skip_player_left_playerWalkBack_20
+    jr nz, .skip_player_left_playerWalkBack_23
     call Anim_player_left_playerWalkBack
-    jp .anim_player_left_end_18
-    .skip_player_left_playerWalkBack_20:
+    jp .anim_player_left_end_21
+    .skip_player_left_playerWalkBack_23:
     cp a, 2
-    jr nz, .skip_player_left_playerWalkLeft_21
+    jr nz, .skip_player_left_playerWalkLeft_24
     call Anim_player_left_playerWalkLeft
-    jp .anim_player_left_end_18
-    .skip_player_left_playerWalkLeft_21:
+    jp .anim_player_left_end_21
+    .skip_player_left_playerWalkLeft_24:
     cp a, 3
-    jr nz, .skip_player_left_playerWalkRight_22
+    jr nz, .skip_player_left_playerWalkRight_25
     call Anim_player_left_playerWalkRight
-    jp .anim_player_left_end_18
-    .skip_player_left_playerWalkRight_22:
-    .anim_player_left_end_18:
+    jp .anim_player_left_end_21
+    .skip_player_left_playerWalkRight_25:
+    .anim_player_left_end_21:
     ld a, [wAnim_player_right_Current]
     cp a, 255
-    jp z, .anim_player_right_end_23
+    jp z, .anim_player_right_end_26
     cp a, 0
-    jr nz, .skip_player_right_playerWalkFront_24
+    jr nz, .skip_player_right_playerWalkFront_27
     call Anim_player_right_playerWalkFront
-    jp .anim_player_right_end_23
-    .skip_player_right_playerWalkFront_24:
+    jp .anim_player_right_end_26
+    .skip_player_right_playerWalkFront_27:
     cp a, 1
-    jr nz, .skip_player_right_playerWalkBack_25
+    jr nz, .skip_player_right_playerWalkBack_28
     call Anim_player_right_playerWalkBack
-    jp .anim_player_right_end_23
-    .skip_player_right_playerWalkBack_25:
+    jp .anim_player_right_end_26
+    .skip_player_right_playerWalkBack_28:
     cp a, 2
-    jr nz, .skip_player_right_playerWalkLeft_26
+    jr nz, .skip_player_right_playerWalkLeft_29
     call Anim_player_right_playerWalkLeft
-    jp .anim_player_right_end_23
-    .skip_player_right_playerWalkLeft_26:
+    jp .anim_player_right_end_26
+    .skip_player_right_playerWalkLeft_29:
     cp a, 3
-    jr nz, .skip_player_right_playerWalkRight_27
+    jr nz, .skip_player_right_playerWalkRight_30
     call Anim_player_right_playerWalkRight
-    jp .anim_player_right_end_23
-    .skip_player_right_playerWalkRight_27:
-    .anim_player_right_end_23:
-    .anim_end_17:
+    jp .anim_player_right_end_26
+    .skip_player_right_playerWalkRight_30:
+    .anim_player_right_end_26:
+    .anim_end_20:
     call PrintTextOlives
     call UpdateKeys
-    .check_left_8:
+    .check_left_10:
     ld a, [wCurKeys]
     and a, PADF_LEFT
-    jp z, .check_left_end_8
+    jp z, .check_left_end_10
     ld a, [wShadowOAM+1]
     add a, 249
     ld b, a
@@ -247,11 +251,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 2
     ld [wAnim_player_right_Current], a
-    .check_left_end_8:
-    .check_right_9:
+    .check_left_end_10:
+    .check_right_11:
     ld a, [wCurKeys]
     and a, PADF_RIGHT
-    jp z, .check_right_end_9
+    jp z, .check_right_end_11
     ld a, [wShadowOAM+1]
     add a, 6
     ld b, a
@@ -305,11 +309,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 3
     ld [wAnim_player_right_Current], a
-    .check_right_end_9:
-    .check_up_10:
+    .check_right_end_11:
+    .check_up_12:
     ld a, [wCurKeys]
     and a, PADF_UP
-    jp z, .check_up_end_10
+    jp z, .check_up_end_12
     ld a, [wShadowOAM+1]
     add a, 250
     ld b, a
@@ -380,11 +384,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 1
     ld [wAnim_player_right_Current], a
-    .check_up_end_10:
-    .check_down_11:
+    .check_up_end_12:
+    .check_down_13:
     ld a, [wCurKeys]
     and a, PADF_DOWN
-    jp z, .check_down_end_11
+    jp z, .check_down_end_13
     ld a, [wShadowOAM+1]
     add a, 250
     ld b, a
@@ -452,11 +456,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 0
     ld [wAnim_player_right_Current], a
-    .check_down_end_11:
-    .check_left_12:
+    .check_down_end_13:
+    .check_left_14:
     ld a, [wReleasedKeys]
     and a, PADF_LEFT
-    jp z, .check_left_end_12
+    jp z, .check_left_end_14
     ld a, 2
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -471,11 +475,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_left_end_12:
-    .check_right_13:
+    .check_left_end_14:
+    .check_right_15:
     ld a, [wReleasedKeys]
     and a, PADF_RIGHT
-    jp z, .check_right_end_13
+    jp z, .check_right_end_15
     ld a, 3
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -490,11 +494,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_right_end_13:
-    .check_up_14:
+    .check_right_end_15:
+    .check_up_16:
     ld a, [wReleasedKeys]
     and a, PADF_UP
-    jp z, .check_up_end_14
+    jp z, .check_up_end_16
     ld a, 1
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -509,11 +513,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_up_end_14:
-    .check_down_15:
+    .check_up_end_16:
+    .check_down_17:
     ld a, [wReleasedKeys]
     and a, PADF_DOWN
-    jp z, .check_down_end_15
+    jp z, .check_down_end_17
     ld a, 0
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -528,7 +532,196 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_down_end_15:
+    .check_down_end_17:
+    .check_a_18:
+    ld a, [wNewKeys]
+    and a, PADF_A
+    jp z, .check_a_end_18
+    ld a, [wShadowOAM+1]
+    add a, 249
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 248
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 249
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 255
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 6
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 248
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 6
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 255
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 250
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 247
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 2
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 247
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 5
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    add a, 247
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 250
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 2
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    ld a, [wShadowOAM+1]
+    add a, 5
+    ld b, a
+    push bc
+    ld a, [wShadowOAM+0]
+    ld d, a
+    pop bc
+    ld c, d
+    call GetTileByScreenPixel
+    cp a, 7
+    jp z, .solid_tile_hit_9
+    cp a, 8
+    jp z, .solid_tile_hit_9
+    jp .solid_tile_end_9
+    .solid_tile_hit_9:
+    res 0, l
+    ld bc, -32
+    add hl, bc
+    push hl
+    ld a, 1
+    call QueueVramWrite
+    pop hl
+    inc hl
+    push hl
+    ld a, 2
+    call QueueVramWrite
+    pop hl
+    ld bc, 31
+    add hl, bc
+    push hl
+    ld a, 3
+    call QueueVramWrite
+    pop hl
+    inc hl
+    push hl
+    ld a, 4
+    call QueueVramWrite
+    pop hl
+    ld a, [wOlivesHarvested]
+    ld l, a
+    ld a, [wOlivesHarvested+1]
+    ld h, a
+    inc hl
+    ld a, l
+    ld [wOlivesHarvested], a
+    ld a, h
+    ld [wOlivesHarvested+1], a
+    ld d, h
+    ld e, l
+    ld hl, wTextOlivesGlyphs
+    ld c, 14
+    call EncodeDecimalU16
+    jr c, .number_8
+    ld a, 0
+    ld [wTextOlivesCursor], a
+    ld a, 0
+    ld [wTextOlivesCursor+1], a
+    and a, a
+    .number_8:
+    .solid_tile_end_9:
+    .check_a_end_18:
     jp Main
 
     ; Copy bytes from one area to another
@@ -773,6 +966,99 @@
     jr .next
     .done:
     xor a, a
+    ret
+    EncodeDecimalU16:
+    ld b, 0
+    .digit10000:
+    ld a, e
+    sub a, 16
+    ld e, a
+    ld a, d
+    sbc a, 39
+    jr c, .end10000
+    ld d, a
+    inc b
+    jr .digit10000
+    .end10000:
+    ld a, e
+    add a, 16
+    ld e, a
+    ld a, b
+    add a, c
+    ld [hli], a
+    ld b, 0
+    .digit1000:
+    ld a, e
+    sub a, 232
+    ld e, a
+    ld a, d
+    sbc a, 3
+    jr c, .end1000
+    ld d, a
+    inc b
+    jr .digit1000
+    .end1000:
+    ld a, e
+    add a, 232
+    ld e, a
+    ld a, b
+    add a, c
+    ld [hli], a
+    ld b, 0
+    .digit100:
+    ld a, e
+    sub a, 100
+    ld e, a
+    ld a, d
+    sbc a, 0
+    jr c, .end100
+    ld d, a
+    inc b
+    jr .digit100
+    .end100:
+    ld a, e
+    add a, 100
+    ld e, a
+    ld a, b
+    add a, c
+    ld [hli], a
+    ld b, 0
+    .digit10:
+    ld a, e
+    sub a, 10
+    ld e, a
+    ld a, d
+    sbc a, 0
+    jr c, .end10
+    ld d, a
+    inc b
+    jr .digit10
+    .end10:
+    ld a, e
+    add a, 10
+    ld e, a
+    ld a, b
+    add a, c
+    ld [hli], a
+    ld b, 0
+    .digit1:
+    ld a, e
+    sub a, 1
+    ld e, a
+    ld a, d
+    sbc a, 0
+    jr c, .end1
+    ld d, a
+    inc b
+    jr .digit1
+    .end1:
+    ld a, e
+    add a, 1
+    ld e, a
+    ld a, b
+    add a, c
+    ld [hli], a
+    and a, a
     ret
     Anim_player_left_playerWalkFront:
     ld a, [wShadowOAM+2]
@@ -2179,6 +2465,7 @@
     wTextOlivesGlyphs:
     ds 5
     wTextOlivesCursor: dw
+    wOlivesHarvested: dw
     wCurKeys: db
     wNewKeys: db
     wReleasedKeys: db

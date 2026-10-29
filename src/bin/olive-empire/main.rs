@@ -1,11 +1,12 @@
 mod inputs;
 
-use rust_boy::hw;
-
+use rust_boy::asm::{Block, R8, R16};
 use rust_boy::engine::{
     ANIM_DISABLED, AnimationType, Hitbox, NumberFormat, PngOptions, RustBoy, RustBoyConfig,
     SpriteSize, TileCollision, TileOrder, TileSource, TilemapArea, Window,
 };
+use rust_boy::hw;
+use rust_boy::stdlib::inputs::PadButton;
 
 /// One olive tree (2x2 tiles) every `TREE_STEP` tiles across and down: a 2-tile path between trees
 const TREE_STEP: usize = 4;
@@ -157,7 +158,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         left: anim_walk_left,
         right: anim_walk_right,
     };
-    let inputs = inputs::player_inputs(&gb.sprites, player, &walk, &trunks, feet);
+    let mut inputs = inputs::player_inputs(&gb.sprites, player, &walk, &trunks, feet);
+
+    // Harvest: A next to the trunk of a tree with olives turns it bare and counts it
+    let harvested = gb.vars.create_u16("wOlivesHarvested", 0);
+    let full_trunks = TileCollision::new([full_tile + 2, full_tile + 3]);
+    let mut harvest = Block::new();
+    // hl = the touched trunk cell. Raw asm (no API to align a map address yet): every tree
+    // starts on an even column, so clearing bit 0 gives its left cell, and the row above
+    // (-32 cells) its top-left one
+    harvest.res(0, R8::L).ld(R16::BC, -32).add_hl(R16::BC);
+    harvest.emit_all(
+        gb.queue_tile_block_write(2, &[bare_tile, bare_tile + 1, bare_tile + 2, bare_tile + 3]),
+    );
+    harvest.emit_all(harvested.increment());
+    // Raw asm: the number printer takes its value in de, increment leaves it in hl
+    harvest.ld(R8::D, R8::H).ld(R8::E, R8::L);
+    harvest.emit_all(olives.set_value(gb.labels()));
+    inputs.on_just_pressed(
+        PadButton::A,
+        gb.sprites
+            .when_composite_touches(player, feet, &full_trunks, harvest.into_instrs()),
+    );
     gb.add_inputs(inputs);
 
     println!("{}", gb.build()?);

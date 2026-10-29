@@ -4822,3 +4822,42 @@ fn olive_empire_trunks_stop_the_player_and_paths_stay_open() {
         "one OAM DMA a frame while walking: the blocked moves fit in the frame"
     );
 }
+
+#[test]
+fn olive_empire_a_by_a_trunk_harvests_the_tree_once() {
+    if !rgbds_enabled() {
+        return;
+    }
+    let mut gb = Rom::example("olive-empire").boot();
+    gb.run_frames(10);
+    let vram = |gb: &GameBoy, address: u16| gb.vram()[usize::from(address - 0x8000)];
+    // The HUD counter: 5 digits on the window map ($9C00), row 1, columns 4-8
+    let digits = |gb: &GameBoy| -> Vec<u8> { (0..5).map(|i| vram(gb, 0x9C24 + i)).collect() };
+    let zero = digits(&gb)[0];
+    assert_eq!(digits(&gb), [zero; 5], "the counter starts at 00000");
+    // The tree at map column 12, row 8: its 4 cells, with olives
+    let cells = [0x990C, 0x990D, 0x992C, 0x992D];
+    let full: Vec<u8> = cells.iter().map(|&cell| vram(&gb, cell)).collect();
+    // A in the open does nothing
+    gb.run_script(&[(3, &[Button::A]), (3, &[])]);
+    assert_eq!(gb.read16(gb.symbol("wOlivesHarvested")), 0);
+    // Up into the trunk row and right against that tree's trunk (as in the test above)
+    gb.run_script(&[
+        (8, &[Button::Up]),
+        (2, &[]),
+        (30, &[Button::Right]),
+        (2, &[]),
+    ]);
+    // A held for several frames harvests once
+    gb.run_script(&[(10, &[Button::A]), (4, &[])]);
+    assert_eq!(gb.read16(gb.symbol("wOlivesHarvested")), 1);
+    // The bare tree's tiles were added just before the full tree's: 4 tiles lower
+    let after: Vec<u8> = cells.iter().map(|&cell| vram(&gb, cell)).collect();
+    let bare: Vec<u8> = full.iter().map(|tile| tile - 4).collect();
+    assert_eq!(after, bare, "the tree is bare");
+    assert_eq!(digits(&gb), [zero, zero, zero, zero, zero + 1], "00001");
+    // A again by the bare tree: nothing left to harvest
+    gb.run_script(&[(3, &[Button::A]), (4, &[])]);
+    assert_eq!(gb.read16(gb.symbol("wOlivesHarvested")), 1);
+    assert_eq!(digits(&gb)[4], zero + 1);
+}

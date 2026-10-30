@@ -40,7 +40,8 @@ pub use memory::{HRAM_VARIABLES_END, MemoryRegion};
 pub use rustboy::{MusicClock, RustBoy};
 pub use scenes::SceneManager;
 pub use sprites::{
-    ANIM_DISABLED, CompositeSpriteId, MetaspritePart, SpriteId, SpriteManager, SpriteSize,
+    ANIM_DISABLED, CompositeSpriteId, Direction, MetaspritePart, SpriteId, SpriteManager,
+    SpriteSize,
 };
 pub use tile_collision::{Hitbox, TileCollision, TileCollisionCheck};
 pub use tiles::{TileId, TileManager, TileSource, TilemapArea};

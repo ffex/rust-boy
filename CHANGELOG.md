@@ -36,6 +36,9 @@ together: every breaking change of the refactoring is in this release, so a prog
 - **Map blocks at run time** (`RustBoy::queue_tile_block_write`): queues a block of map tiles (e.g. a 2x2
   metatile) from the map address in `hl`, one VRAM-queue entry a tile.
 - **`Var::increment`**: adds 1 to an 8- or 16-bit variable, wrapping, and leaves the new value in `a` / `hl`.
+- **Free-step checks** (`SpriteManager::when_composite_free`, `engine::Direction`): runs any code when a composite's
+  hitbox can step towards a direction without touching a solid tile (the check of the blocked moves, which now use it),
+  e.g. to scroll the background instead of moving the character.
 
 - **Cartridge SRAM control** (`stdlib::sram`): enable/disable external RAM on MBC1/MBC5 and
   select MBC5's 8 KiB RAM bank; persistent save management remains a follow-up.

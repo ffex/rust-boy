@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::asm::labels::{DefinitionEvent, DefinitionScanner, defines};
-use crate::asm::{Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, is_identifier};
+use crate::asm::{
+    Block, Expr, Instr, JumpTarget, LabelAllocator, R8, R16, R16Stack, is_identifier,
+};
 use crate::hw;
 use crate::stdlib::flow::Emittable;
 use crate::stdlib::graphics::oam::{self, OamTarget};
@@ -1853,6 +1855,55 @@ impl RustBoy {
         self.call_routine(&vram_queue::flush());
         self.vram_queue = true;
         enqueue
+    }
+
+    /// Queue a block of map tiles, `width` tiles a row and `tiles` row by row, with its
+    /// top-left cell at the map address in `hl`: for example, a 2x2 metatile found at run
+    /// time with [`super::TileCollision::at_first_solid`]
+    ///
+    /// One queue entry a tile, written as [`RustBoy::queue_vram_write_from_registers`] does
+    /// (same single-producer contract); the rows are 32 cells apart, as in a tilemap.
+    /// Changes all registers and flags. The queue holds
+    /// [`crate::stdlib::graphics::vram_queue::CAPACITY`] entries until the next VBlank flush:
+    /// a tile that does not fit is dropped, so queue a block before other writes of the frame.
+    ///
+    /// # Panics
+    /// If `width` is 0, `tiles` is empty, its length is not a multiple of `width`, or the
+    /// block has more tiles than the queue holds.
+    #[track_caller]
+    pub fn queue_tile_block_write(&mut self, width: u8, tiles: &[u8]) -> Vec<Instr> {
+        let capacity = usize::from(vram_queue::CAPACITY);
+        assert!(width > 0, "queue_tile_block_write: width must be nonzero");
+        assert!(
+            !tiles.is_empty() && tiles.len() % usize::from(width) == 0,
+            "queue_tile_block_write: {} tiles do not make rows of {width}",
+            tiles.len()
+        );
+        assert!(
+            tiles.len() <= capacity,
+            "queue_tile_block_write: {} tiles do not fit in the {capacity}-entry VRAM queue",
+            tiles.len()
+        );
+        let enqueue = self.queue_vram_write_from_registers();
+        let width = usize::from(width);
+        let mut code = Block::new();
+        for (index, tile) in tiles.iter().enumerate() {
+            // QueueVramWrite changes every register: keep the cell address
+            code.push(R16Stack::HL)
+                .ld(R8::A, *tile)
+                .emit_all(enqueue.clone())
+                .pop(R16Stack::HL);
+            if index + 1 == tiles.len() {
+                break;
+            }
+            if (index + 1) % width == 0 {
+                // From the row's last cell to the next row's first one
+                code.ld(R16::BC, (32 - (width - 1)) as i32).add_hl(R16::BC);
+            } else {
+                code.inc(R16::HL);
+            }
+        }
+        code.into_instrs()
     }
 
     /// Add a sprite with its tile in one call
@@ -4338,6 +4389,53 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_tile_block_write_queues_each_cell_row_by_row() {
+        let mut gb = RustBoy::new();
+        let mut code = Block::new();
+        code.ld(R16::HL, 0x9C21);
+        code.emit_all(gb.queue_tile_block_write(2, &[10, 11, 12, 13]));
+        // A stub queue: the tile at its cell, and every register clobbered
+        code.jp("BlockEnd")
+            .label("QueueVramWrite")
+            .ld(R8::AtHl, R8::A)
+            .ld(R16::HL, 0)
+            .ld(R16::BC, 0)
+            .ret()
+            .label("BlockEnd");
+        let mut cpu = TestCpu::default();
+        cpu.run(&code.into_instrs());
+        let writes: Vec<_> = cpu
+            .trace
+            .iter()
+            .filter_map(|event| match event {
+                Event::Write(cell, tile) => Some((cell.clone(), *tile)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            writes,
+            [
+                ("$9C21".to_string(), 10),
+                ("$9C22".to_string(), 11),
+                ("$9C41".to_string(), 12),
+                ("$9C42".to_string(), 13),
+            ]
+        );
+        for (width, tiles) in [
+            (0, &[1][..]),
+            (2, &[1, 2, 3][..]),
+            (1, &[][..]),
+            (1, &[0; 13][..]),
+        ] {
+            assert!(
+                panic_message(|| RustBoy::new().queue_tile_block_write(width, tiles))
+                    .contains("queue_tile_block_write"),
+                "{width} {tiles:?}"
+            );
         }
     }
 

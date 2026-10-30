@@ -3,9 +3,12 @@
 use std::collections::BTreeMap;
 
 use super::memory::{MemoryAllocator, MemoryRegion};
+use super::tile_collision::{Hitbox, TileCollision};
 use super::tiles::TileId;
 use crate::{
-    asm::{Block, Condition, Expr, Instr, LabelAllocator, R8, R16, R16Stack, is_identifier},
+    asm::{
+        Block, Condition, Emittable, Expr, Instr, LabelAllocator, R8, R16, R16Stack, is_identifier,
+    },
     engine::animations::Animation,
     hw,
     stdlib::graphics::sprites::{
@@ -246,6 +249,31 @@ fn unknown_composite(id: CompositeSpriteId) -> ! {
          (composite ids come from RustBoy::add_sprite_16x16, for this RustBoy)",
         id.0
     );
+}
+
+/// A way a sprite moves on the screen
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// Screen X decreases
+    Left,
+    /// Screen X increases
+    Right,
+    /// Screen Y decreases
+    Up,
+    /// Screen Y increases
+    Down,
+}
+
+impl Direction {
+    /// The axis and the way the coordinate changes
+    fn axis_dir(self) -> (Axis, MoveDir) {
+        match self {
+            Direction::Left => (Axis::X, MoveDir::Decrease),
+            Direction::Right => (Axis::X, MoveDir::Increase),
+            Direction::Up => (Axis::Y, MoveDir::Decrease),
+            Direction::Down => (Axis::Y, MoveDir::Increase),
+        }
+    }
 }
 
 /// The axis a sprite moves along
@@ -1118,6 +1146,239 @@ impl SpriteManager {
         limit: u8,
     ) -> Vec<Instr> {
         self.move_composite_limit(id, Axis::Y, MoveDir::Increase, "down", distance, limit)
+    }
+
+    /// Move a composite sprite left as [`SpriteManager::move_composite_left_limit`] does,
+    /// unless its `hitbox` would step on one of the `solid` background tiles: then it does
+    /// not move
+    ///
+    /// The `hitbox` is a rectangle of the composite, from its top-left corner (the left
+    /// edge of its leftmost sprite, the top edge of its topmost one). Before the move, the
+    /// tiles left of the hitbox, 1 and `distance` pixels away, are read every 8 pixels
+    /// along its edge and at the edge's last pixel ([`TileCollision::when_free`]): the
+    /// active map with the camera scroll, so run the move while VRAM is accessible (input
+    /// bindings run at the start of the main loop, in VBlank). With a `distance` of 1 the
+    /// composite stops touching the obstacle; with more, up to `distance - 1` pixels before
+    /// it. A step cut short by `limit` is still checked for the whole `distance`.
+    ///
+    /// # Panics
+    /// If there is no composite `id`, if `distance` is not in 1..=8 (a longer step could
+    /// jump over a tile), or if the hitbox does not fit in the composite.
+    #[track_caller]
+    pub fn move_composite_left_blocked(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+        solid: &TileCollision,
+        hitbox: Hitbox,
+    ) -> Vec<Instr> {
+        let moving = self.move_composite_left_limit(id, distance, limit);
+        self.when_composite_free(id, Direction::Left, distance, hitbox, solid, moving)
+    }
+
+    /// Move a composite sprite right as [`SpriteManager::move_composite_right_limit`] does,
+    /// unless its `hitbox` would step on one of the `solid` background tiles; see
+    /// [`SpriteManager::move_composite_left_blocked`]
+    #[track_caller]
+    pub fn move_composite_right_blocked(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+        solid: &TileCollision,
+        hitbox: Hitbox,
+    ) -> Vec<Instr> {
+        let moving = self.move_composite_right_limit(id, distance, limit);
+        self.when_composite_free(id, Direction::Right, distance, hitbox, solid, moving)
+    }
+
+    /// Move a composite sprite up as [`SpriteManager::move_composite_up_limit`] does,
+    /// unless its `hitbox` would step on one of the `solid` background tiles; see
+    /// [`SpriteManager::move_composite_left_blocked`]
+    #[track_caller]
+    pub fn move_composite_up_blocked(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+        solid: &TileCollision,
+        hitbox: Hitbox,
+    ) -> Vec<Instr> {
+        let moving = self.move_composite_up_limit(id, distance, limit);
+        self.when_composite_free(id, Direction::Up, distance, hitbox, solid, moving)
+    }
+
+    /// Move a composite sprite down as [`SpriteManager::move_composite_down_limit`] does,
+    /// unless its `hitbox` would step on one of the `solid` background tiles; see
+    /// [`SpriteManager::move_composite_left_blocked`]
+    #[track_caller]
+    pub fn move_composite_down_blocked(
+        &self,
+        id: CompositeSpriteId,
+        distance: u8,
+        limit: u8,
+        solid: &TileCollision,
+        hitbox: Hitbox,
+    ) -> Vec<Instr> {
+        let moving = self.move_composite_down_limit(id, distance, limit);
+        self.when_composite_free(id, Direction::Down, distance, hitbox, solid, moving)
+    }
+
+    /// Run `body` when a step of `distance` pixels towards `direction` is free: when the
+    /// composite's `hitbox` would not step on one of the `solid` background tiles
+    ///
+    /// The check of the blocked moves (`move_composite_left_blocked` is this with a limited
+    /// move as `body`), for a step that does something else: scroll the background instead
+    /// of moving the character, play a sound, … It reads the same pixels, with the same
+    /// VRAM-access rule: put it in an input binding (they run at the start of the main loop,
+    /// in VBlank).
+    ///
+    /// # Panics
+    /// If there is no composite `id`, if `distance` is not in 1..=8 (a longer step could
+    /// jump over a tile), or if the hitbox does not fit in the composite.
+    #[track_caller]
+    pub fn when_composite_free(
+        &self,
+        id: CompositeSpriteId,
+        direction: Direction,
+        distance: u8,
+        hitbox: Hitbox,
+        solid: &TileCollision,
+        body: impl crate::asm::Emittable + 'static,
+    ) -> Vec<Instr> {
+        let (axis, dir) = direction.axis_dir();
+        let points = self.blocked_points(id, axis, dir, distance, hitbox);
+        solid.when_free(points, body).emit(&self.labels)
+    }
+
+    /// Run `body` once when the composite's `hitbox` touches one of the `solid` background
+    /// tiles: a tile on the line of pixels just outside the hitbox, on any side (the pixels a
+    /// 1-pixel blocked move would read, left, right, up, then down)
+    ///
+    /// For an action on an obstacle next to a character, like using a door or a tree. When
+    /// `body` runs, `a` is the touched tile's ID and `hl` its map address (see
+    /// [`TileCollision::at_first_solid`]); with several tiles touched, the first in that
+    /// order. It reads the map, so it has the VRAM-access rule of the blocked moves: put it
+    /// in an input binding (they run at the start of the main loop, in VBlank).
+    ///
+    /// # Panics
+    /// If there is no composite `id`, or if the hitbox does not fit in the composite.
+    #[track_caller]
+    pub fn when_composite_touches(
+        &self,
+        id: CompositeSpriteId,
+        hitbox: Hitbox,
+        solid: &TileCollision,
+        body: impl crate::asm::Emittable + 'static,
+    ) -> Vec<Instr> {
+        let points: Vec<_> = [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ]
+        .into_iter()
+        .flat_map(|direction| {
+            let (axis, dir) = direction.axis_dir();
+            self.blocked_points(id, axis, dir, 1, hitbox)
+        })
+        .collect();
+        solid.at_first_solid(points, body).emit(&self.labels)
+    }
+
+    /// The screen pixels a blocked move of the composite reads, as (x, y) snippets that
+    /// each leave the coordinate in `a`: the lines 1 and `distance` pixels ahead of the
+    /// hitbox, every 8 pixels along its edge and at the edge's last pixel. A tile is 8
+    /// pixels, so with a step of at most 8 no tile between the two lines is skipped
+    #[track_caller]
+    fn blocked_points(
+        &self,
+        id: CompositeSpriteId,
+        axis: Axis,
+        dir: MoveDir,
+        distance: u8,
+        hitbox: Hitbox,
+    ) -> Vec<(Vec<Instr>, Vec<Instr>)> {
+        assert!(
+            (1..=8).contains(&distance),
+            "a blocked move takes a distance of 1 to 8 pixels, not {}: a longer step could \
+             jump over a solid tile",
+            distance
+        );
+        let composite = self.composite(id);
+        let members: Vec<&SpriteData> = composite
+            .sprites
+            .iter()
+            .map(|sprite_id| self.sprite(*sprite_id))
+            .collect();
+        let Some(first) = members.first().copied() else {
+            return Vec::new();
+        };
+        // The composite's box, from the positions it was created with
+        let sprite_height = 8 * i16::from(self.size.tiles_per_sprite());
+        let left = members.iter().map(|s| s.x).min().unwrap_or(first.x);
+        let top = members.iter().map(|s| s.y).min().unwrap_or(first.y);
+        let width = members.iter().map(|s| s.x + 8).max().unwrap_or(first.x) - left;
+        let height = members
+            .iter()
+            .map(|s| s.y + sprite_height)
+            .max()
+            .unwrap_or(first.y)
+            - top;
+        let (hx, hy) = (i16::from(hitbox.x), i16::from(hitbox.y));
+        let (hw, hh) = (i16::from(hitbox.width), i16::from(hitbox.height));
+        assert!(
+            hx + hw <= width && hy + hh <= height,
+            "the hitbox {:?} does not fit in composite \"{}\", which is {}x{} pixels",
+            hitbox,
+            composite.name,
+            width,
+            height
+        );
+
+        // A coordinate from the composite's corner, at run time: `first`'s OAM coordinate,
+        // minus the OAM offset and `first`'s own offset from the corner, wrapping at 256
+        let coord = |axis: Axis, offset: i16| -> Vec<Instr> {
+            let (oam_offset, own) = match axis {
+                Axis::X => (hw::OAM_X_OFFSET, first.x - left),
+                Axis::Y => (hw::OAM_Y_OFFSET, first.y - top),
+            };
+            let add = (offset - own - i16::from(oam_offset)).rem_euclid(256) as u8;
+            let mut code = Block::new();
+            code.ld_a_addr_def(axis.oam_address(first));
+            if add != 0 {
+                code.add(add);
+            }
+            code.into_instrs()
+        };
+
+        let distance = i16::from(distance);
+        let (start, len, across_start, across_len) = match axis {
+            Axis::X => (hx, hw, hy, hh),
+            Axis::Y => (hy, hh, hx, hw),
+        };
+        let mut lines = match dir {
+            MoveDir::Decrease => vec![start - 1, start - distance],
+            MoveDir::Increase => vec![start + len, start + len - 1 + distance],
+        };
+        lines.dedup();
+        let last = across_start + across_len - 1;
+        let mut samples: Vec<i16> = (across_start..=last).step_by(8).collect();
+        if samples.last() != Some(&last) {
+            samples.push(last);
+        }
+
+        let mut points = Vec::new();
+        for &line in &lines {
+            for &sample in &samples {
+                points.push(match axis {
+                    Axis::X => (coord(Axis::X, line), coord(Axis::Y, sample)),
+                    Axis::Y => (coord(Axis::X, sample), coord(Axis::Y, line)),
+                });
+            }
+        }
+        points
     }
 
     /// Limited move of a composite (B6): the member that reaches the limit first leads,
@@ -2226,6 +2487,239 @@ mod tests {
         }
     }
 
+    /// A 16x16 player at screen (80, 72), of two 8x16 sprites
+    fn player_16x16() -> (RustBoy, CompositeSpriteId) {
+        let mut gb = RustBoy::new();
+        gb.set_sprite_size(SpriteSize::Size8x16);
+        let player = gb.add_sprite_16x16(
+            "player",
+            TileSource::from_file("left.2bpp", 2),
+            TileSource::from_file("right.2bpp", 2),
+            80,
+            72,
+            0,
+        );
+        (gb, player)
+    }
+
+    #[test]
+    fn test_blocked_moves_read_the_pixels_ahead_of_the_hitbox() {
+        let (gb, player) = player_16x16();
+        let feet = Hitbox::new(0, 8, 16, 8);
+        // The screen pixels each snippet pair leaves in `a`, from the initial shadow OAM
+        let pixels = |axis: Axis, dir: MoveDir, distance: u8, hitbox: Hitbox| {
+            gb.sprites
+                .blocked_points(player, axis, dir, distance, hitbox)
+                .iter()
+                .map(|(x, y)| {
+                    let mut cpu = cpu_with_oam(&gb.sprites);
+                    cpu.run(x);
+                    let x = cpu.a;
+                    cpu.run(y);
+                    (x, cpu.a)
+                })
+                .collect::<Vec<_>>()
+        };
+        // The feet are x 80..=95, y 80..=87: one line ahead, the edge's first and last pixel
+        assert_eq!(
+            pixels(Axis::X, MoveDir::Decrease, 1, feet),
+            [(79, 80), (79, 87)]
+        );
+        assert_eq!(
+            pixels(Axis::X, MoveDir::Increase, 1, feet),
+            [(96, 80), (96, 87)]
+        );
+        // Along a 16-pixel edge: every 8 pixels, and the last one
+        assert_eq!(
+            pixels(Axis::Y, MoveDir::Decrease, 1, feet),
+            [(80, 79), (88, 79), (95, 79)]
+        );
+        assert_eq!(
+            pixels(Axis::Y, MoveDir::Increase, 1, feet),
+            [(80, 88), (88, 88), (95, 88)]
+        );
+        // A longer step reads the line 1 pixel ahead and the line `distance` pixels ahead
+        assert_eq!(
+            pixels(Axis::X, MoveDir::Decrease, 8, feet),
+            [(79, 80), (79, 87), (72, 80), (72, 87)]
+        );
+        assert_eq!(
+            pixels(Axis::Y, MoveDir::Increase, 3, Hitbox::new(4, 0, 1, 16)),
+            [(84, 88), (84, 90)]
+        );
+        // Ahead of the screen's left edge, the pixel wraps around the 256-pixel map
+        let (mut gb, _) = player_16x16();
+        let edge = gb.add_sprite_16x16(
+            "edge",
+            TileSource::from_file("left.2bpp", 2),
+            TileSource::from_file("right.2bpp", 2),
+            0,
+            0,
+            0,
+        );
+        let points = gb
+            .sprites
+            .blocked_points(edge, Axis::X, MoveDir::Decrease, 1, feet);
+        let mut cpu = cpu_with_oam(&gb.sprites);
+        cpu.run(&points[0].0);
+        assert_eq!(cpu.a, 255);
+    }
+
+    #[test]
+    fn test_blocked_moves_are_when_composite_free_with_a_limited_move() {
+        let feet = Hitbox::new(0, 8, 16, 8);
+        let solid = TileCollision::new([5]);
+        let text =
+            |code: Vec<Instr>| -> Vec<String> { code.iter().map(|i| i.to_string()).collect() };
+        for direction in [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ] {
+            // A fresh game for each, so both get the same local labels
+            let (gb, player) = player_16x16();
+            let blocked = match direction {
+                Direction::Left => gb
+                    .sprites
+                    .move_composite_left_blocked(player, 2, 8, &solid, feet),
+                Direction::Right => gb
+                    .sprites
+                    .move_composite_right_blocked(player, 2, 152, &solid, feet),
+                Direction::Up => gb
+                    .sprites
+                    .move_composite_up_blocked(player, 2, 16, &solid, feet),
+                Direction::Down => gb
+                    .sprites
+                    .move_composite_down_blocked(player, 2, 144, &solid, feet),
+            };
+            let (gb, player) = player_16x16();
+            let moving = match direction {
+                Direction::Left => gb.sprites.move_composite_left_limit(player, 2, 8),
+                Direction::Right => gb.sprites.move_composite_right_limit(player, 2, 152),
+                Direction::Up => gb.sprites.move_composite_up_limit(player, 2, 16),
+                Direction::Down => gb.sprites.move_composite_down_limit(player, 2, 144),
+            };
+            let free = gb
+                .sprites
+                .when_composite_free(player, direction, 2, feet, &solid, moving);
+            assert_eq!(text(blocked), text(free), "{direction:?}");
+        }
+        // Any body: here one that is not a move
+        let (gb, player) = player_16x16();
+        let lines = text(gb.sprites.when_composite_free(
+            player,
+            Direction::Down,
+            1,
+            feet,
+            &solid,
+            vec![Instr::Ret],
+        ));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("call GetTileByScreenPixel"))
+                .count(),
+            3,
+            "the 3 pixels under the 16-pixel-wide feet: {lines:#?}"
+        );
+        assert!(lines.contains(&"ret".to_string()));
+    }
+
+    #[test]
+    fn test_touching_reads_the_line_around_the_hitbox_and_runs_the_body_once() {
+        let (gb, player) = player_16x16();
+        let feet = Hitbox::new(0, 8, 16, 8);
+        let lines: Vec<String> = gb
+            .sprites
+            .when_composite_touches(player, feet, &TileCollision::new([5]), vec![Instr::Ret])
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        // The 1-pixel blocked-move points: 2 left, 2 right, 3 up, 3 down
+        let lookups = lines
+            .iter()
+            .filter(|line| line.contains("call GetTileByScreenPixel"))
+            .count();
+        assert_eq!(lookups, 2 + 2 + 3 + 3, "{lines:#?}");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("jp z, .solid_tile_hit"))
+                .count(),
+            lookups,
+            "a jump to the body after each lookup"
+        );
+        assert_eq!(lines.iter().filter(|line| *line == "ret").count(), 1);
+        // The hitbox must fit, as for the blocked moves
+        assert!(
+            !panic_message(|| gb.sprites.when_composite_touches(
+                player,
+                Hitbox::new(0, 8, 17, 8),
+                &TileCollision::new([5]),
+                vec![Instr::Ret]
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_blocked_moves_reject_long_steps_and_hitboxes_outside_the_composite() {
+        let (gb, player) = player_16x16();
+        let solid = TileCollision::new([1]);
+        let feet = Hitbox::new(0, 8, 16, 8);
+        for distance in [0, 9] {
+            let message = panic_message(|| {
+                gb.sprites
+                    .move_composite_left_blocked(player, distance, 8, &solid, feet)
+            });
+            assert!(
+                message.contains(&format!("distance of 1 to 8 pixels, not {}", distance)),
+                "{}",
+                message
+            );
+        }
+        for hitbox in [Hitbox::new(1, 0, 16, 16), Hitbox::new(0, 9, 16, 8)] {
+            let message = panic_message(|| {
+                gb.sprites
+                    .move_composite_down_blocked(player, 1, 150, &solid, hitbox)
+            });
+            assert!(
+                message.contains("does not fit in composite \"player\", which is 16x16"),
+                "{}",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn test_blocked_moves_without_solid_tiles_are_the_limited_moves() {
+        // No solid tile: no tile is read, the move is the limited one
+        let (gb, player) = player_16x16();
+        let free = TileCollision::new([]);
+        let feet = Hitbox::new(0, 8, 16, 8);
+        let text = |code: Vec<Instr>| -> Vec<String> {
+            code.iter()
+                .map(|instr| instr.to_string().replace(|c: char| c.is_ascii_digit(), "#"))
+                .collect()
+        };
+        assert_eq!(
+            text(
+                gb.sprites
+                    .move_composite_up_blocked(player, 2, 8, &free, feet)
+            ),
+            text(gb.sprites.move_composite_up_limit(player, 2, 8))
+        );
+        let blocked =
+            gb.sprites
+                .move_composite_up_blocked(player, 2, 8, &TileCollision::new([1, 2]), feet);
+        let calls = blocked
+            .iter()
+            .filter(|instr| instr.to_string().contains("call GetTileByScreenPixel"))
+            .count();
+        assert_eq!(calls, 6, "two lines of three pixels");
+    }
+
     type CompositeOp = Box<dyn Fn(&mut SpriteManager, CompositeSpriteId)>;
 
     #[test]
@@ -2246,6 +2740,18 @@ mod tests {
             (
                 "move_composite_down_limit",
                 Box::new(|sm, id| drop(sm.move_composite_down_limit(id, 1, 8))),
+            ),
+            (
+                "move_composite_left_blocked",
+                Box::new(|sm, id| {
+                    drop(sm.move_composite_left_blocked(
+                        id,
+                        1,
+                        8,
+                        &TileCollision::new([1]),
+                        Hitbox::new(0, 0, 8, 8),
+                    ))
+                }),
             ),
             (
                 "add_composite_animation",

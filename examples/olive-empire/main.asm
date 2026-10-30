@@ -59,10 +59,10 @@
     ld a, 0
     ld b, 160
     ld hl, wShadowOAM
-    .clear_oam_19:
+    .clear_oam_23:
     ld [hli], a
     dec b
-    jp nz, .clear_oam_19
+    jp nz, .clear_oam_23
     ld hl, wShadowOAM
     ld a, 88
     ld [hli], a
@@ -90,13 +90,13 @@
     ldh [rOBP1], a
     ld hl, wTextOlivesGlyphs
     ld bc, 5
-    .array_init_31:
+    .array_init_35:
     ld a, 14
     ld [hli], a
     dec bc
     ld a, b
     or a, c
-    jr nz, .array_init_31
+    jr nz, .array_init_35
     ld a, 0
     ld [wTextOlivesCursor], a
     ld a, 0
@@ -140,64 +140,64 @@
     inc a
     ld [wFrameCounter], a
     cp a, 8
-    jp c, .anim_end_20
+    jp c, .anim_end_24
     ld a, 0
     ld [wFrameCounter], a
     ld a, [wAnim_player_left_Current]
     cp a, 255
-    jp z, .anim_player_left_end_21
+    jp z, .anim_player_left_end_25
     cp a, 0
-    jr nz, .skip_player_left_playerWalkFront_22
+    jr nz, .skip_player_left_playerWalkFront_26
     call Anim_player_left_playerWalkFront
-    jp .anim_player_left_end_21
-    .skip_player_left_playerWalkFront_22:
+    jp .anim_player_left_end_25
+    .skip_player_left_playerWalkFront_26:
     cp a, 1
-    jr nz, .skip_player_left_playerWalkBack_23
+    jr nz, .skip_player_left_playerWalkBack_27
     call Anim_player_left_playerWalkBack
-    jp .anim_player_left_end_21
-    .skip_player_left_playerWalkBack_23:
+    jp .anim_player_left_end_25
+    .skip_player_left_playerWalkBack_27:
     cp a, 2
-    jr nz, .skip_player_left_playerWalkLeft_24
+    jr nz, .skip_player_left_playerWalkLeft_28
     call Anim_player_left_playerWalkLeft
-    jp .anim_player_left_end_21
-    .skip_player_left_playerWalkLeft_24:
+    jp .anim_player_left_end_25
+    .skip_player_left_playerWalkLeft_28:
     cp a, 3
-    jr nz, .skip_player_left_playerWalkRight_25
+    jr nz, .skip_player_left_playerWalkRight_29
     call Anim_player_left_playerWalkRight
-    jp .anim_player_left_end_21
-    .skip_player_left_playerWalkRight_25:
-    .anim_player_left_end_21:
+    jp .anim_player_left_end_25
+    .skip_player_left_playerWalkRight_29:
+    .anim_player_left_end_25:
     ld a, [wAnim_player_right_Current]
     cp a, 255
-    jp z, .anim_player_right_end_26
+    jp z, .anim_player_right_end_30
     cp a, 0
-    jr nz, .skip_player_right_playerWalkFront_27
+    jr nz, .skip_player_right_playerWalkFront_31
     call Anim_player_right_playerWalkFront
-    jp .anim_player_right_end_26
-    .skip_player_right_playerWalkFront_27:
+    jp .anim_player_right_end_30
+    .skip_player_right_playerWalkFront_31:
     cp a, 1
-    jr nz, .skip_player_right_playerWalkBack_28
+    jr nz, .skip_player_right_playerWalkBack_32
     call Anim_player_right_playerWalkBack
-    jp .anim_player_right_end_26
-    .skip_player_right_playerWalkBack_28:
+    jp .anim_player_right_end_30
+    .skip_player_right_playerWalkBack_32:
     cp a, 2
-    jr nz, .skip_player_right_playerWalkLeft_29
+    jr nz, .skip_player_right_playerWalkLeft_33
     call Anim_player_right_playerWalkLeft
-    jp .anim_player_right_end_26
-    .skip_player_right_playerWalkLeft_29:
+    jp .anim_player_right_end_30
+    .skip_player_right_playerWalkLeft_33:
     cp a, 3
-    jr nz, .skip_player_right_playerWalkRight_30
+    jr nz, .skip_player_right_playerWalkRight_34
     call Anim_player_right_playerWalkRight
-    jp .anim_player_right_end_26
-    .skip_player_right_playerWalkRight_30:
-    .anim_player_right_end_26:
-    .anim_end_20:
+    jp .anim_player_right_end_30
+    .skip_player_right_playerWalkRight_34:
+    .anim_player_right_end_30:
+    .anim_end_24:
     call PrintTextOlives
     call UpdateKeys
-    .check_left_10:
+    .check_left_14:
     ld a, [wCurKeys]
     and a, PADF_LEFT
-    jp z, .check_left_end_10
+    jp z, .check_left_end_14
     ld a, [wShadowOAM+1]
     add a, 249
     ld b, a
@@ -235,27 +235,36 @@
     cp a, 4
     jp z, .solid_tile_blocked_1
     ld a, [wShadowOAM+1]
-    sub a, 8
+    cp a, 40
+    jp nz, .else_2
+    ldh a, [rSCX]
+    add a, 255
+    ldh [rSCX], a
+    jp .end_if_2
+    .else_2:
+    ld a, [wShadowOAM+1]
+    sub a, 40
     jp c, .sprite0_left_limit_end_0
     sub a, 1
     jp nc, .sprite0_left_limit_store_0
     ld a, 0
     .sprite0_left_limit_store_0:
-    add a, 8
+    add a, 40
     ld [wShadowOAM+1], a
     add a, 8
     ld [wShadowOAM+5], a
     .sprite0_left_limit_end_0:
+    .end_if_2:
     .solid_tile_blocked_1:
     ld a, 2
     ld [wAnim_player_left_Current], a
     ld a, 2
     ld [wAnim_player_right_Current], a
-    .check_left_end_10:
-    .check_right_11:
+    .check_left_end_14:
+    .check_right_15:
     ld a, [wCurKeys]
     and a, PADF_RIGHT
-    jp z, .check_right_end_11
+    jp z, .check_right_end_15
     ld a, [wShadowOAM+1]
     add a, 6
     ld b, a
@@ -267,13 +276,13 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     cp a, 8
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     cp a, 3
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     cp a, 4
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     ld a, [wShadowOAM+1]
     add a, 6
     ld b, a
@@ -285,35 +294,44 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     cp a, 8
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     cp a, 3
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     cp a, 4
-    jp z, .solid_tile_blocked_3
+    jp z, .solid_tile_blocked_4
     ld a, [wShadowOAM+5]
-    sub a, 160
-    jp nc, .sprite1_right_limit_end_2
+    cp a, 128
+    jp nz, .else_5
+    ldh a, [rSCX]
     add a, 1
-    jp nc, .sprite1_right_limit_store_2
+    ldh [rSCX], a
+    jp .end_if_5
+    .else_5:
+    ld a, [wShadowOAM+5]
+    sub a, 128
+    jp nc, .sprite1_right_limit_end_3
+    add a, 1
+    jp nc, .sprite1_right_limit_store_3
     ld a, 0
-    .sprite1_right_limit_store_2:
-    add a, 160
+    .sprite1_right_limit_store_3:
+    add a, 128
     ld [wShadowOAM+5], a
     sub a, 8
     ld [wShadowOAM+1], a
-    .sprite1_right_limit_end_2:
-    .solid_tile_blocked_3:
+    .sprite1_right_limit_end_3:
+    .end_if_5:
+    .solid_tile_blocked_4:
     ld a, 3
     ld [wAnim_player_left_Current], a
     ld a, 3
     ld [wAnim_player_right_Current], a
-    .check_right_end_11:
-    .check_up_12:
+    .check_right_end_15:
+    .check_up_16:
     ld a, [wCurKeys]
     and a, PADF_UP
-    jp z, .check_up_end_12
+    jp z, .check_up_end_16
     ld a, [wShadowOAM+1]
     add a, 250
     ld b, a
@@ -325,13 +343,13 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 8
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 3
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 4
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     ld a, [wShadowOAM+1]
     add a, 2
     ld b, a
@@ -343,13 +361,13 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 8
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 3
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 4
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     ld a, [wShadowOAM+1]
     add a, 5
     ld b, a
@@ -361,34 +379,43 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 8
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 3
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     cp a, 4
-    jp z, .solid_tile_blocked_5
+    jp z, .solid_tile_blocked_7
     ld a, [wShadowOAM+0]
-    sub a, 16
-    jp c, .sprite0_up_limit_end_4
+    cp a, 48
+    jp nz, .else_8
+    ldh a, [rSCY]
+    add a, 255
+    ldh [rSCY], a
+    jp .end_if_8
+    .else_8:
+    ld a, [wShadowOAM+0]
+    sub a, 48
+    jp c, .sprite0_up_limit_end_6
     sub a, 1
-    jp nc, .sprite0_up_limit_store_4
+    jp nc, .sprite0_up_limit_store_6
     ld a, 0
-    .sprite0_up_limit_store_4:
-    add a, 16
+    .sprite0_up_limit_store_6:
+    add a, 48
     ld [wShadowOAM+0], a
     ld [wShadowOAM+4], a
-    .sprite0_up_limit_end_4:
-    .solid_tile_blocked_5:
+    .sprite0_up_limit_end_6:
+    .end_if_8:
+    .solid_tile_blocked_7:
     ld a, 1
     ld [wAnim_player_left_Current], a
     ld a, 1
     ld [wAnim_player_right_Current], a
-    .check_up_end_12:
-    .check_down_13:
+    .check_up_end_16:
+    .check_down_17:
     ld a, [wCurKeys]
     and a, PADF_DOWN
-    jp z, .check_down_end_13
+    jp z, .check_down_end_17
     ld a, [wShadowOAM+1]
     add a, 250
     ld b, a
@@ -399,13 +426,13 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 8
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 3
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 4
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     ld a, [wShadowOAM+1]
     add a, 2
     ld b, a
@@ -416,13 +443,13 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 8
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 3
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 4
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     ld a, [wShadowOAM+1]
     add a, 5
     ld b, a
@@ -433,34 +460,43 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 8
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 3
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     cp a, 4
-    jp z, .solid_tile_blocked_7
+    jp z, .solid_tile_blocked_10
     ld a, [wShadowOAM+0]
-    sub a, 128
-    jp nc, .sprite0_down_limit_end_6
+    cp a, 96
+    jp nz, .else_11
+    ldh a, [rSCY]
     add a, 1
-    jp nc, .sprite0_down_limit_store_6
+    ldh [rSCY], a
+    jp .end_if_11
+    .else_11:
+    ld a, [wShadowOAM+0]
+    sub a, 96
+    jp nc, .sprite0_down_limit_end_9
+    add a, 1
+    jp nc, .sprite0_down_limit_store_9
     ld a, 0
-    .sprite0_down_limit_store_6:
-    add a, 128
+    .sprite0_down_limit_store_9:
+    add a, 96
     ld [wShadowOAM+0], a
     ld [wShadowOAM+4], a
-    .sprite0_down_limit_end_6:
-    .solid_tile_blocked_7:
+    .sprite0_down_limit_end_9:
+    .end_if_11:
+    .solid_tile_blocked_10:
     ld a, 0
     ld [wAnim_player_left_Current], a
     ld a, 0
     ld [wAnim_player_right_Current], a
-    .check_down_end_13:
-    .check_left_14:
+    .check_down_end_17:
+    .check_left_18:
     ld a, [wReleasedKeys]
     and a, PADF_LEFT
-    jp z, .check_left_end_14
+    jp z, .check_left_end_18
     ld a, 2
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -475,11 +511,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_left_end_14:
-    .check_right_15:
+    .check_left_end_18:
+    .check_right_19:
     ld a, [wReleasedKeys]
     and a, PADF_RIGHT
-    jp z, .check_right_end_15
+    jp z, .check_right_end_19
     ld a, 3
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -494,11 +530,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_right_end_15:
-    .check_up_16:
+    .check_right_end_19:
+    .check_up_20:
     ld a, [wReleasedKeys]
     and a, PADF_UP
-    jp z, .check_up_end_16
+    jp z, .check_up_end_20
     ld a, 1
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -513,11 +549,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_up_end_16:
-    .check_down_17:
+    .check_up_end_20:
+    .check_down_21:
     ld a, [wReleasedKeys]
     and a, PADF_DOWN
-    jp z, .check_down_end_17
+    jp z, .check_down_end_21
     ld a, 0
     ld [wAnim_player_left_Current], a
     xor a, a
@@ -532,11 +568,11 @@
     ld [wAnim_player_left_Current], a
     ld a, 255
     ld [wAnim_player_right_Current], a
-    .check_down_end_17:
-    .check_a_18:
+    .check_down_end_21:
+    .check_a_22:
     ld a, [wNewKeys]
     and a, PADF_A
-    jp z, .check_a_end_18
+    jp z, .check_a_end_22
     ld a, [wShadowOAM+1]
     add a, 249
     ld b, a
@@ -548,9 +584,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 249
     ld b, a
@@ -562,9 +598,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 6
     ld b, a
@@ -576,9 +612,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 6
     ld b, a
@@ -590,9 +626,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 250
     ld b, a
@@ -604,9 +640,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 2
     ld b, a
@@ -618,9 +654,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 5
     ld b, a
@@ -632,9 +668,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 250
     ld b, a
@@ -645,9 +681,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 2
     ld b, a
@@ -658,9 +694,9 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     ld a, [wShadowOAM+1]
     add a, 5
     ld b, a
@@ -671,11 +707,11 @@
     ld c, d
     call GetTileByScreenPixel
     cp a, 7
-    jp z, .solid_tile_hit_9
+    jp z, .solid_tile_hit_13
     cp a, 8
-    jp z, .solid_tile_hit_9
-    jp .solid_tile_end_9
-    .solid_tile_hit_9:
+    jp z, .solid_tile_hit_13
+    jp .solid_tile_end_13
+    .solid_tile_hit_13:
     res 0, l
     ld bc, -32
     add hl, bc
@@ -713,15 +749,15 @@
     ld hl, wTextOlivesGlyphs
     ld c, 14
     call EncodeDecimalU16
-    jr c, .number_8
+    jr c, .number_12
     ld a, 0
     ld [wTextOlivesCursor], a
     ld a, 0
     ld [wTextOlivesCursor+1], a
     and a, a
-    .number_8:
-    .solid_tile_end_9:
-    .check_a_end_18:
+    .number_12:
+    .solid_tile_end_13:
+    .check_a_end_22:
     jp Main
 
     ; Copy bytes from one area to another

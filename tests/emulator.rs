@@ -4791,31 +4791,45 @@ fn olive_empire_trunks_stop_the_player_and_paths_stay_open() {
     assert_eq!(position(&gb), (82, y), "stopped by the trunk on the right");
     gb.run_script(&[(30, &[Button::Left])]);
     assert_eq!(position(&gb), (78, y), "stopped by the trunk on the left");
-    // The 2-tile path up between the trees is open to the top of the screen
-    gb.run_script(&[(4, &[Button::Right]), (100, &[Button::Up])]);
-    assert_eq!(position(&gb).1, 0, "walked up the path to the top edge");
-    // The screen edges: the player stays whole on the screen
-    gb.run_script(&[(200, &[Button::Down])]);
+    // Push-scroll: the player walks up the 2-tile path between the trees to 32 px from the
+    // top, then stays there and the background scrolls (the path goes on: the map wraps)
+    let scroll = |gb: &GameBoy| (gb.read(hw::SCX.value), gb.read(hw::SCY.value));
+    assert_eq!(scroll(&gb), (0, 0), "no scroll in the middle of the view");
+    gb.run_script(&[(4, &[Button::Right]), (2, &[])]);
+    let start_y = position(&gb).1;
+    gb.run_script(&[(100, &[Button::Up]), (2, &[])]);
+    assert_eq!(position(&gb).1, 32, "the top margin");
+    let walked = u32::from(start_y - 32);
+    assert_eq!(
+        scroll(&gb),
+        (0, (256 - (100 - walked)) as u8),
+        "the rest of the 100 steps scrolled the background up"
+    );
+    // Down: to 32 px above the HUD (screen y 80 for the 16-pixel player), then scrolling
+    let before = scroll(&gb).1;
+    gb.run_script(&[(200, &[Button::Down]), (2, &[])]);
     assert_eq!(
         position(&gb).1,
-        112,
-        "the bottom edge: the last line on 127, above the 16-line HUD"
+        80,
+        "the bottom margin, 32 px above the HUD"
     );
-    // Up to a free row: the feet (y + 8 ..= y + 15) in rows 10-12 (y 80..=103), no trunk
-    while position(&gb).1 > 84 {
+    assert_eq!(scroll(&gb).1, before.wrapping_add((200 - 48) as u8));
+    // Up to a free row: no trunk under the feet (y + 8 ..= y + 15, in world pixels:
+    // trunks are on map rows 4k + 1, so the feet's top is 16 to 32 past a multiple of 32)
+    let feet_top = |gb: &GameBoy| scroll(gb).1.wrapping_add(position(gb).1 + 8) % 32;
+    while !(16..=32).contains(&feet_top(&gb)) {
         gb.run_script(&[(1, &[Button::Up])]);
     }
     gb.run_script(&[(2, &[])]);
-    let row = position(&gb).1;
-    assert!((72..=88).contains(&row), "y {row}");
-    gb.run_script(&[(200, &[Button::Right])]);
-    assert_eq!(
-        position(&gb),
-        (144, row),
-        "the right edge: the last pixel on 159"
-    );
-    gb.run_script(&[(200, &[Button::Left])]);
-    assert_eq!(position(&gb), (0, row), "the left edge");
+    let (x, row) = position(&gb);
+    // Right: to 32 px from the right edge (screen x 112), then scrolling; left the same
+    gb.run_script(&[(200, &[Button::Right]), (2, &[])]);
+    assert_eq!(position(&gb), (112, row), "the right margin");
+    assert_eq!(scroll(&gb).0, (200 - u32::from(112 - x)) as u8);
+    let before = scroll(&gb).0;
+    gb.run_script(&[(200, &[Button::Left]), (2, &[])]);
+    assert_eq!(position(&gb), (32, row), "the left margin");
+    assert_eq!(scroll(&gb).0, before.wrapping_sub((200 - 80) as u8));
     assert_eq!(
         dmas(&gb) - dmas_at_start,
         gb.frame() - frame_at_start,

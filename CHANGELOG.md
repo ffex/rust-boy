@@ -10,7 +10,8 @@ together: every breaking change of the refactoring is in this release, so a prog
 
 - **New example `olive-empire`** (`src/bin/olive-empire/`): a top-down 16x16 character on a grass map, walking
   with the D-pad and its four walk animations; its PNG art loads with `TileSource::from_png`. Olive trees block the
-  way; A next to a tree harvests its olives (the tree turns bare) and a HUD on the window counts them.
+  way; A next to a tree harvests its olives (the tree turns bare) and a HUD on the window counts them. The view push-scrolls
+  32 px from its sides, over a map that wraps around.
 
 - **Build report** (Phase 3): `scripts/report.sh [bin]` reports linked ROM occupancy and observed main-loop and
   VBlank-handler cycle budgets for every example. VBlank timing includes interrupt dispatch
